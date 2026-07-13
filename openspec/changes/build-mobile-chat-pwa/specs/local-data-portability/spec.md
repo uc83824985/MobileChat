@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Indexed local persistence
-The system SHALL persist API profiles, model definitions, assistants, conversations, messages, summaries, drafts, and application settings in browser-managed local storage using a versioned IndexedDB schema for structured records.
+The system SHALL persist API profiles, model definitions, assistants, conversations, messages, context checkpoints, display summaries, drafts, blobs, and application settings in browser-managed local storage using a versioned IndexedDB schema for structured records.
 
 #### Scenario: Reload after local changes
 - **WHEN** a user reloads or relaunches the application after saving data
@@ -21,15 +21,26 @@ The system SHALL assign a schema version to persisted and exported data and SHAL
 - **WHEN** the application encounters a supported earlier schema version
 - **THEN** it migrates the data transactionally or leaves the original data intact and reports a recoverable migration failure
 
-### Requirement: Complete local backup export
-The system SHALL export a versioned JSON backup containing the locally stored configuration, assistants, conversations, messages, summaries, and settings required to restore the application state.
+### Requirement: Portable compressed backup archive
+The system SHALL export a ZIP-compatible `.mobilechat` archive containing a versioned manifest, structured records, optional binary blob entries, and integrity checks required to restore the selected application state on another supported browser or device.
 
-#### Scenario: Export a backup
-- **WHEN** a user requests a complete export
-- **THEN** the browser produces a JSON file containing schema metadata and all selected local records without requiring a server
+#### Scenario: Export a complete migration backup
+- **WHEN** a user confirms a complete export including credentials and attachments
+- **THEN** the browser produces one `.mobilechat` file containing the required records, API credentials, attachment entries, and checksums without requiring a server
+
+#### Scenario: Export without credentials
+- **WHEN** a user selects credential-free export
+- **THEN** the archive preserves API-profile and model metadata but omits secret values and reports that credentials must be re-entered after import
+
+### Requirement: Portable format is independent of browser database files
+The system SHALL NOT use a raw IndexedDB directory, browser-profile file, or implementation-specific database file as its backup interchange format.
+
+#### Scenario: Move between different browser implementations
+- **WHEN** a valid `.mobilechat` archive exported by one supported browser is imported by another
+- **THEN** the receiving application reconstructs records through the application schema without depending on the source browser's IndexedDB representation
 
 ### Requirement: Validated backup import
-The system SHALL validate an imported backup before mutation and SHALL allow the user to merge it with or replace current local data after presenting an import summary.
+The system SHALL validate archive entry paths, checksums, export version, record schemas, references, and declared blobs before mutation and SHALL allow the user to merge the archive with or replace current local data after presenting an import summary.
 
 #### Scenario: Reject an invalid backup
 - **WHEN** a selected file has unsupported schema metadata or invalid required records
@@ -39,10 +50,27 @@ The system SHALL validate an imported backup before mutation and SHALL allow the
 - **WHEN** a user confirms replacement using a validated compatible backup
 - **THEN** the system transactionally replaces current data and reloads the restored application state
 
+#### Scenario: Merge records with conflicting IDs
+- **WHEN** an imported record ID already exists locally with unequal content
+- **THEN** the system assigns a new local ID and consistently remaps every imported reference, including message parents, active leaves, checkpoint boundaries, assistant bindings, and blob references
+
+### Requirement: Manual cross-device migration
+The system SHALL support cross-device use through an explicit export-transfer-import workflow and SHALL NOT present this workflow as live synchronization.
+
+#### Scenario: Restore on a second phone
+- **WHEN** a user transfers a `.mobilechat` archive to a second device and imports it
+- **THEN** the second device can restore the selected conversations and configuration locally while subsequent changes on either device remain independent
+
+### Requirement: Export observability
+The system SHALL record the last successful export timestamp locally and SHALL show estimated archive size and attachment inclusion before creating a potentially large backup.
+
+#### Scenario: Browser storage is at risk
+- **WHEN** the user opens backup settings after creating additional local conversations
+- **THEN** the UI shows the last successful export time so the user can decide whether to create a newer portable backup
+
 ### Requirement: Local-only operation
 The system SHALL NOT require an application account, remote database, continuously running personal computer, or custom application server for persistence and conversation management.
 
 #### Scenario: Use from a different network
 - **WHEN** the installed application and configured model endpoint are reachable from a phone network
 - **THEN** the user can manage local conversations and send chat requests without reaching the development computer
-

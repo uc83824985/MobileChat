@@ -22,9 +22,8 @@ The system SHALL cache the static application shell and SHALL distinguish betwee
 - **THEN** locally stored settings and conversations remain readable and chat sending is disabled with a clear offline indication
 
 ### Requirement: Dedicated settings surface
-The system SHALL reserve a settings surface for API profiles, assistants, summary rules, data portability, appearance, and future application options.
+The system SHALL reserve a settings surface for API profiles, chat and utility assistants, context-compaction rules, data portability, appearance, and future application options.
 
 #### Scenario: Open settings from a conversation
 - **WHEN** a user activates the settings control from the chat interface
 - **THEN** the system opens the settings surface without deleting or replacing the active conversation
-

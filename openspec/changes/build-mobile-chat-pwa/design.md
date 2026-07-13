@@ -10,15 +10,18 @@ The initial endpoint already known to work exposes an OpenAI-compatible Response
 
 - Deliver an installable mobile-first PWA requiring no application backend.
 - Support reusable API profiles with multiple models and assistants that reference those models.
+- Separate user-facing chat assistants from utility assistants used for semantic derived-data tasks such as context compression.
 - Preserve conversations through assistant, prompt, model, and credential changes.
 - Allow assistant/model switching inside a shared conversation context with accurate per-response attribution.
-- Provide local conversation management, metadata-only history search, in-conversation content search, and configurable turn-based summaries.
+- Preserve robust memory within each conversation using local canonical messages and compacted context checkpoints, independently of provider-side response storage.
+- Provide local conversation management, metadata-only history search, in-conversation content search, and configurable context compaction.
 - Establish versioned content-part and persistence schemas suitable for later multimodal expansion.
 - Deploy repeatably to GitHub Pages from this repository.
 
 **Non-Goals:**
 
 - User accounts, cloud synchronization, collaborative sharing, or a remote application database.
+- Cross-conversation user memory, assistant memory, preference extraction, or retrieval from other conversations.
 - A general-purpose proxy or protection of API keys from the local device user.
 - Native Anthropic, Gemini, Chat Completions, or other protocol adapters in the first release.
 - Reliable background jobs while the PWA is closed.
@@ -46,6 +49,7 @@ conversations
 messages
 blobs
 drafts
+contextCheckpoints
 appSettings
 migrationMetadata
 ```
@@ -72,11 +76,13 @@ If two models need different credentials, headers, URLs, or protocols, they belo
 
 ### 4. Assistants aggregate model bindings
 
-Do not persist a standalone AssistantRoute entity. An `Assistant` owns identity and prompt data plus model references:
+Do not persist a standalone AssistantRoute entity. An `Assistant` owns identity and prompt data plus model references. Its kind also determines whether it can speak in the visible conversation or only perform a semantic utility operation:
 
 ```ts
 type Assistant = {
   id: string;
+  kind: "chat" | "utility";
+  utilityRole?: "context-compression" | "content-analysis";
   name: string;
   description: string;
   avatar: AvatarValue;
@@ -95,6 +101,8 @@ type Assistant = {
 
 The many-to-many assistant/model relationship is expressed by `modelBindings`. Runtime code resolves a binding against its API profile and model; unresolved bindings remain visible as invalid configuration instead of being silently removed.
 
+Only enabled `chat` assistants are selectable as the active conversation speaker. A context-compaction policy references an enabled `utility` assistant whose `utilityRole` is `context-compression`. Utility results are stored as derived records and never inserted into the visible chat stream as assistant messages.
+
 ### 5. Generic conversations plus immutable source snapshots
 
 A conversation stores the assistant/model selection intended for the next response and a snapshot for display if the referenced configuration disappears. Each assistant message independently records the actual source used for that response.
@@ -105,8 +113,9 @@ Conversation
   activeModelRef { apiProfileId, modelId }
   activeSourceSnapshot
   title
-  summary
-  summaryState
+  displaySummary
+  contextCheckpointId
+  contextState
   status
 
 Assistant Message
@@ -119,15 +128,25 @@ Assistant Message
 
 Snapshots never include API keys. The message snapshot is immutable after the response begins. This intentionally duplicates small identity and prompt fields so assistant deletion or later editing cannot erase historical attribution or the generation context.
 
-### 6. Shared message context and current-assistant instructions
+### 6. Local single-conversation memory and current-assistant instructions
 
-The request builder walks the active conversation path and converts its user and assistant content parts into protocol input. It adds only the currently selected assistant's system prompt as request instructions. Previous assistants' messages remain ordinary shared context; their system prompts are not replayed.
+Canonical conversation memory consists of locally persisted messages on the active path. The model has no durable memory of a prior browser request, and provider response IDs are neither portable across profiles nor reliable across compatible relays. The local database is therefore the source of truth even if a future adapter can use a provider-side continuation ID as an optimization.
 
-At send time, the builder also reads the latest persisted conversation title and summary and serializes them into a clearly delimited application-owned metadata block. The block labels both fields as context rather than executable instructions. Empty fields are omitted. This metadata is rebuilt for every request and is not persisted as a synthetic chat message.
+For every chat request, the request builder produces a deterministic `ConversationContextProjection` in this order:
 
-Editing a title or successfully updating a summary therefore requires only an atomic conversation-record update. The next request observes the new values automatically; prior messages, branches, and source snapshots are never rewritten or backfilled. This keeps assistant awareness current without introducing hidden history entries or synchronization calls.
+```text
+current chat assistant prompt
+current conversation metadata, including the latest title
+latest valid context checkpoint summary
+raw active-path messages after the checkpoint boundary
+latest user message
+```
 
-Messages include `parentMessageId` and the conversation records the active leaf. The first UI may present one active linear path, but edit-and-resubmit and regeneration create a new child path rather than destructively rewriting the original message records.
+The context checkpoint replaces the covered older messages in the model input; it is not appended in addition to the full covered history. Covered messages remain in IndexedDB and remain visible, searchable inside the open conversation, exportable, and available for rebuilding a checkpoint. Only the currently selected chat assistant's system prompt is applied. Earlier assistants' visible messages remain ordinary shared context, while their old system prompts are not replayed.
+
+The latest title and checkpoint summary are serialized as clearly delimited application-owned context, not executable instructions. The title is deliberately kept outside the checkpoint, so renaming a conversation updates the next request without invalidating or regenerating the checkpoint. Empty fields are omitted, and no synthetic synchronization message is persisted.
+
+Messages include `parentMessageId` and the conversation records the active leaf. Edit-and-resubmit, regeneration, or active-branch changes invalidate a checkpoint when its covered boundary is not an ancestor of the new active leaf. Invalid checkpoints remain auditable but are not used; the application rebuilds from the active raw path until compaction succeeds. No context is silently borrowed from another conversation.
 
 ### 7. Protocol adapter boundary with one initial implementation
 
@@ -142,53 +161,81 @@ interface ChatProtocolAdapter {
 }
 ```
 
-Implement only `openai-responses` initially. It sends a full stateless conversation input, the current assistant instructions, `stream: true`, and `store: false`, then normalizes output-text deltas, completion, refusal, and error events. Provider-specific events not understood by the adapter are ignored only when they do not contain user-visible output or terminal errors.
+Implement only `openai-responses` initially. It sends the local context projection, the current assistant instructions, `stream: true`, and `store: false`, then normalizes output-text deltas, completion, refusal, and error events. Provider-specific events not understood by the adapter are ignored only when they do not contain user-visible output or terminal errors.
+
+The adapter capability model may later expose provider continuation modes such as `previous_response_id` or provider conversation IDs, but they are never the only stored representation of a conversation. A capability probe must verify semantic continuity, not merely a 2xx response or the presence of an ID. Switching API profile, model, assistant, or active branch can discard provider continuation state and rebuild the request from the local projection.
+
+Compatibility observation from 2026-07-13: `https://api.mnapi.com/v1` returned 200 for a baseline `gpt-5.4` Responses request and also accepted `store: true` plus `previous_response_id`. However, retrieving the created Response returned 404 and the chained request did not recall a unique marker from the stored response. MobileChat therefore treats provider state chaining on this relay as unsupported. The launcher-configured `gpt-5.4-codex-high` was not present in the relay's model listing and returned 503, which is a separate model-route issue rather than evidence about state support.
 
 ### 8. Typed content parts and separate blob records
 
 Messages use ordered `contents` rather than a single provider payload. Initial part types include text plus metadata-bearing local image/file references. Binary data is stored once in a `blobs` store and referenced by content parts; previews use temporary object URLs.
 
-The initial protocol adapter guarantees text. A draft containing non-text parts can be previewed and persisted, but can be sent only when the active adapter declares support for those part types. This prevents accidental omission. Backup export encodes selected blob records in a JSON-compatible form.
+The initial protocol adapter guarantees text. A draft containing non-text parts can be previewed and persisted, but can be sent only when the active adapter declares support for those part types. This prevents accidental omission. Backup export stores selected blob records as archive entries instead of embedding large binary payloads in JSON.
 
 Writable file handles are never required by the domain model. If a supported browser grants a persistent writable handle, it is stored as optional capability metadata and accessed behind an experimental feature flag.
 
 ### 9. Separate current and historical search indexes
 
-Current-conversation search derives an in-memory fuzzy index from searchable text content parts for the active conversation. Historical search maintains a lightweight index containing only conversation ID, title, and summary. Historical message bodies are never loaded or searched for global history queries.
+Current-conversation search derives an in-memory fuzzy index from searchable text content parts for the active conversation. Historical search maintains a lightweight index containing only conversation ID, title, and `displaySummary`. Historical message bodies and context checkpoint details are never loaded or searched for global history queries.
 
 Search normalization handles Unicode case folding, whitespace, and punctuation consistently. A bundled fuzzy matcher may be used, but its scoring and highlighting are wrapped behind an application search service so the library can be replaced.
 
-### 10. Turn-triggered incremental summaries
+### 10. Utility-assistant context compaction inspired by `/compact`
 
-A completed turn is a user message followed by a terminal assistant message status. Global summary defaults may be overridden per conversation and include enablement, minimum completed turns, update interval, model reference, prompt template, and maximum output length.
+A completed turn is a user message followed by a terminal assistant message status. Global compaction defaults may be overridden per conversation and include enablement, a context-compression utility-assistant reference, minimum completed turns, completed-turn interval, optional estimated-input-token threshold, number of recent turns to preserve verbatim, and maximum lengths for continuation and display summaries.
 
-After a qualifying assistant response completes, the foreground application enqueues a summary attempt. It sends the previous summary and messages after `summaryThroughMessageId`, using the configured API-profile model reference and a summary-specific prompt rather than a chat assistant prompt. Success atomically updates summary text, covered message boundary, and completed-turn count; failure records a retryable error without changing the chat response.
+Automatic compaction runs only in the foreground after a completed chat response. A manual **Compact context** action provides the same explicit control as a `/compact` command and may run before the automatic threshold. No wall-clock scheduler, service-worker background sync, or closed-app timer is used.
 
-No wall-clock scheduler, service-worker background sync, or closed-app timer is used.
+The compaction request applies the referenced utility assistant's own prompt and model binding. It receives the previous checkpoint summary plus active-path messages after the prior boundary, stopping before the configured recent raw-message tail. One semantic call returns a versioned result containing:
 
-### 11. Local backup as the portability boundary
+```text
+contextSummary: continuation state for future model requests
+displaySummary: concise text used in the history list and fuzzy history search
+```
 
-Export produces a versioned JSON document with application metadata, relational records, and optionally encoded blob data. Import parses into an isolated in-memory representation, validates references and schema compatibility, shows a summary, then performs either transactional replacement or ID-based merge.
+The result is validated before commit. Success creates an immutable `ContextCheckpoint` with the covered boundary, active-path identity, completed-turn count, utility-assistant/model references and immutable source snapshot, previous-checkpoint reference, output revision, and timestamps. The conversation then atomically points to the new checkpoint and display summary. The utility prompt and output do not appear as visible conversation messages.
 
-Merge preserves imported IDs when they do not conflict. Conflicting records with unequal content receive new IDs and all imported internal references are remapped together. Replace clears domain stores only after validation succeeds.
+Failure retains the prior valid checkpoint and completed chat response, records a retryable error, and leaves newer messages in the raw tail. If the projected request approaches the active model's context limit without a valid compacted projection, the UI warns and requires successful compaction or a model/context change rather than silently dropping messages.
+
+This is the only Memory mechanism in the first release: same-conversation canonical messages plus derived checkpoints and a recent raw tail. There is no user-level, assistant-level, project-level, or cross-conversation memory record.
+
+### 11. Versioned compressed archive as the portability boundary
+
+The portable format is a ZIP-compatible file with a `.mobilechat` extension rather than a raw IndexedDB, browser-profile, or SQLite file. Browser database files are implementation-specific and cannot be restored reliably across browsers. A complete archive contains:
+
+```text
+manifest.json       export format version, application version, timestamps, options
+records.json        API profiles, assistants, conversations, messages, checkpoints, settings
+blobs/<blob-id>     optional binary attachment payloads without Base64 expansion
+checksums.json      per-entry integrity hashes
+```
+
+Complete migration mode includes API credentials after an explicit confirmation so another personal device can operate immediately; a credential-free export mode omits secret values while preserving profile and model metadata. Persistent browser file handles are never exported. Large exports report estimated size and attachment inclusion before creation.
+
+Import reads the archive into an isolated representation, checks ZIP entry safety, checksums, export version, record schema, references, and blob metadata, then shows an import summary. Only after confirmation does it perform transactional replacement or ID-based merge. Merge preserves imported IDs when they do not conflict; unequal conflicts receive new IDs and all imported internal references, including checkpoint boundaries and source references, are remapped together. Replace clears domain stores only after validation succeeds.
+
+Cross-device access is a manual export-transfer-import workflow through the phone or desktop file system, cloud drive, or another user-chosen transport. It does not imply account synchronization or a MobileChat server. A plain JSON diagnostic export may be offered separately, but `.mobilechat` is the normative complete-backup format.
 
 ### 12. Static deployment and verification
 
-Use GitHub Actions to build and publish the static artifact to GitHub Pages. Verification includes unit tests for adapters, migrations, context building, summary thresholds, and search scope; component tests for conversation and settings flows; and browser tests at representative phone viewport sizes.
+Use GitHub Actions to build and publish the static artifact to GitHub Pages. Verification includes unit tests for adapters, migrations, context projection, compaction thresholds, checkpoint validity, archive round trips, and search scope; component tests for conversation and settings flows; and browser tests at representative phone viewport sizes.
 
 ## Risks / Trade-offs
 
 - **Direct endpoint CORS varies by provider** → Connection testing reports CORS separately and the first release documents that browser-compatible endpoints are required.
 - **Provider Responses implementations may differ** → Normalize events through one adapter and preserve diagnostic details for unsupported terminal responses.
+- **A relay may accept state parameters but ignore their semantics** → Keep `store: false` local projection as the baseline and require a recall-based capability probe before enabling provider continuation.
 - **Browser storage can be evicted or cleared** → Provide visible backup/export controls and schema-versioned imports.
 - **Large image/file blobs can exceed quota or backup size** → Check storage estimates, enforce configurable attachment limits, and warn before large imports or exports.
 - **PWA updates can leave an old client open** → Use versioned caches and prompt the user to reload after a new service worker is ready.
 - **Assistant snapshots duplicate prompts** → Accept bounded duplication to preserve provenance; never duplicate credentials.
 - **User-defined titles or generated summaries may resemble instructions** → Delimit them as application-owned context metadata and keep them separate from the active assistant's instruction section.
-- **Automatic summaries consume model calls** → Make automation configurable, visible, and failure-isolated.
+- **Automatic compaction consumes model calls** → Make automation configurable, visible, and failure-isolated.
+- **A compressed checkpoint can omit an important detail** → Preserve all canonical messages, keep a recent raw tail, expose manual recompression, and never make checkpoint generation destructive.
 - **Editing a prior message creates branching complexity** → Store parent links from the beginning while exposing only one active path initially.
 - **Mobile file editing support is inconsistent** → Keep write-back experimental and feature-detected; preview remains the supported baseline.
-- **No cloud sync means device loss loses unsaved data** → Make local export/import a first-class settings capability.
+- **No cloud sync means device loss loses unexported data** → Make `.mobilechat` export/import a first-class settings capability and show the last successful export time locally.
 
 ## Migration Plan
 

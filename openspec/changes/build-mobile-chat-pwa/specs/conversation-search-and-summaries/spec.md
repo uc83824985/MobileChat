@@ -18,30 +18,66 @@ The system SHALL search historical conversations using only their user-defined t
 - **WHEN** a query matches only the body of a message in a non-active conversation
 - **THEN** that conversation is not returned unless the query also matches its title or summary
 
-### Requirement: Configurable automatic summary rules
-The system SHALL allow summary automation to be enabled or disabled and configured by minimum completed turns, update interval in completed turns, target API-profile model reference, prompt template, and maximum summary length.
+### Requirement: Configurable context-compaction policy
+The system SHALL allow foreground context compaction to be enabled or disabled and configured by a context-compression utility-assistant reference, minimum completed turns, completed-turn interval, optional estimated-input-token threshold, recent turns retained verbatim, and output-length limits.
 
-#### Scenario: Update after the configured number of turns
+#### Scenario: Compact after a completed-turn threshold
 - **WHEN** an enabled conversation reaches the next configured completed-turn threshold
-- **THEN** the system initiates a summary update after the assistant response completes without relying on a background timer
+- **THEN** the system starts a compaction attempt after the chat response completes without relying on a background timer
 
-### Requirement: Incremental summary state
-The system SHALL record the message boundary and completed-turn count represented by the current summary so subsequent updates can combine the prior summary with only newer conversation content.
+#### Scenario: Compact before approaching the model context limit
+- **WHEN** the locally estimated projected input reaches the configured compaction threshold
+- **THEN** the system requests foreground compaction before silently omitting any active-path message
 
-#### Scenario: Incrementally refresh a summary
-- **WHEN** a summary already covers an earlier message boundary and another update is triggered
-- **THEN** the summarization request includes the prior summary and messages after that boundary and advances the boundary only after a successful update
+### Requirement: Utility assistant reference for compaction
+The system SHALL run semantic context compaction through a configured enabled utility assistant whose role is `context-compression`, using that assistant's own prompt and selected model binding.
 
-### Requirement: Summary failure isolation
-Summary generation failures SHALL NOT fail, remove, or roll back the completed chat response that triggered the summary attempt.
+#### Scenario: Compression assistant is unavailable
+- **WHEN** the referenced utility assistant or model binding is disabled, deleted, or unresolved
+- **THEN** automatic compaction is paused, the existing checkpoint remains usable, and the settings UI requires a valid replacement without falling back to the active chat assistant silently
 
-#### Scenario: Summary endpoint fails after a response
-- **WHEN** the chat response is complete but the configured summary request fails
-- **THEN** the conversation retains the completed response and previous summary and exposes a retryable summary error state
+### Requirement: Incremental immutable context checkpoints
+The system SHALL store immutable context checkpoints that include a continuation summary, display summary, covered active-path message boundary, completed-turn count, prior-checkpoint reference, revision, timestamps, and an immutable snapshot of the utility assistant and model used.
 
-### Requirement: Manual summary refresh
-The system SHALL allow a user to request an immediate summary refresh using the configured summary rules and model reference.
+#### Scenario: Incrementally compact a conversation
+- **WHEN** a valid checkpoint covers an earlier boundary and another compaction is triggered
+- **THEN** the compaction request combines the prior continuation summary with only active-path messages after that boundary up to the new cutoff and preserves the configured recent tail verbatim
 
-#### Scenario: Refresh before the automatic threshold
-- **WHEN** a user requests a manual summary update before the next automatic threshold
-- **THEN** the system attempts the update immediately and records the new summary boundary upon success
+#### Scenario: Commit a successful checkpoint
+- **WHEN** the utility result passes format and reference validation
+- **THEN** the system atomically stores the checkpoint, updates the conversation's active checkpoint reference and display summary, and leaves canonical messages unchanged
+
+### Requirement: Dual summary output
+Each successful compaction SHALL produce a continuation-oriented `contextSummary` for future model requests and a concise `displaySummary` used only for history presentation and title/summary search.
+
+#### Scenario: Search a compacted conversation
+- **WHEN** a history query matches the display summary
+- **THEN** the conversation is returned without indexing the longer context summary or historical message bodies
+
+### Requirement: Checkpoint validity follows the active path
+The system SHALL use a checkpoint only when its covered boundary is an ancestor of the conversation's current active leaf.
+
+#### Scenario: Edit a message covered by the checkpoint
+- **WHEN** edit-and-resubmit or branch switching selects a path that diverges at or before the checkpoint boundary
+- **THEN** the checkpoint is marked invalid for the active path and no longer contributes to request construction
+
+### Requirement: Compaction failure isolation
+Compaction failures SHALL NOT fail, remove, rewrite, or roll back the completed chat response or the last valid checkpoint.
+
+#### Scenario: Utility endpoint fails after a response
+- **WHEN** the chat response is complete but the configured compaction request fails
+- **THEN** the conversation retains the completed response and prior checkpoint and exposes a retryable compaction error state
+
+### Requirement: Manual compact action
+The system SHALL provide a visible **Compact context** action that immediately invokes the configured compaction policy in the foreground, analogous to a `/compact` command.
+
+#### Scenario: Compact before the automatic threshold
+- **WHEN** a user requests manual compaction before the next automatic threshold
+- **THEN** the system attempts compaction immediately and advances the checkpoint boundary only after successful validation and commit
+
+### Requirement: No cross-conversation memory
+The compaction system SHALL operate on exactly one conversation's active path and SHALL NOT create or query user-level, assistant-level, project-level, or cross-conversation memory.
+
+#### Scenario: Compact one of two conversations
+- **WHEN** a utility assistant compacts one conversation
+- **THEN** neither the compaction input nor its output includes messages or checkpoints from the other conversation
