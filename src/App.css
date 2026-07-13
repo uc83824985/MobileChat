@@ -405,6 +405,74 @@ button:disabled {
   min-height: 52px;
 }
 
+.backup-panel {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.backup-panel header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.backup-panel h3 {
+  font-size: 18px;
+}
+
+.backup-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.backup-grid div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+}
+
+.backup-grid span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.backup-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.backup-actions button {
+  background: var(--button);
+  border-radius: 8px;
+  color: var(--text-strong);
+  padding: 9px 11px;
+}
+
+.backup-actions button:hover {
+  background: var(--button-hover);
+}
+
+.backup-actions input {
+  display: none;
+}
+
+.backup-message {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0;
+}
+
 .settings-summary {
   display: grid;
   gap: 10px;
@@ -658,7 +726,8 @@ button:disabled {
 
   .settings-summary,
   .settings-layout,
-  .reflected-fields {
+  .reflected-fields,
+  .backup-grid {
     grid-template-columns: 1fr;
   }
 

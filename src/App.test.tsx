@@ -1,8 +1,14 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import "fake-indexeddb/auto";
+import { beforeEach, describe, expect, it } from "vitest";
 import App from "./App";
+import { deleteMobileChatDb } from "./persistence/mobileChatDb";
 
 describe("App", () => {
+  beforeEach(async () => {
+    await deleteMobileChatDb();
+  });
+
   it("renders the mobile chat shell", () => {
     render(<App />);
 

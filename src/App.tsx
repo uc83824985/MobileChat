@@ -1,6 +1,7 @@
 import {
   Archive,
   Bot,
+  Download,
   MessageSquarePlus,
   PanelLeft,
   Plus,
@@ -9,8 +10,11 @@ import {
   Settings,
   SlidersHorizontal,
   StopCircle,
+  Upload,
 } from "lucide-react";
 import {
+  type ChangeEvent,
+  useCallback,
   type KeyboardEvent,
   useEffect,
   useMemo,
@@ -18,233 +22,83 @@ import {
   useState,
 } from "react";
 import "./App.css";
-
-type Conversation = {
-  id: string;
-  title: string;
-  summary: string;
-  archived: boolean;
-};
-
-type Message = {
-  id: string;
-  conversationId: string;
-  role: "user" | "assistant";
-  label: string;
-  text: string;
-  status?: "streaming" | "stopped" | "complete";
-};
-
-type AssistantKind = "chat" | "utility";
-
-type Assistant = {
-  id: string;
-  name: string;
-  description: string;
-  kind: AssistantKind;
-  apiProfileName: string;
-  model: string;
-  prompt: string;
-  initialMessage: string;
-  enabled: boolean;
-};
-
-type AssistantFieldKey =
-  | "name"
-  | "description"
-  | "kind"
-  | "apiProfileName"
-  | "model"
-  | "prompt"
-  | "initialMessage"
-  | "enabled";
-
-type AssistantField = {
-  key: AssistantFieldKey;
-  label: string;
-  control: "text" | "textarea" | "select" | "checkbox";
-  helper?: string;
-  placeholder?: string;
-  options?: Array<{ label: string; value: string }>;
-};
-
-const defaultAssistant: Assistant = {
-  id: "architect",
-  name: "架构助手",
-  description: "用于架构讨论、技术路线确认和上下文机制设计。",
-  kind: "chat",
-  apiProfileName: "MNAPI",
-  model: "gpt-5.4",
-  prompt: "你是一个务实的软件架构助手，优先给出可落地的设计。",
-  initialMessage: "我会根据当前对话上下文协助推进实现。",
-  enabled: true,
-};
-
-const initialConversations: Conversation[] = [
-  {
-    id: "local-context",
-    title: "本地上下文机制",
-    summary: "store:false、本地投影、checkpoint、cache estimate",
-    archived: false,
-  },
-  {
-    id: "mobile-preview",
-    title: "手机预览 contents",
-    summary: "文件选择、图片预览、权限差异",
-    archived: false,
-  },
-  {
-    id: "assistant-routes",
-    title: "助手与模型配置",
-    summary: "API profile、chat/utility assistant、模型绑定",
-    archived: false,
-  },
-];
-
-const initialMessages: Message[] = [
-  {
-    id: "m1",
-    conversationId: "local-context",
-    role: "user",
-    label: "用户",
-    text: "放弃 store 方案，首版只使用本地上下文构建。",
-  },
-  {
-    id: "m2",
-    conversationId: "local-context",
-    role: "assistant",
-    label: "架构助手 · gpt-5.4",
-    text: "已切换为 store:false 基线。每次请求由本地 ContextProjection 构建，provider 返回的 ID 只保留为诊断字段。",
-  },
-  {
-    id: "m3",
-    conversationId: "local-context",
-    role: "user",
-    label: "用户",
-    text: "调试模式需要显示发送前 cache 估算和发送后 usage。",
-  },
-  {
-    id: "m4",
-    conversationId: "local-context",
-    role: "assistant",
-    label: "架构助手 · gpt-5.4",
-    text: "调试面板区分 estimate 和 observed：发送前显示 potentialCacheableRate，发送后显示 cachedInputTokens / inputTokens。",
-  },
-];
-
-const initialAssistants: Assistant[] = [
+import {
+  type AppSettings,
+  type Assistant,
+  type AssistantFieldKey,
+  assistantFields,
+  type Conversation,
+  createId,
+  createInitialSnapshot,
   defaultAssistant,
-  {
-    id: "research",
-    name: "研究助手",
-    description: "用于资料整理、方案比较和长问题拆解。",
-    kind: "chat",
-    apiProfileName: "MNAPI",
-    model: "gpt-5.4-mini",
-    prompt: "你是研究型助手，先澄清事实边界，再给出结论。",
-    initialMessage: "我可以帮助梳理资料和比较方案。",
-    enabled: true,
-  },
-  {
-    id: "compact",
-    name: "压缩助手",
-    description: "功能助手，用于后续上下文压缩和摘要生成。",
-    kind: "utility",
-    apiProfileName: "MNAPI",
-    model: "gpt-5.4-mini",
-    prompt: "你只输出结构化摘要，不参与普通聊天。",
-    initialMessage: "",
-    enabled: true,
-  },
-];
-
-const assistantFields: AssistantField[] = [
-  {
-    key: "name",
-    label: "助手名称",
-    control: "text",
-    placeholder: "例如：架构助手",
-    helper: "显示在聊天页和消息来源快照中的名称。",
-  },
-  {
-    key: "description",
-    label: "描述",
-    control: "text",
-    placeholder: "说明这个助手适合处理什么任务",
-  },
-  {
-    key: "kind",
-    label: "用途",
-    control: "select",
-    options: [
-      { label: "聊天助手", value: "chat" },
-      { label: "功能助手", value: "utility" },
-    ],
-  },
-  {
-    key: "apiProfileName",
-    label: "API Profile",
-    control: "text",
-    placeholder: "例如：MNAPI",
-  },
-  {
-    key: "model",
-    label: "模型",
-    control: "text",
-    placeholder: "例如：gpt-5.4",
-  },
-  {
-    key: "prompt",
-    label: "初始 Prompt",
-    control: "textarea",
-    helper: "仅作用于该助手；对话上下文仍由本地共享。",
-  },
-  {
-    key: "initialMessage",
-    label: "初始消息",
-    control: "textarea",
-    helper: "后续新建对话时可用于助手开场白。",
-  },
-  {
-    key: "enabled",
-    label: "启用",
-    control: "checkbox",
-  },
-];
-
-const diagnostics = [
-  ["输入估算", "12.8k tokens"],
-  ["可缓存前缀", "42%"],
-  ["预计命中", "medium · 38%"],
-  ["观测命中", "unknown"],
-];
+  diagnostics,
+  type LocalDataSnapshot,
+  type Message,
+  type SaveStatus,
+  type StorageInfo,
+} from "./domain";
+import {
+  createArchiveDownloadName,
+  createMobileChatArchive,
+  estimateArchiveSizeText,
+  readMobileChatArchive,
+} from "./persistence/mobileChatArchive";
+import {
+  loadSnapshot,
+  replaceSnapshot,
+  requestStorageInfo,
+  saveSnapshot,
+  updateLastSuccessfulExport,
+} from "./persistence/mobileChatDb";
 
 type PwaNotice = "offline-ready" | "update-available" | null;
 
-const createId = (prefix: string) =>
-  `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+const bootSnapshot = createInitialSnapshot();
+const AUTOSAVE_DELAY_MS = 400;
 
 function App() {
-  const [conversations, setConversations] =
-    useState<Conversation[]>(initialConversations);
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
-  const [assistants, setAssistants] = useState<Assistant[]>(initialAssistants);
-  const [activeConversationId, setActiveConversationId] =
-    useState("local-context");
+  const [conversations, setConversations] = useState<Conversation[]>(
+    bootSnapshot.conversations,
+  );
+  const [messages, setMessages] = useState<Message[]>(bootSnapshot.messages);
+  const [assistants, setAssistants] = useState<Assistant[]>(
+    bootSnapshot.assistants,
+  );
+  const [activeConversationId, setActiveConversationId] = useState(
+    bootSnapshot.settings.activeConversationId,
+  );
   const [activeAssistantId, setActiveAssistantId] = useState(
-    defaultAssistant.id,
+    bootSnapshot.settings.activeAssistantId,
   );
   const [editingAssistantId, setEditingAssistantId] = useState(
-    defaultAssistant.id,
+    bootSnapshot.settings.editingAssistantId,
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [debugEnabled, setDebugEnabled] = useState(true);
+  const [debugEnabled, setDebugEnabled] = useState(
+    bootSnapshot.settings.debugEnabled,
+  );
   const [draft, setDraft] = useState("");
   const [conversationSearch, setConversationSearch] = useState("");
   const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("loading");
+  const [saveError, setSaveError] = useState("");
+  const [lastSuccessfulExportAt, setLastSuccessfulExportAt] = useState(
+    bootSnapshot.settings.lastSuccessfulExportAt,
+  );
+  const [storageInfo, setStorageInfo] = useState<StorageInfo>({
+    persisted: bootSnapshot.settings.storagePersisted ?? null,
+    usage: bootSnapshot.settings.storageUsage,
+    quota: bootSnapshot.settings.storageQuota,
+  });
+  const [archiveSizeText, setArchiveSizeText] = useState("估算中");
+  const [backupMessage, setBackupMessage] = useState("");
   const [pwaNotice, setPwaNotice] = useState<PwaNotice>(null);
   const responseTimerRef = useRef<number | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  const latestSnapshotRef = useRef<LocalDataSnapshot>(bootSnapshot);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeAssistant = useMemo(
     () =>
@@ -296,6 +150,72 @@ function App() {
   const utilityAssistantCount = assistants.filter(
     (assistant) => assistant.kind === "utility",
   ).length;
+  const appSettings = useMemo<AppSettings>(
+    () => ({
+      ...bootSnapshot.settings,
+      activeConversationId,
+      activeAssistantId,
+      editingAssistantId,
+      debugEnabled,
+      lastSuccessfulExportAt,
+      storagePersisted: storageInfo.persisted,
+      storageUsage: storageInfo.usage,
+      storageQuota: storageInfo.quota,
+    }),
+    [
+      activeAssistantId,
+      activeConversationId,
+      debugEnabled,
+      editingAssistantId,
+      lastSuccessfulExportAt,
+      storageInfo.persisted,
+      storageInfo.quota,
+      storageInfo.usage,
+    ],
+  );
+  const currentSnapshot = useMemo<LocalDataSnapshot>(
+    () => ({
+      settings: appSettings,
+      assistants,
+      conversations,
+      messages,
+    }),
+    [appSettings, assistants, conversations, messages],
+  );
+
+  const applySnapshot = useCallback((snapshot: LocalDataSnapshot) => {
+    setAssistants(snapshot.assistants);
+    setConversations(snapshot.conversations);
+    setMessages(snapshot.messages);
+    setActiveConversationId(snapshot.settings.activeConversationId);
+    setActiveAssistantId(snapshot.settings.activeAssistantId);
+    setEditingAssistantId(snapshot.settings.editingAssistantId);
+    setDebugEnabled(snapshot.settings.debugEnabled);
+    setLastSuccessfulExportAt(snapshot.settings.lastSuccessfulExportAt);
+    setStorageInfo({
+      persisted: snapshot.settings.storagePersisted ?? null,
+      usage: snapshot.settings.storageUsage,
+      quota: snapshot.settings.storageQuota,
+    });
+  }, []);
+
+  const saveCurrentSnapshot = useCallback(
+    async (snapshot = latestSnapshotRef.current) => {
+      setSaveStatus("saving");
+      setSaveError("");
+
+      try {
+        await saveSnapshot(snapshot);
+        setSaveStatus("saved");
+      } catch (error) {
+        setSaveStatus("failed");
+        setSaveError(
+          error instanceof Error ? error.message : "保存到 MobileChatDB 失败",
+        );
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const showOfflineReady = () => setPwaNotice("offline-ready");
@@ -320,9 +240,112 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const hydrate = async () => {
+      try {
+        const snapshot = await loadSnapshot();
+        if (cancelled) {
+          return;
+        }
+
+        applySnapshot(snapshot);
+        latestSnapshotRef.current = snapshot;
+        setHydrated(true);
+        setSaveStatus("saved");
+
+        const nextStorageInfo = await requestStorageInfo();
+        if (!cancelled) {
+          setStorageInfo(nextStorageInfo);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setHydrated(true);
+          setSaveStatus("failed");
+          setSaveError(
+            error instanceof Error ? error.message : "加载 MobileChatDB 失败",
+          );
+        }
+      }
+    };
+
+    void hydrate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applySnapshot]);
+
+  useEffect(() => {
+    latestSnapshotRef.current = currentSnapshot;
+  }, [currentSnapshot]);
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+
+    setSaveStatus("unsaved");
+    setSaveError("");
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+
+    saveTimerRef.current = window.setTimeout(() => {
+      void saveCurrentSnapshot(currentSnapshot);
+    }, AUTOSAVE_DELAY_MS);
+
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+      }
+    };
+  }, [currentSnapshot, hydrated, saveCurrentSnapshot]);
+
+  useEffect(() => {
+    const flushOnVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        void saveCurrentSnapshot();
+      }
+    };
+
+    document.addEventListener("visibilitychange", flushOnVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", flushOnVisibilityChange);
+  }, [saveCurrentSnapshot]);
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      return;
+    }
+
+    let cancelled = false;
+
+    estimateArchiveSizeText(currentSnapshot)
+      .then((sizeText) => {
+        if (!cancelled) {
+          setArchiveSizeText(sizeText);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setArchiveSizeText("未知");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSnapshot, settingsOpen]);
+
+  useEffect(() => {
     return () => {
       if (responseTimerRef.current) {
         window.clearTimeout(responseTimerRef.current);
+      }
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
       }
     };
   }, []);
@@ -388,6 +411,67 @@ function App() {
     setEditingAssistantId(activeAssistant.id);
     setDrawerOpen(false);
     setSettingsOpen(true);
+  };
+
+  const closeSettings = () => {
+    setSettingsOpen(false);
+    void saveCurrentSnapshot();
+  };
+
+  const downloadArchive = (blob: Blob) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = createArchiveDownloadName();
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportBackup = async () => {
+    setBackupMessage("正在导出 .mobilechat");
+    await saveCurrentSnapshot();
+
+    try {
+      const committedSnapshot = await loadSnapshot();
+      const archive = await createMobileChatArchive(committedSnapshot, {
+        includeCredentials: false,
+      });
+      downloadArchive(archive);
+
+      const exportedAt = new Date().toISOString();
+      const snapshotWithExportTime =
+        await updateLastSuccessfulExport(exportedAt);
+      applySnapshot(snapshotWithExportTime);
+      setBackupMessage("已生成 credential-free .mobilechat 导出文件");
+    } catch (error) {
+      setBackupMessage(
+        error instanceof Error ? error.message : "导出 .mobilechat 失败",
+      );
+    }
+  };
+
+  const importBackup = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    setBackupMessage("正在验证导入文件");
+
+    try {
+      const importedSnapshot = await readMobileChatArchive(file);
+      await replaceSnapshot(importedSnapshot);
+      applySnapshot(importedSnapshot);
+      setSaveStatus("saved");
+      setBackupMessage("已导入 .mobilechat 并替换本地数据");
+    } catch (error) {
+      setSaveStatus("failed");
+      setBackupMessage(
+        error instanceof Error ? error.message : "导入 .mobilechat 失败",
+      );
+    }
   };
 
   const createAssistant = () => {
@@ -701,7 +785,7 @@ function App() {
           role="presentation"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
-              setSettingsOpen(false);
+              closeSettings();
             }
           }}
         >
@@ -720,13 +804,27 @@ function App() {
                 className="icon-button"
                 type="button"
                 aria-label="关闭设置"
-                onClick={() => setSettingsOpen(false)}
+                onClick={closeSettings}
               >
                 ×
               </button>
             </header>
 
             <section className="settings-summary" aria-label="设置概览">
+              <div className="settings-row compact">
+                <span>保存状态</span>
+                <strong>
+                  {saveStatus === "loading"
+                    ? "加载中"
+                    : saveStatus === "unsaved"
+                      ? "未保存"
+                      : saveStatus === "saving"
+                        ? "保存中"
+                        : saveStatus === "saved"
+                          ? "已保存"
+                          : "保存失败"}
+                </strong>
+              </div>
               <div className="settings-row compact">
                 <span>调试模式</span>
                 <label className="switch">
@@ -750,6 +848,79 @@ function App() {
                 <span>功能助手</span>
                 <strong>{utilityAssistantCount}</strong>
               </div>
+            </section>
+
+            <section className="backup-panel" aria-label="备份与存储">
+              <header>
+                <div>
+                  <p className="eyebrow">Persistence</p>
+                  <h3>本地持久化与备份</h3>
+                </div>
+              </header>
+              <div className="backup-grid">
+                <div>
+                  <span>数据库</span>
+                  <strong>MobileChatDB</strong>
+                </div>
+                <div>
+                  <span>持久模式</span>
+                  <strong>
+                    {storageInfo.persisted === true
+                      ? "persistent"
+                      : storageInfo.persisted === false
+                        ? "best-effort"
+                        : "unknown"}
+                  </strong>
+                </div>
+                <div>
+                  <span>用量 / 配额</span>
+                  <strong>
+                    {typeof storageInfo.usage === "number" &&
+                    typeof storageInfo.quota === "number"
+                      ? `${(storageInfo.usage / 1024).toFixed(1)} KB / ${(
+                          storageInfo.quota /
+                          1024 /
+                          1024
+                        ).toFixed(1)} MB`
+                      : "unknown"}
+                  </strong>
+                </div>
+                <div>
+                  <span>预计导出大小</span>
+                  <strong>{archiveSizeText}</strong>
+                </div>
+                <div>
+                  <span>最后导出</span>
+                  <strong>
+                    {lastSuccessfulExportAt
+                      ? new Date(lastSuccessfulExportAt).toLocaleString()
+                      : "从未"}
+                  </strong>
+                </div>
+              </div>
+              <div className="backup-actions">
+                <button type="button" onClick={exportBackup}>
+                  <Download size={16} />
+                  导出 .mobilechat
+                </button>
+                <button
+                  type="button"
+                  onClick={() => importInputRef.current?.click()}
+                >
+                  <Upload size={16} />
+                  导入并替换
+                </button>
+                <input
+                  ref={importInputRef}
+                  aria-label="导入 mobilechat 文件"
+                  type="file"
+                  accept=".mobilechat,application/zip,application/vnd.mobilechat+zip"
+                  onChange={importBackup}
+                />
+              </div>
+              {saveError || backupMessage ? (
+                <p className="backup-message">{saveError || backupMessage}</p>
+              ) : null}
             </section>
 
             <section className="settings-layout">

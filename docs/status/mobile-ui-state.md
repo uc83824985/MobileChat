@@ -35,11 +35,11 @@ Current verification covers this with a Pixel-class Playwright viewport. Real-de
 
 ## Remaining limitations
 
-- No IndexedDB persistence yet; refresh loses runtime edits. The accepted next persistence target is a unified IndexedDB database named `MobileChatDB`.
+- IndexedDB persistence now exists for the current prototype state, including settings, assistants, conversations, and messages. Full API profile/model/checkpoint semantics are still pending.
 - No real API profile/model CRUD yet.
 - No credential handling or endpoint validation yet.
 - Chat assistant vs. utility assistant enforcement is not complete in the prototype UI.
-- Assistant snapshots are not yet copied onto persisted messages because persistence is not implemented.
+- Assistant snapshots are not yet copied onto persisted messages because full message provenance persistence is not implemented.
 
 ## Persistence decision
 
@@ -47,3 +47,12 @@ Current verification covers this with a Pixel-class Playwright viewport. Real-de
 - UI edits should update in-memory state immediately and persist asynchronously in the background.
 - Text fields should debounce saves and flush on blur, settings close, send, and page visibility changes.
 - Import/export must be designed together with persistence: `.mobilechat` archives export and import the same versioned record DTOs used by `MobileChatDB`, rather than copying browser database files.
+
+## Implemented persistence slice
+
+- `MobileChatDB` is created as a versioned IndexedDB database with stores for metadata, settings, API profiles, assistants, conversations, messages, drafts, context checkpoints, and blobs.
+- Current prototype records persist across reloads on the same browser origin.
+- Settings show local save state, storage mode, estimated usage/quota, estimated archive size, and last successful export time.
+- The app can export a credential-free `.mobilechat` ZIP-compatible archive containing `manifest.json`, `records.json`, and `checksums.json`.
+- The app can import a `.mobilechat` archive and replace current local prototype data after archive validation.
+- Desktop Chrome Playwright verification covers edit → autosave → reload restore → export → mutate → import replace → restore.
