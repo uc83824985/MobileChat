@@ -953,14 +953,14 @@ function App() {
       id: createId("api-profile"),
       name: `API Profile ${apiProfiles.length + 1}`,
       description: "OpenAI-compatible Responses API 配置",
-      baseUrl: "https://api.example.com/v1",
+      baseUrl: "",
       apiKey: "",
       protocol: "openai-responses",
       enabled: true,
       models: [
         {
-          id: "gpt-5.4",
-          name: "gpt-5.4",
+          id: "new-model",
+          name: "新模型",
           description: "新建模型预设",
           contextWindow: 128000,
           enabled: true,
@@ -1030,6 +1030,61 @@ function App() {
       ),
     );
     setEditingModelId(modelId);
+  };
+
+  const deleteModel = (profileId: string, modelId: string) => {
+    const profile = apiProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) {
+      return;
+    }
+
+    const remainingModels = profile.models.filter(
+      (model) => model.id !== modelId,
+    );
+    const nextModelRef =
+      remainingModels[0] !== undefined
+        ? { apiProfileId: profileId, modelId: remainingModels[0].id }
+        : allModelOptions.find(
+            (option) =>
+              option.ref.apiProfileId !== profileId ||
+              option.ref.modelId !== modelId,
+          )?.ref;
+
+    setApiProfiles((current) =>
+      current.map((candidate) =>
+        candidate.id === profileId
+          ? { ...candidate, models: remainingModels }
+          : candidate,
+      ),
+    );
+    setEditingModelId(remainingModels[0]?.id ?? "");
+    setAssistants((current) =>
+      current.map((assistant) => {
+        const filteredBindings = assistant.modelBindings.filter(
+          (binding) =>
+            binding.apiProfileId !== profileId || binding.modelId !== modelId,
+        );
+        const hasDefault = filteredBindings.some(
+          (binding) => binding.isDefault,
+        );
+
+        return {
+          ...assistant,
+          modelBindings: filteredBindings.map((binding, index) => ({
+            ...binding,
+            isDefault: hasDefault ? binding.isDefault : index === 0,
+          })),
+        };
+      }),
+    );
+
+    if (
+      activeModelRef.apiProfileId === profileId &&
+      activeModelRef.modelId === modelId &&
+      nextModelRef
+    ) {
+      setActiveModelRef(nextModelRef);
+    }
   };
 
   const updateModelField = (
@@ -2280,6 +2335,22 @@ function App() {
                             }
                           />
                         </label>
+                        <div className="detail-field danger-zone">
+                          <span>模型操作</span>
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() =>
+                              deleteModel(editingApiProfile.id, editingModel.id)
+                            }
+                          >
+                            <Trash2 size={16} />
+                            删除当前模型
+                          </button>
+                          <small>
+                            仅删除当前连接下的模型配置和助手绑定；历史消息保留原始快照。
+                          </small>
+                        </div>
                       </div>
                     ) : null}
                   </section>

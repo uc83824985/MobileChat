@@ -60,15 +60,14 @@ test("supports basic mobile interactions, title editing, and model switching", a
 
   await page.getByLabel("选择助手").selectOption("research");
   await expect(page.getByLabel("选择助手")).toHaveValue("research");
-  await expect(page.getByLabel("选择模型")).toHaveValue("mnapi::gpt-5.4-mini");
-
-  await page.getByLabel("选择模型").selectOption("mnapi::gpt-5.4");
-  await expect(page.getByLabel("选择模型")).toHaveValue("mnapi::gpt-5.4");
+  await expect(page.getByLabel("选择模型")).toHaveValue(
+    "default-profile::default-model",
+  );
 
   await page.getByPlaceholder("输入消息").fill("测试移动端发送");
   await page.getByLabel("发送").click();
   await expect(page.getByText("测试移动端发送", { exact: true })).toBeVisible();
-  await expect(page.getByText(/请先在设置页.*API key/)).toBeVisible();
+  await expect(page.getByText(/请先在设置页.*API 请求地址/)).toBeVisible();
 
   await openSettings(page);
   await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
@@ -89,12 +88,17 @@ test("supports basic mobile interactions, title editing, and model switching", a
   );
 
   await expect(
-    page.getByRole("button", { name: "编辑模型 gpt-5.4-mini" }),
+    page.getByRole("button", { name: "编辑模型 默认模型" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "编辑模型 gpt-5.4-mini" }).click();
-  await expect(page.getByLabel("模型名称")).toHaveValue("gpt-5.4-mini");
-  await page.getByLabel("模型名称").fill("MNAPI Mini");
-  await expect(page.getByLabel("模型名称")).toHaveValue("MNAPI Mini");
+  await page.getByRole("button", { name: "编辑模型 默认模型" }).click();
+  await expect(page.getByLabel("模型名称")).toHaveValue("默认模型");
+  await page.getByLabel("模型名称").fill("手机主模型");
+  await page.getByLabel("启用联网工具").check({ force: true });
+  await expect(page.getByLabel("启用联网工具")).toBeChecked();
+  await page.getByText("新增模型").click();
+  await expect(page.getByLabel("模型名称")).toHaveValue("new-model-2");
+  await page.getByText("删除当前模型").click();
+  await expect(page.getByLabel("模型名称")).toHaveValue("手机主模型");
 });
 
 test("supports archived conversation browsing and restore", async ({
@@ -158,7 +162,7 @@ test("verifies persistence and .mobilechat import/export on desktop", async ({
   await page.getByLabel("主题模式").selectOption("light");
   await page.getByLabel("流式输出").uncheck({ force: true });
   await page.getByLabel("API Key").fill("desktop-local-key");
-  await page.getByLabel("模型名称").fill("PC MNAPI High");
+  await page.getByLabel("模型名称").fill("PC 主模型");
   await page.getByLabel("助手名称").fill("PC 持久化助手");
   await page.getByLabel("初始 Prompt").fill("PC 端验证持久化 prompt。");
   await expect(page.getByText("已保存")).toBeVisible({ timeout: 6000 });
@@ -171,7 +175,7 @@ test("verifies persistence and .mobilechat import/export on desktop", async ({
   await expect(page.getByLabel("主题模式")).toHaveValue("light");
   await expect(page.getByLabel("流式输出")).not.toBeChecked();
   await expect(page.getByLabel("API Key")).toHaveValue("desktop-local-key");
-  await expect(page.getByLabel("模型名称")).toHaveValue("PC MNAPI High");
+  await expect(page.getByLabel("模型名称")).toHaveValue("PC 主模型");
   await expect(page.getByLabel("助手名称")).toHaveValue("PC 持久化助手");
   await expect(page.getByLabel("初始 Prompt")).toHaveValue(
     "PC 端验证持久化 prompt。",

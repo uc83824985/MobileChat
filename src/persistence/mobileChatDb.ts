@@ -131,30 +131,11 @@ const normalizeModel = (model: ModelDefinition): ModelDefinition => ({
   webSearchEnabled: Boolean(model.webSearchEnabled),
 });
 
-const normalizeApiProfiles = (apiProfiles: ApiProfile[]): ApiProfile[] => {
-  const normalizedProfiles = apiProfiles.map((profile) => ({
+const normalizeApiProfiles = (apiProfiles: ApiProfile[]): ApiProfile[] =>
+  apiProfiles.map((profile) => ({
     ...profile,
     models: profile.models.map((model) => normalizeModel(model)),
   }));
-
-  return normalizedProfiles.map((profile) => {
-    const initialProfile = initialApiProfiles.find(
-      (candidate) => candidate.id === profile.id,
-    );
-    if (!initialProfile) {
-      return profile;
-    }
-
-    const existingModelIds = new Set(profile.models.map((model) => model.id));
-    const missingPresetModels = initialProfile.models
-      .filter((model) => !existingModelIds.has(model.id))
-      .map((model) => normalizeModel(model));
-
-    return missingPresetModels.length > 0
-      ? { ...profile, models: [...profile.models, ...missingPresetModels] }
-      : profile;
-  });
-};
 
 const findModelInProfiles = (apiProfiles: ApiProfile[], ref: ModelRef) => {
   const apiProfile = apiProfiles.find(
@@ -220,11 +201,11 @@ const migrateAssistant = (
         enabled: binding.enabled !== false,
         isDefault: hasDefault ? Boolean(binding.isDefault) : index === 0,
         apiProfileNameSnapshot:
-          binding.apiProfileNameSnapshot ??
           apiProfile?.name ??
+          binding.apiProfileNameSnapshot ??
           binding.apiProfileId,
         modelNameSnapshot:
-          binding.modelNameSnapshot ?? model?.name ?? binding.modelId,
+          model?.name ?? binding.modelNameSnapshot ?? binding.modelId,
         modelDescriptionSnapshot:
           binding.modelDescriptionSnapshot ?? model?.description ?? "",
       };
@@ -232,38 +213,6 @@ const migrateAssistant = (
     prompt: assistant.prompt ?? "",
     initialMessage: assistant.initialMessage ?? "",
     enabled: assistant.enabled !== false,
-  };
-};
-
-const ensurePresetAssistantBindings = (
-  assistant: Assistant,
-  apiProfiles: ApiProfile[],
-): Assistant => {
-  if (assistant.id !== "research") {
-    return assistant;
-  }
-
-  const grokRef: ModelRef = {
-    apiProfileId: "mnapi",
-    modelId: "grok-4.2",
-  };
-  const alreadyBound = assistant.modelBindings.some(
-    (binding) =>
-      binding.apiProfileId === grokRef.apiProfileId &&
-      binding.modelId === grokRef.modelId,
-  );
-  const { apiProfile, model } = findModelInProfiles(apiProfiles, grokRef);
-
-  if (alreadyBound || !apiProfile || !model) {
-    return assistant;
-  }
-
-  return {
-    ...assistant,
-    modelBindings: [
-      ...assistant.modelBindings,
-      bindingFromRef(apiProfiles, grokRef, false),
-    ],
   };
 };
 
@@ -300,10 +249,7 @@ export const normalizeSnapshot = (
   const assistants =
     snapshot.assistants && snapshot.assistants.length > 0
       ? snapshot.assistants.map((assistant) =>
-          ensurePresetAssistantBindings(
-            migrateAssistant(assistant, apiProfiles),
-            apiProfiles,
-          ),
+          migrateAssistant(assistant, apiProfiles),
         )
       : initialSnapshot.assistants;
   const conversations =

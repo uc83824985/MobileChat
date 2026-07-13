@@ -138,10 +138,11 @@ export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 
 export const DATABASE_SCHEMA_VERSION = 5;
 
-export const MNAPI_PROFILE_ID = "mnapi";
+export const DEFAULT_PROFILE_ID = "default-profile";
+export const DEFAULT_MODEL_ID = "default-model";
 export const DEFAULT_MODEL_REF: ModelRef = {
-  apiProfileId: MNAPI_PROFILE_ID,
-  modelId: "gpt-5.4-codex-high",
+  apiProfileId: DEFAULT_PROFILE_ID,
+  modelId: DEFAULT_MODEL_ID,
 };
 
 export const modelRefKey = (ref: ModelRef) =>
@@ -155,79 +156,33 @@ export const parseModelRefKey = (key: string): ModelRef => {
   };
 };
 
-const mnapiBinding = (
-  modelId: string,
-  isDefault = false,
-): AssistantModelBinding => ({
-  apiProfileId: MNAPI_PROFILE_ID,
-  modelId,
+const defaultBinding = (isDefault = false): AssistantModelBinding => ({
+  apiProfileId: DEFAULT_PROFILE_ID,
+  modelId: DEFAULT_MODEL_ID,
   enabled: true,
   isDefault,
-  apiProfileNameSnapshot: "MNAPI",
-  modelNameSnapshot: modelId,
-  modelDescriptionSnapshot: "MNAPI 预设模型路由",
+  apiProfileNameSnapshot: "默认连接",
+  modelNameSnapshot: "默认模型",
+  modelDescriptionSnapshot: "请在设置页编辑模型 ID 和连接信息。",
 });
 
 export const initialApiProfiles: ApiProfile[] = [
   {
-    id: MNAPI_PROFILE_ID,
-    name: "MNAPI",
-    description:
-      "复用 start_mnapi_codex 的 OpenAI-compatible Responses 中转站预设；API key 需要在本机设置页填写。",
-    baseUrl: "https://api.mnapi.com/v1",
+    id: DEFAULT_PROFILE_ID,
+    name: "默认连接",
+    description: "OpenAI-compatible Responses API 配置，请在本机设置页编辑。",
+    baseUrl: "",
     apiKey: "",
     protocol: "openai-responses",
     enabled: true,
     models: [
       {
-        id: "gpt-5.4-codex-high",
-        name: "gpt-5.4-codex-high",
-        description:
-          "来自 start_mnapi_codex 的默认模型；MNAPI 通过模型名后缀表达 high 推理强度。",
+        id: DEFAULT_MODEL_ID,
+        name: "默认模型",
+        description: "请编辑为你的中转站或模型服务支持的模型 ID。",
         contextWindow: 128000,
         enabled: true,
         webSearchEnabled: false,
-      },
-      {
-        id: "gpt-5.4-codex-medium",
-        name: "gpt-5.4-codex-medium",
-        description: "MNAPI 推理强度 medium 变体，需以网关实际支持为准。",
-        contextWindow: 128000,
-        enabled: true,
-        webSearchEnabled: false,
-      },
-      {
-        id: "gpt-5.4-codex-low",
-        name: "gpt-5.4-codex-low",
-        description: "MNAPI 推理强度 low 变体，需以网关实际支持为准。",
-        contextWindow: 128000,
-        enabled: true,
-        webSearchEnabled: false,
-      },
-      {
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-        description: "通用 GPT-5.4 路由，供非 Codex 场景或网关兼容路由使用。",
-        contextWindow: 128000,
-        enabled: true,
-        webSearchEnabled: false,
-      },
-      {
-        id: "gpt-5.4-mini",
-        name: "gpt-5.4-mini",
-        description: "轻量模型预设，适合研究整理、摘要和功能助手。",
-        contextWindow: 128000,
-        enabled: true,
-        webSearchEnabled: false,
-      },
-      {
-        id: "grok-4.2",
-        name: "grok-4.2",
-        description:
-          "MNAPI Grok 4.2 路由；按网页端可用配置预设为模型级联网工具开启。",
-        contextWindow: 128000,
-        enabled: true,
-        webSearchEnabled: true,
       },
     ],
   },
@@ -238,11 +193,7 @@ export const defaultAssistant: Assistant = {
   name: "架构助手",
   description: "用于架构讨论、技术路线确认和上下文机制设计。",
   kind: "chat",
-  modelBindings: [
-    mnapiBinding("gpt-5.4-codex-high", true),
-    mnapiBinding("gpt-5.4-codex-medium"),
-    mnapiBinding("gpt-5.4"),
-  ],
+  modelBindings: [defaultBinding(true)],
   prompt: "你是一个务实的软件架构助手，优先给出可落地的设计。",
   initialMessage: "我会根据当前对话上下文协助推进实现。",
   enabled: true,
@@ -282,7 +233,7 @@ export const initialMessages: Message[] = [
     id: "m2",
     conversationId: "local-context",
     role: "assistant",
-    label: "架构助手 · gpt-5.4-codex-high",
+    label: "架构助手 · 默认模型",
     text: "已切换为 store:false 基线。每次请求由本地 ContextProjection 构建，provider 返回的 ID 只保留为诊断字段。",
     createdAt: "2026-07-13T00:00:01.000Z",
   },
@@ -298,7 +249,7 @@ export const initialMessages: Message[] = [
     id: "m4",
     conversationId: "local-context",
     role: "assistant",
-    label: "架构助手 · gpt-5.4-codex-high",
+    label: "架构助手 · 默认模型",
     text: "调试面板区分 estimate 和 observed：发送前显示 potentialCacheableRate，发送后显示 cachedInputTokens / inputTokens。",
     createdAt: "2026-07-13T00:00:03.000Z",
   },
@@ -311,12 +262,7 @@ export const initialAssistants: Assistant[] = [
     name: "研究助手",
     description: "用于资料整理、方案比较和长问题拆解。",
     kind: "chat",
-    modelBindings: [
-      mnapiBinding("gpt-5.4-mini", true),
-      mnapiBinding("grok-4.2"),
-      mnapiBinding("gpt-5.4"),
-      mnapiBinding("gpt-5.4-codex-medium"),
-    ],
+    modelBindings: [defaultBinding(true)],
     prompt: "你是研究型助手，先澄清事实边界，再给出结论。",
     initialMessage: "我可以帮助梳理资料和比较方案。",
     enabled: true,
@@ -326,7 +272,7 @@ export const initialAssistants: Assistant[] = [
     name: "压缩助手",
     description: "功能助手，用于后续上下文压缩和摘要生成。",
     kind: "utility",
-    modelBindings: [mnapiBinding("gpt-5.4-mini", true)],
+    modelBindings: [defaultBinding(true)],
     prompt: "你只输出结构化摘要，不参与普通聊天。",
     initialMessage: "",
     enabled: true,

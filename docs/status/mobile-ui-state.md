@@ -42,15 +42,11 @@ Date: 2026-07-13
 - Assistants no longer own raw `apiProfileName` / `model` fields as the active configuration path. They own model bindings that reference existing API Profile + model records, with snapshots of key display fields for provenance.
 - Legacy assistant records containing `apiProfileName` / `model` are migrated into model bindings on load/import.
 
-## MNAPI preset
+## User-owned connection configuration
 
-- The repo seeds a credential-free MNAPI profile:
-  - `baseUrl`: `https://api.mnapi.com/v1`
-  - protocol: `openai-responses`
-  - default preset model: `gpt-5.4-codex-high`
-- Preset model slugs include high/medium/low Codex variants plus generic `gpt-5.4` and `gpt-5.4-mini`.
-- Presets also include `grok-4.2` on the MNAPI profile. The preset keeps the same gateway URL and enables the model-level web search tool by default, matching the route that was reported to work in the relay's web UI.
-- No API key from the local launcher is committed. The key must be entered in the settings page and remains in the browser's IndexedDB unless the user exports with credentials in a future explicit flow.
+- The repo no longer seeds a concrete relay URL, API key, or model slug. First-run data contains a generic editable API Profile and model placeholder.
+- User-specific routes, provider-specific model slugs, and web-search-enabled models should be created through the settings UI, import flow, or a local-only MobileChatDB update.
+- API keys remain in the browser's IndexedDB unless the user exports with credentials in a future explicit flow.
 
 ## Persistence and import/export
 
@@ -92,4 +88,4 @@ Current automated coverage includes Desktop Chrome and Pixel-class Mobile Chrome
 - No model discovery (`GET /models`) UI yet; model list is manually edited.
 - No real context compression/checkpoint execution yet.
 - No credential-including export flow yet; current export deliberately removes API keys.
-- No CORS workaround exists in the static deployment. If MNAPI rejects browser origins, a proxy route is required.
+- No CORS workaround exists in the static deployment. If the selected relay rejects browser origins, a proxy route is required.

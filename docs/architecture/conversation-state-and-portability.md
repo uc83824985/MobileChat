@@ -28,11 +28,10 @@ Claude Messages API 更明确地采用无状态设计：每轮发送完整的会
 - [Claude Using the Messages API](https://platform.claude.com/docs/en/build-with-claude/working-with-messages)
 - [Claude Compaction](https://platform.claude.com/docs/en/build-with-claude/compaction)
 
-## MNAPI 状态能力探测
+## 历史中转站状态能力探测记录
 
 探测日期：2026-07-13  
-端点：`https://api.mnapi.com/v1`  
-用于有效探测的模型：`gpt-5.4`
+端点与模型：用户本机曾配置的一个 OpenAI-compatible relay 和模型路由。
 
 | 探测 | 结果 | 解释 |
 |---|---:|---|
@@ -42,9 +41,9 @@ Claude Messages API 更明确地采用无状态设计：每轮发送完整的会
 | `GET /responses/{id}` | 404，路由无效 | 网关不提供 Response 取回 |
 | 仅通过 `previous_response_id` 复述唯一随机标记 | HTTP 200，但未复述标记 | 上下文连续性未实现或不可用 |
 
-因此首版将 MNAPI 的 provider continuation 标记为不支持。能力探测必须验证唯一内容的实际回忆，不能只检查 HTTP 成功、字段被接受或 Response ID 是否存在。
+因此首版将该类 relay 的 provider continuation 默认标记为不支持。能力探测必须验证唯一内容的实际回忆，不能只检查 HTTP 成功、字段被接受或 Response ID 是否存在。
 
-当前前端预设会复用 `start_mnapi_codex` 的配置形态，内置 `https://api.mnapi.com/v1`、`wire_api=responses` 和 `gpt-5.4-codex-high` 等模型 slug，但不内置 API key。模型 slug 的可用性以用户实际 MNAPI 网关为准；若某个 slug 返回 503，应在设置页切换到其他预设或编辑模型 slug。这属于模型路由兼容问题，与 `store` 能力结论分开记录。
+仓库不再内置该中转站、模型 slug 或任何个人路由配置。此记录只保留为历史兼容性观察；模型 slug 的可用性以用户本机数据库中的实际配置和网关返回为准。
 
 ## 单对话 Memory 的含义
 

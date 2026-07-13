@@ -23,9 +23,10 @@ describe("MobileChat persistence", () => {
     expect(snapshot.settings.activeAssistantId).toBe("architect");
     expect(snapshot.settings.themeMode).toBe("system");
     expect(snapshot.settings.streamingEnabled).toBe(true);
-    expect(snapshot.settings.activeModelRef.modelId).toBe("gpt-5.4-codex-high");
+    expect(snapshot.settings.activeModelRef.modelId).toBe("default-model");
     expect(snapshot.apiProfiles).toHaveLength(1);
-    expect(snapshot.apiProfiles[0]?.models.length).toBeGreaterThan(1);
+    expect(snapshot.apiProfiles[0]?.baseUrl).toBe("");
+    expect(snapshot.apiProfiles[0]?.models).toHaveLength(1);
     expect(snapshot.assistants).toHaveLength(3);
     expect(snapshot.conversations[0]?.title).toBe("本地上下文机制");
   });
@@ -41,18 +42,22 @@ describe("MobileChat persistence", () => {
         themeMode: "light",
         streamingEnabled: false,
         activeModelRef: {
-          apiProfileId: "mnapi",
-          modelId: "gpt-5.4-mini",
+          apiProfileId: "default-profile",
+          modelId: "default-model",
         },
       },
       apiProfiles: snapshot.apiProfiles.map((profile) =>
-        profile.id === "mnapi"
+        profile.id === "default-profile"
           ? {
               ...profile,
               apiKey: "local-only-key",
               models: profile.models.map((model) =>
-                model.id === "gpt-5.4-mini"
-                  ? { ...model, name: "Mini Persisted" }
+                model.id === "default-model"
+                  ? {
+                      ...model,
+                      name: "Persisted Model",
+                      webSearchEnabled: true,
+                    }
                   : model,
               ),
             }
@@ -71,63 +76,22 @@ describe("MobileChat persistence", () => {
     expect(restored.settings.activeAssistantId).toBe("research");
     expect(restored.settings.themeMode).toBe("light");
     expect(restored.settings.streamingEnabled).toBe(false);
-    expect(restored.settings.activeModelRef.modelId).toBe("gpt-5.4-mini");
+    expect(restored.settings.activeModelRef.modelId).toBe("default-model");
     expect(restored.apiProfiles[0]?.apiKey).toBe("local-only-key");
     expect(
       restored.apiProfiles[0]?.models.find(
-        (model) => model.id === "gpt-5.4-mini",
+        (model) => model.id === "default-model",
       )?.name,
-    ).toBe("Mini Persisted");
+    ).toBe("Persisted Model");
+    expect(
+      restored.apiProfiles[0]?.models.find(
+        (model) => model.id === "default-model",
+      )?.webSearchEnabled,
+    ).toBe(true);
     expect(
       restored.assistants.find((assistant) => assistant.id === "research")
         ?.name,
     ).toBe("持久化研究助手");
-  });
-
-  it("backfills new MNAPI preset models without replacing local credentials", async () => {
-    const snapshot = createInitialSnapshot();
-    const legacySnapshot: LocalDataSnapshot = {
-      ...snapshot,
-      apiProfiles: snapshot.apiProfiles.map((profile) =>
-        profile.id === "mnapi"
-          ? {
-              ...profile,
-              apiKey: "local-only-key",
-              models: profile.models.filter((model) => model.id !== "grok-4.2"),
-            }
-          : profile,
-      ),
-      assistants: snapshot.assistants.map((assistant) =>
-        assistant.id === "research"
-          ? {
-              ...assistant,
-              modelBindings: assistant.modelBindings.filter(
-                (binding) => binding.modelId !== "grok-4.2",
-              ),
-            }
-          : assistant,
-      ),
-    };
-
-    await replaceSnapshot(legacySnapshot);
-    const restored = await loadSnapshot();
-    const restoredMnapi = restored.apiProfiles.find(
-      (profile) => profile.id === "mnapi",
-    );
-    const restoredResearch = restored.assistants.find(
-      (assistant) => assistant.id === "research",
-    );
-
-    expect(restoredMnapi?.apiKey).toBe("local-only-key");
-    expect(
-      restoredMnapi?.models.find((model) => model.id === "grok-4.2")
-        ?.webSearchEnabled,
-    ).toBe(true);
-    expect(
-      restoredResearch?.modelBindings.some(
-        (binding) => binding.modelId === "grok-4.2",
-      ),
-    ).toBe(true);
   });
 
   it("migrates legacy messages with timestamp-like ids into createdAt order", async () => {

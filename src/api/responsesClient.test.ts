@@ -9,10 +9,10 @@ import type {
 import { requestResponsesChat } from "./responsesClient";
 
 const apiProfile: ApiProfile = {
-  id: "mnapi",
-  name: "MNAPI",
+  id: "test-profile",
+  name: "Test Profile",
   description: "",
-  baseUrl: "https://api.mnapi.com/v1",
+  baseUrl: "https://api.example.test/v1",
   apiKey: "test-key",
   protocol: "openai-responses",
   enabled: true,
@@ -38,8 +38,8 @@ const conversation: Conversation = {
 };
 
 const model: ModelDefinition = {
-  id: "gpt-5.4-mini",
-  name: "gpt-5.4-mini",
+  id: "test-model",
+  name: "test-model",
   description: "",
   enabled: true,
   webSearchEnabled: false,
@@ -137,8 +137,8 @@ describe("responsesClient", () => {
       conversation,
       model: {
         ...model,
-        id: "grok-4.2",
-        name: "grok-4.2",
+        id: "web-model",
+        name: "web-model",
         webSearchEnabled: true,
       },
       messages,
@@ -149,7 +149,7 @@ describe("responsesClient", () => {
     expect(
       JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)),
     ).toMatchObject({
-      model: "grok-4.2",
+      model: "web-model",
       tools: [{ type: "web_search" }],
     });
   });

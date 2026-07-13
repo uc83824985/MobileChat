@@ -62,7 +62,7 @@ run.bat
 - 已实现本地 `MobileChatDB` 持久化、credential-free `.mobilechat` 导入/导出、亮色/暗色/跟随系统主题切换。
 - 设置页支持独立编辑 API Profile 与模型列表；模型配置区会展示当前 Profile 的完整模型清单。助手只引用已有模型，并配置允许模型列表与默认模型。
 - 聊天页支持切换当前助手和该助手允许使用的模型。
-- 已内置不含密钥的 MNAPI 预设：`https://api.mnapi.com/v1`、`openai-responses`、`gpt-5.4-codex-high` 等模型 slug。真实 API key 只在本地设置页录入并持久化，不写入仓库。
+- 仓库不内置具体中转站、API key 或模型 slug；首次使用时通过设置页或本机数据库配置连接与模型。
 - 已接入最小 OpenAI-compatible Responses API 请求循环：`POST {baseUrl}/responses`、`store:false`、由本地消息构建上下文。
 - 设置页可切换流式输出；开启后使用 Responses SSE 的 `response.output_text.delta` 增量更新消息。若中转站对 `stream:true` 仍返回普通 JSON，前端会回退为一次性解析。
 - 对话标题可在聊天头部直接编辑，历史搜索仍只匹配标题和摘要；归档对话有独立入口，可搜索、浏览和恢复，恢复前默认只读。

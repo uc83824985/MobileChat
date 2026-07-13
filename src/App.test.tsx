@@ -10,6 +10,22 @@ describe("App", () => {
     await deleteMobileChatDb();
   });
 
+  const configureApiProfile = ({
+    baseUrl = "https://api.example.test/v1",
+    apiKey = "",
+  } = {}) => {
+    fireEvent.click(screen.getByText("设置"));
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: baseUrl },
+    });
+    if (apiKey) {
+      fireEvent.change(screen.getByLabelText("API Key"), {
+        target: { value: apiKey },
+      });
+    }
+    fireEvent.click(screen.getByLabelText("关闭设置"));
+  };
+
   it("renders the mobile chat shell", () => {
     render(<App />);
 
@@ -37,6 +53,7 @@ describe("App", () => {
 
   it("creates a conversation and reports missing API key for the real request loop", async () => {
     render(<App />);
+    configureApiProfile();
 
     fireEvent.click(screen.getByLabelText("新建对话"));
     expect(screen.getAllByText("新对话 4")).toHaveLength(2);
@@ -73,12 +90,7 @@ describe("App", () => {
       ),
     );
     render(<App />);
-
-    fireEvent.click(screen.getByText("设置"));
-    fireEvent.change(screen.getByLabelText("API Key"), {
-      target: { value: "test-key" },
-    });
-    fireEvent.click(screen.getByLabelText("关闭设置"));
+    configureApiProfile({ apiKey: "test-key" });
 
     fireEvent.click(screen.getByLabelText("新建对话"));
     fireEvent.change(screen.getByPlaceholderText("输入消息"), {
@@ -103,12 +115,7 @@ describe("App", () => {
       ),
     );
     render(<App />);
-
-    fireEvent.click(screen.getByText("设置"));
-    fireEvent.change(screen.getByLabelText("API Key"), {
-      target: { value: "test-key" },
-    });
-    fireEvent.click(screen.getByLabelText("关闭设置"));
+    configureApiProfile({ apiKey: "test-key" });
 
     fireEvent.click(screen.getByLabelText("新建对话"));
     fireEvent.change(screen.getByPlaceholderText("输入消息"), {
@@ -153,29 +160,25 @@ describe("App", () => {
     fireEvent.click(screen.getByText("设置"));
 
     expect(
-      screen.getByRole("button", { name: "编辑模型 gpt-5.4-mini" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "编辑模型 grok-4.2" }),
+      screen.getByRole("button", { name: "编辑模型 默认模型" }),
     ).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Base URL"), {
-      target: { value: "https://api.mnapi.com/v1" },
+      target: { value: "https://api.example.test/v1" },
     });
     fireEvent.change(screen.getByLabelText("模型名称"), {
-      target: { value: "MNAPI High" },
+      target: { value: "主模型" },
     });
-    expect(screen.getByLabelText("模型名称")).toHaveValue("MNAPI High");
+    expect(screen.getByLabelText("模型名称")).toHaveValue("主模型");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "编辑模型 gpt-5.4-mini" }),
-    );
-    expect(screen.getByLabelText("模型名称")).toHaveValue("gpt-5.4-mini");
     expect(screen.getByLabelText("启用联网工具")).not.toBeChecked();
-
-    fireEvent.click(screen.getByRole("button", { name: "编辑模型 grok-4.2" }));
-    expect(screen.getByLabelText("模型名称")).toHaveValue("grok-4.2");
+    fireEvent.click(screen.getByLabelText("启用联网工具"));
     expect(screen.getByLabelText("启用联网工具")).toBeChecked();
+
+    fireEvent.click(screen.getByText("新增模型"));
+    expect(screen.getByLabelText("模型名称")).toHaveValue("new-model-2");
+    fireEvent.click(screen.getByText("删除当前模型"));
+    expect(screen.getByLabelText("模型名称")).toHaveValue("主模型");
 
     fireEvent.change(screen.getByLabelText("设置中选择助手"), {
       target: { value: "research" },
@@ -234,6 +237,7 @@ describe("App", () => {
 
   it("retries assistant replies and deletes messages", async () => {
     render(<App />);
+    configureApiProfile();
 
     fireEvent.click(screen.getByLabelText("新建对话"));
     fireEvent.change(screen.getByPlaceholderText("输入消息"), {
