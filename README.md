@@ -57,9 +57,14 @@ run.bat
 .\run.ps1 -Stop
 ```
 
-## 计划中的首个协议
+## 当前实现
 
-首版计划实现一个最小可运行的 OpenAI-compatible Responses API 适配器，并为后续协议保留扩展接口。请求以 `store: false` 的本地状态模式为可靠基线；首版不使用服务端 Response 链、`previous_response_id` 或 provider conversation 作为对话上下文机制。
+- 已实现本地 `MobileChatDB` 持久化、credential-free `.mobilechat` 导入/导出、亮色/暗色/跟随系统主题切换。
+- 设置页支持独立编辑 API Profile 与模型列表；助手只引用已有模型，并配置允许模型列表与默认模型。
+- 聊天页支持切换当前助手和该助手允许使用的模型。
+- 已内置不含密钥的 MNAPI 预设：`https://api.mnapi.com/v1`、`openai-responses`、`gpt-5.4-codex-high` 等模型 slug。真实 API key 只在本地设置页录入并持久化，不写入仓库。
+- 已接入最小 OpenAI-compatible Responses API 请求循环：`POST {baseUrl}/responses`、`store:false`、非流式、由本地消息构建上下文。
+- 静态页直连 API 依赖中转站允许浏览器 CORS；若中转站未开放 CORS，聊天窗口会显示网络/CORS 错误，届时需要另加极薄代理服务。
 
 ## 数据与部署
 

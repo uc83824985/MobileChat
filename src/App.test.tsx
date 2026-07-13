@@ -1,11 +1,12 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "fake-indexeddb/auto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { deleteMobileChatDb } from "./persistence/mobileChatDb";
 
 describe("App", () => {
   beforeEach(async () => {
+    vi.unstubAllGlobals();
     await deleteMobileChatDb();
   });
 
@@ -21,7 +22,7 @@ describe("App", () => {
     expect(screen.getByLabelText("调试诊断")).toBeInTheDocument();
   });
 
-  it("creates a conversation and sends then stops a local placeholder response", () => {
+  it("creates a conversation and reports missing API key for the real request loop", async () => {
     render(<App />);
 
     fireEvent.click(screen.getByLabelText("新建对话"));
@@ -34,13 +35,44 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("发送"));
 
     expect(screen.getByText("测试发送")).toBeInTheDocument();
-    expect(screen.getByText("正在生成模拟回复……")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByLabelText("停止"));
-    expect(screen.getByText("已停止生成。")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/请先在设置页.*API key/),
+    ).toBeInTheDocument();
   });
 
-  it("opens settings without stretching rows across the panel", () => {
+  it("can stop a pending model request after API key is configured", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>(() => {
+            // keep the request pending until the user presses stop
+          }),
+      ),
+    );
+    render(<App />);
+
+    fireEvent.click(screen.getByText("设置"));
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "test-key" },
+    });
+    fireEvent.click(screen.getByLabelText("关闭设置"));
+
+    fireEvent.click(screen.getByLabelText("新建对话"));
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "测试停止" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    expect(screen.getByText("正在请求模型…")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("停止"));
+
+    await waitFor(() =>
+      expect(screen.getByText("已停止生成。")).toBeInTheDocument(),
+    );
+  });
+
+  it("opens settings and toggles theme mode", () => {
     render(<App />);
 
     fireEvent.click(screen.getByText("设置"));
@@ -48,25 +80,33 @@ describe("App", () => {
     expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
     expect(screen.getByText("API Profiles")).toBeInTheDocument();
 
+    fireEvent.change(screen.getByLabelText("主题模式"), {
+      target: { value: "light" },
+    });
+    expect(document.documentElement.dataset.theme).toBe("light");
+
     fireEvent.click(screen.getByLabelText("关闭设置"));
     expect(
       screen.queryByRole("dialog", { name: "设置" }),
     ).not.toBeInTheDocument();
   });
 
-  it("selects and edits assistants through reflected settings fields", () => {
+  it("edits API profiles, models, and assistant model bindings", () => {
     render(<App />);
-
-    fireEvent.change(screen.getByLabelText("选择助手"), {
-      target: { value: "research" },
-    });
-
-    expect(screen.getByLabelText("选择助手")).toHaveValue("research");
 
     fireEvent.click(screen.getByText("设置"));
 
-    expect(screen.getByLabelText("设置中选择助手")).toHaveValue("research");
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://api.mnapi.com/v1" },
+    });
+    fireEvent.change(screen.getByLabelText("模型名称"), {
+      target: { value: "MNAPI High" },
+    });
+    expect(screen.getByLabelText("模型名称")).toHaveValue("MNAPI High");
 
+    fireEvent.change(screen.getByLabelText("设置中选择助手"), {
+      target: { value: "research" },
+    });
     fireEvent.change(screen.getByLabelText("助手名称"), {
       target: { value: "移动助手" },
     });
@@ -74,6 +114,8 @@ describe("App", () => {
       target: { value: "移动端编辑后的 prompt" },
     });
 
+    expect(screen.getByLabelText("选择助手")).toHaveDisplayValue("架构助手");
+    fireEvent.click(screen.getByText("设为当前"));
     expect(screen.getByLabelText("选择助手")).toHaveDisplayValue("移动助手");
     expect(screen.getByLabelText("初始 Prompt")).toHaveValue(
       "移动端编辑后的 prompt",

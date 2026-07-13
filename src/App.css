@@ -110,7 +110,9 @@ button:disabled {
 .conversation-item:hover,
 .assistant-card:hover,
 .directory-header button:hover,
-.assistant-detail header button:hover {
+.assistant-detail header button:hover,
+.api-profile-panel header button:hover,
+.model-editor-header button:hover {
   background: var(--button-hover);
 }
 
@@ -150,7 +152,9 @@ button:disabled {
 .conversation-list {
   display: grid;
   align-content: start;
+  flex: 1 1 auto;
   gap: 8px;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -230,6 +234,14 @@ button:disabled {
   white-space: nowrap;
 }
 
+.chat-pickers {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  min-width: 0;
+}
+
 .assistant-picker {
   align-items: center;
   background: var(--button);
@@ -250,6 +262,10 @@ button:disabled {
   max-width: 140px;
   min-width: 0;
   outline: 0;
+}
+
+.model-picker select {
+  max-width: 180px;
 }
 
 .message-thread {
@@ -388,7 +404,7 @@ button:disabled {
   min-height: 100svh;
   overflow: auto;
   padding: 18px 18px max(18px, env(safe-area-inset-bottom));
-  width: min(460px, 100%);
+  width: min(960px, 100%);
 }
 
 .settings-row {
@@ -403,6 +419,25 @@ button:disabled {
 
 .settings-row.compact {
   min-height: 52px;
+}
+
+.theme-select {
+  gap: 12px;
+}
+
+.theme-select span {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.theme-select select {
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-strong);
+  min-width: 112px;
+  padding: 7px 9px;
 }
 
 .backup-panel {
@@ -476,7 +511,74 @@ button:disabled {
 .settings-summary {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.api-profile-panel {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.api-profile-panel header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.api-profile-panel h3 {
+  font-size: 18px;
+}
+
+.api-profile-panel header button,
+.model-editor-header button {
+  background: var(--button);
+  border-radius: 8px;
+  color: var(--text-strong);
+  flex: 0 0 auto;
+  padding: 8px 10px;
+}
+
+.profile-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+}
+
+.profile-directory,
+.profile-detail {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.profile-directory,
+.profile-detail {
+  align-content: start;
+  display: grid;
+  gap: 12px;
+}
+
+.section-caption {
+  align-items: center;
+  color: var(--text);
+  display: inline-flex;
+  font-weight: 800;
+  gap: 8px;
+}
+
+.model-editor-header {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 12px;
 }
 
 .settings-layout {
@@ -549,6 +651,10 @@ button:disabled {
   width: 100%;
 }
 
+.detail-field span svg {
+  vertical-align: -2px;
+}
+
 .detail-field textarea {
   line-height: 1.45;
   resize: vertical;
@@ -595,6 +701,54 @@ button:disabled {
   gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 14px;
+}
+
+.model-bindings {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+}
+
+.model-bindings header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.binding-list {
+  display: grid;
+  gap: 8px;
+}
+
+.binding-row {
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+}
+
+.binding-row input {
+  accent-color: var(--accent);
+  flex: 0 0 auto;
+  height: 18px;
+  margin-top: 2px;
+  width: 18px;
+}
+
+.binding-row span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.binding-row small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .detail-field:has(textarea),
@@ -695,7 +849,17 @@ button:disabled {
   }
 
   .chat-header {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .chat-pickers {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+
+  .chat-pickers .assistant-picker {
+    flex: 1 1 0;
+    max-width: none;
   }
 
   .assistant-picker {
@@ -704,7 +868,8 @@ button:disabled {
   }
 
   .assistant-picker select {
-    max-width: 86px;
+    max-width: none;
+    width: 100%;
   }
 
   .message {
@@ -726,6 +891,7 @@ button:disabled {
 
   .settings-summary,
   .settings-layout,
+  .profile-layout,
   .reflected-fields,
   .backup-grid {
     grid-template-columns: 1fr;
@@ -754,7 +920,7 @@ button:disabled {
   }
 
   .assistant-picker select {
-    max-width: 92px;
+    max-width: none;
   }
 
   .message-thread {

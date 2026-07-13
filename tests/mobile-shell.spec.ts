@@ -1,18 +1,40 @@
 import { expect, test } from "@playwright/test";
 
+const resetDb = async (page: import("@playwright/test").Page) => {
+  await page.goto("/");
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const request = indexedDB.deleteDatabase("MobileChatDB");
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+        request.onblocked = () => resolve();
+      }),
+  );
+  await page.reload();
+};
+
 const openSettings = async (page: import("@playwright/test").Page) => {
   const drawerButton = page.getByLabel("打开对话列表");
   if (await drawerButton.isVisible()) {
     await drawerButton.click();
+    await expect(page.locator(".conversation-rail")).toHaveClass(/open/);
   }
-  await page.getByText("设置").click();
+  await page
+    .getByRole("button", { name: "设置", exact: true })
+    .evaluate((element: HTMLElement) => element.click());
 };
 
-test("opens the mobile chat shell", async ({ page }) => {
-  await page.goto("/");
+test.beforeEach(async ({ page }) => {
+  await resetDb(page);
+});
 
+test("opens the mobile chat shell", async ({ page }) => {
   await expect(page.getByRole("region", { name: "当前对话" })).toBeVisible();
   await expect(page.getByText("Context diagnostics")).toBeVisible();
+  await expect(page.getByLabel("选择助手")).toBeVisible();
+  await expect(page.getByLabel("选择模型")).toBeVisible();
+
   if (await page.getByLabel("打开对话列表").isVisible()) {
     await page.getByLabel("打开对话列表").click();
   }
@@ -21,9 +43,9 @@ test("opens the mobile chat shell", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("supports basic mobile interactions", async ({ page }, testInfo) => {
-  await page.goto("/");
-
+test("supports basic mobile interactions and model switching", async ({
+  page,
+}) => {
   if (await page.getByLabel("打开对话列表").isVisible()) {
     await page.getByLabel("打开对话列表").click();
   }
@@ -32,32 +54,41 @@ test("supports basic mobile interactions", async ({ page }, testInfo) => {
 
   await page.getByLabel("选择助手").selectOption("research");
   await expect(page.getByLabel("选择助手")).toHaveValue("research");
+  await expect(page.getByLabel("选择模型")).toHaveValue("mnapi::gpt-5.4-mini");
+
+  await page.getByLabel("选择模型").selectOption("mnapi::gpt-5.4");
+  await expect(page.getByLabel("选择模型")).toHaveValue("mnapi::gpt-5.4");
 
   await page.getByPlaceholder("输入消息").fill("测试移动端发送");
   await page.getByLabel("发送").click();
   await expect(page.getByText("测试移动端发送", { exact: true })).toBeVisible();
-  await expect(page.getByText("正在生成模拟回复……")).toBeVisible();
-
-  await page.getByLabel("停止").click();
-  await expect(page.getByText("已停止生成。")).toBeVisible();
+  await expect(page.getByText(/请先在设置页.*API key/)).toBeVisible();
 
   await openSettings(page);
   await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
   await expect(page.getByText("API Profiles")).toBeVisible();
   await expect(page.getByLabel("设置中选择助手")).toHaveValue("research");
 
+  await page.getByLabel("主题模式").selectOption("light");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+  await page.getByLabel("助手名称").fill("手机研究助手");
+  await page.getByLabel("初始 Prompt").fill("手机端可编辑当前助手 prompt。");
+  await page.getByLabel("模型名称").fill("MNAPI Mini");
+  await expect(page.getByLabel("助手名称")).toHaveValue("手机研究助手");
+  await expect(page.getByLabel("初始 Prompt")).toHaveValue(
+    "手机端可编辑当前助手 prompt。",
+  );
+  await expect(page.getByLabel("模型名称")).toHaveValue("MNAPI Mini");
+});
+
+test("keeps settings rows compact on mobile", async ({ page }, testInfo) => {
+  await openSettings(page);
   const settingsRow = page.getByText("API Profiles").locator("..");
   const rowBox = await settingsRow.boundingBox();
   if (testInfo.project.name === "Mobile Chrome") {
     expect(rowBox?.height).toBeLessThan(90);
   }
-
-  await page.getByLabel("助手名称").fill("手机研究助手");
-  await page.getByLabel("初始 Prompt").fill("手机端可编辑当前助手 prompt。");
-  await expect(page.getByLabel("助手名称")).toHaveValue("手机研究助手");
-  await expect(page.getByLabel("初始 Prompt")).toHaveValue(
-    "手机端可编辑当前助手 prompt。",
-  );
 });
 
 test("verifies persistence and .mobilechat import/export on desktop", async ({
@@ -68,15 +99,20 @@ test("verifies persistence and .mobilechat import/export on desktop", async ({
     "PC persistence verification runs on the desktop project.",
   );
 
-  await page.goto("/");
   await openSettings(page);
 
+  await page.getByLabel("主题模式").selectOption("light");
+  await page.getByLabel("API Key").fill("desktop-local-key");
+  await page.getByLabel("模型名称").fill("PC MNAPI High");
   await page.getByLabel("助手名称").fill("PC 持久化助手");
   await page.getByLabel("初始 Prompt").fill("PC 端验证持久化 prompt。");
   await expect(page.getByText("已保存")).toBeVisible({ timeout: 6000 });
 
   await page.reload();
   await openSettings(page);
+  await expect(page.getByLabel("主题模式")).toHaveValue("light");
+  await expect(page.getByLabel("API Key")).toHaveValue("desktop-local-key");
+  await expect(page.getByLabel("模型名称")).toHaveValue("PC MNAPI High");
   await expect(page.getByLabel("助手名称")).toHaveValue("PC 持久化助手");
   await expect(page.getByLabel("初始 Prompt")).toHaveValue(
     "PC 端验证持久化 prompt。",
@@ -93,6 +129,7 @@ test("verifies persistence and .mobilechat import/export on desktop", async ({
 
   await page.getByLabel("导入 mobilechat 文件").setInputFiles(downloadPath!);
   await expect(page.getByLabel("助手名称")).toHaveValue("PC 持久化助手");
+  await expect(page.getByLabel("API Key")).toHaveValue("");
   await expect(
     page.getByText("已导入 .mobilechat 并替换本地数据"),
   ).toBeVisible();

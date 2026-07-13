@@ -1,9 +1,6 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
-import {
-  createInitialSettings,
-  DATABASE_SCHEMA_VERSION,
-  type LocalDataSnapshot,
-} from "../domain";
+import { DATABASE_SCHEMA_VERSION, type LocalDataSnapshot } from "../domain";
+import { normalizeSnapshot } from "./mobileChatDb";
 
 const ARCHIVE_FORMAT = "mobilechat";
 const ARCHIVE_VERSION = 1;
@@ -91,20 +88,19 @@ const assertSafeEntries = (entries: Record<string, Uint8Array>) => {
   }
 };
 
-const sanitizeSnapshot = (snapshot: LocalDataSnapshot): LocalDataSnapshot => {
-  const settings = {
-    ...createInitialSettings(),
-    ...snapshot.settings,
-    id: "app" as const,
-    schemaVersion: 1 as const,
-    updatedAt: snapshot.settings.updatedAt ?? new Date().toISOString(),
-  };
+const sanitizeSnapshot = (
+  snapshot: LocalDataSnapshot,
+  options: ArchiveOptions,
+): LocalDataSnapshot => {
+  const normalized = normalizeSnapshot(snapshot);
 
   return {
-    settings,
-    assistants: snapshot.assistants ?? [],
-    conversations: snapshot.conversations ?? [],
-    messages: snapshot.messages ?? [],
+    ...normalized,
+    apiProfiles: normalized.apiProfiles.map((profile) => ({
+      ...profile,
+      apiKey: options.includeCredentials ? profile.apiKey : "",
+      models: profile.models.map((model) => ({ ...model })),
+    })),
   };
 };
 
@@ -124,7 +120,7 @@ export const createMobileChatArchive = async (
       includeBlobs: Boolean(options.includeBlobs),
     },
   };
-  const records = sanitizeSnapshot(snapshot);
+  const records = sanitizeSnapshot(snapshot, options);
   const entries: Record<string, Uint8Array> = {
     "manifest.json": toSortedJsonBytes(manifest),
     "records.json": toSortedJsonBytes(records),
@@ -179,7 +175,10 @@ export const readMobileChatArchive = async (
   }
 
   const records = parseJson<LocalDataSnapshot>(recordsEntry, "records.json");
-  return sanitizeSnapshot(records);
+  return sanitizeSnapshot(records, {
+    includeCredentials: manifest.options.includeCredentials,
+    includeBlobs: manifest.options.includeBlobs,
+  });
 };
 
 export const estimateArchiveSizeText = async (

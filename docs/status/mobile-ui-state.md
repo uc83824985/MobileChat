@@ -4,55 +4,70 @@ Date: 2026-07-13
 
 ## Current verified state
 
-- The first mobile/desktop shell is usable as a local interaction prototype.
-- Conversation creation, conversation selection, title/summary search, archive action, draft input, local placeholder send, stop generation, debug panel toggle, and settings open/close have been tested.
-- The page is still a local React state prototype. It does not yet persist data to IndexedDB and does not call a real model endpoint.
+- The mobile/desktop shell is usable with persisted local state.
+- Conversation creation, conversation selection, title/summary search, archive action, draft input, send, stop, debug panel toggle, settings open/close, theme switch, assistant switch, and model switch are covered by Playwright.
+- Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, backup, and theme controls.
+- The app has a minimal OpenAI-compatible Responses request loop. Without an API key it shows a local configuration error; with an API key it sends `POST {baseUrl}/responses` using `store:false`.
+- Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
 
-## Feedback recorded
+## Implemented response to mobile feedback
 
-- Assistant selection must use an explicit dropdown. Cycling through assistants with a button is not usable enough on mobile.
-- The settings page must not remain a placeholder. It must show the currently selected assistant and allow editing its configuration.
-- Assistant configuration UI should behave like a UE-style reflected details panel: render fields from a schema/object shape rather than hard-code one specific assistant.
-- The app should support editing arbitrary assistant objects, including newly added assistant objects, through the same details panel.
+- Assistant selection uses a native `<select>` in the chat header.
+- Model selection is a second native `<select>` and is limited to the currently selected assistant's allowed model bindings.
+- The settings panel is full-screen on small screens and a wide details panel on desktop.
+- The conversation drawer keeps the bottom archive/settings actions visible while the conversation list scrolls.
+- The assistant details panel is schema-rendered from `assistantFields`, so newly added assistants use the same reflected editor instead of a special hard-coded page.
 
-## Implemented response
+## API Profile and model configuration
 
-- The chat header now uses a native assistant `<select>` so mobile browsers can use their own picker UI.
-- Assistants are represented as editable objects with `name`, `description`, `kind`, `apiProfileName`, `model`, `prompt`, `initialMessage`, and `enabled`.
-- Settings now includes an assistant selector, an add-assistant action, and a schema-rendered details panel for the selected assistant.
-- Editing the active assistant updates the chat header and future local placeholder assistant message attribution immediately.
+- `apiProfiles` are stored independently in `MobileChatDB`.
+- Each API Profile owns:
+  - display name and description;
+  - `baseUrl`;
+  - local `apiKey`;
+  - protocol, currently `openai-responses`;
+  - editable model definitions.
+- Each model owns:
+  - model ID / slug;
+  - display name;
+  - description;
+  - optional context window;
+  - enabled flag.
+- Assistants no longer own raw `apiProfileName` / `model` fields as the active configuration path. They own model bindings that reference existing API Profile + model records, with snapshots of key display fields for provenance.
+- Legacy assistant records containing `apiProfileName` / `model` are migrated into model bindings on load/import.
 
-## Mobile feasibility
+## MNAPI preset
 
-The operation is feasible on mobile with the current UI pattern:
+- The repo seeds a credential-free MNAPI profile:
+  - `baseUrl`: `https://api.mnapi.com/v1`
+  - protocol: `openai-responses`
+  - default preset model: `gpt-5.4-codex-high`
+- Preset model slugs include high/medium/low Codex variants plus generic `gpt-5.4` and `gpt-5.4-mini`.
+- No API key from the local launcher is committed. The key must be entered in the settings page and remains in the browser's IndexedDB unless the user exports with credentials in a future explicit flow.
 
-- native select for assistant selection;
-- full-screen settings panel on small screens;
-- editable text inputs and textareas for assistant details;
-- schema-rendered fields so new assistant fields can be added without creating a special page per assistant.
+## Persistence and import/export
 
-Current verification covers this with a Pixel-class Playwright viewport. Real-device testing should still be repeated after IndexedDB persistence and real API configuration are added.
+- `MobileChatDB` stores settings, API profiles, assistants, conversations, messages, and reserved stores for drafts/checkpoints/blobs.
+- UI edits update memory immediately and are autosaved after a short debounce. Settings close and page visibility changes flush the latest snapshot.
+- The current implementation persists normalized full snapshots. This is acceptable for the current small prototype; future large histories should move to dirty-record writes as specified in the architecture document.
+- `.mobilechat` archives contain `manifest.json`, `records.json`, and `checksums.json`.
+- The current export path is credential-free: API Profile metadata and model definitions are exported, but `apiKey` is cleared.
+- Desktop Playwright verifies edit → autosave → reload → export → local mutation → import → restored records with API key removed.
+
+## Verification
+
+- `npm run lint`
+- `npm run test`
+- `npm run build`
+- `npm run test:browser`
+
+Current automated coverage includes Desktop Chrome and Pixel-class Mobile Chrome projects.
 
 ## Remaining limitations
 
-- IndexedDB persistence now exists for the current prototype state, including settings, assistants, conversations, and messages. Full API profile/model/checkpoint semantics are still pending.
-- No real API profile/model CRUD yet.
-- No credential handling or endpoint validation yet.
-- Chat assistant vs. utility assistant enforcement is not complete in the prototype UI.
-- Assistant snapshots are not yet copied onto persisted messages because full message provenance persistence is not implemented.
-
-## Persistence decision
-
-- Configuration persistence, conversations, messages, checkpoints, drafts, and future blobs will use one versioned IndexedDB database: `MobileChatDB`.
-- UI edits should update in-memory state immediately and persist asynchronously in the background.
-- Text fields should debounce saves and flush on blur, settings close, send, and page visibility changes.
-- Import/export must be designed together with persistence: `.mobilechat` archives export and import the same versioned record DTOs used by `MobileChatDB`, rather than copying browser database files.
-
-## Implemented persistence slice
-
-- `MobileChatDB` is created as a versioned IndexedDB database with stores for metadata, settings, API profiles, assistants, conversations, messages, drafts, context checkpoints, and blobs.
-- Current prototype records persist across reloads on the same browser origin.
-- Settings show local save state, storage mode, estimated usage/quota, estimated archive size, and last successful export time.
-- The app can export a credential-free `.mobilechat` ZIP-compatible archive containing `manifest.json`, `records.json`, and `checksums.json`.
-- The app can import a `.mobilechat` archive and replace current local prototype data after archive validation.
-- Desktop Chrome Playwright verification covers edit → autosave → reload restore → export → mutate → import replace → restore.
+- No streaming response rendering yet; the first request loop is non-streaming.
+- No endpoint validation button yet.
+- No model discovery (`GET /models`) UI yet; model list is manually edited.
+- No real context compression/checkpoint execution yet.
+- No credential-including export flow yet; current export deliberately removes API keys.
+- No CORS workaround exists in the static deployment. If MNAPI rejects browser origins, a proxy route is required.

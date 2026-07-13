@@ -1,4 +1,5 @@
-:root {
+:root,
+:root[data-theme="light"] {
   --accent: #2f7d66;
   --assistant-message: #fffdfa;
   --button: #ecebe3;
@@ -54,8 +55,27 @@ textarea:focus-visible {
   outline-offset: 2px;
 }
 
+:root[data-theme="dark"] {
+  --accent: #58b999;
+  --assistant-message: #1f2225;
+  --button: #2d3034;
+  --button-hover: #3a3e43;
+  --diagnostics: #1b1d20;
+  --field: #17191c;
+  --line: #383c41;
+  --panel: #202326;
+  --selected: #243d35;
+  --surface: #151719;
+  --text: #d1d4d8;
+  --text-muted: #969ba3;
+  --text-strong: #f4f6f8;
+  --user-message: #182c41;
+  --shadow: 0 18px 40px rgba(0, 0, 0, 0.42);
+  --shadow-soft: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --accent: #58b999;
     --assistant-message: #1f2225;
     --button: #2d3034;

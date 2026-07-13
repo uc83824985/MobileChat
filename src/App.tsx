@@ -1,12 +1,16 @@
 import {
   Archive,
   Bot,
+  Database,
   Download,
+  KeyRound,
   MessageSquarePlus,
+  Palette,
   PanelLeft,
   Plus,
   Search,
   Send,
+  Server,
   Settings,
   SlidersHorizontal,
   StopCircle,
@@ -21,21 +25,29 @@ import {
   useRef,
   useState,
 } from "react";
+import { requestResponsesChat } from "./api/responsesClient";
 import "./App.css";
 import {
-  type AppSettings,
+  type ApiProfile,
   type Assistant,
   type AssistantFieldKey,
+  type AssistantModelBinding,
   assistantFields,
   type Conversation,
   createId,
   createInitialSnapshot,
+  DEFAULT_MODEL_REF,
   defaultAssistant,
-  diagnostics,
   type LocalDataSnapshot,
   type Message,
+  type ModelDefinition,
+  type ModelRef,
+  modelRefKey,
+  parseModelRefKey,
+  type ResponseUsage,
   type SaveStatus,
   type StorageInfo,
+  type ThemeMode,
 } from "./domain";
 import {
   createArchiveDownloadName,
@@ -52,11 +64,165 @@ import {
 } from "./persistence/mobileChatDb";
 
 type PwaNotice = "offline-ready" | "update-available" | null;
+type ResolvedModel = {
+  apiProfile: ApiProfile;
+  model: ModelDefinition;
+  ref: ModelRef;
+  key: string;
+};
 
 const bootSnapshot = createInitialSnapshot();
 const AUTOSAVE_DELAY_MS = 400;
 
+const themeLabels: Record<ThemeMode, string> = {
+  system: "跟随系统",
+  light: "亮色",
+  dark: "暗色",
+};
+
+const saveStatusLabels: Record<SaveStatus, string> = {
+  loading: "加载中",
+  unsaved: "未保存",
+  saving: "保存中",
+  saved: "已保存",
+  failed: "保存失败",
+};
+
+const cloneModelRef = (ref: ModelRef): ModelRef => ({
+  apiProfileId: ref.apiProfileId,
+  modelId: ref.modelId,
+});
+
+const resolveModel = (
+  apiProfiles: ApiProfile[],
+  ref: ModelRef,
+): ResolvedModel | undefined => {
+  const apiProfile = apiProfiles.find(
+    (profile) => profile.id === ref.apiProfileId,
+  );
+  const model = apiProfile?.models.find(
+    (candidate) => candidate.id === ref.modelId,
+  );
+
+  if (!apiProfile || !model) {
+    return undefined;
+  }
+
+  return {
+    apiProfile,
+    model,
+    ref: cloneModelRef(ref),
+    key: modelRefKey(ref),
+  };
+};
+
+const listAllModels = (apiProfiles: ApiProfile[]) =>
+  apiProfiles.flatMap((apiProfile) =>
+    apiProfile.models.map((model) => ({
+      apiProfile,
+      model,
+      ref: { apiProfileId: apiProfile.id, modelId: model.id },
+      key: modelRefKey({ apiProfileId: apiProfile.id, modelId: model.id }),
+    })),
+  );
+
+const createBinding = (
+  apiProfile: ApiProfile,
+  model: ModelDefinition,
+  isDefault: boolean,
+): AssistantModelBinding => ({
+  apiProfileId: apiProfile.id,
+  modelId: model.id,
+  enabled: true,
+  isDefault,
+  apiProfileNameSnapshot: apiProfile.name,
+  modelNameSnapshot: model.name,
+  modelDescriptionSnapshot: model.description,
+});
+
+const listAssistantModels = (
+  assistant: Assistant,
+  apiProfiles: ApiProfile[],
+): ResolvedModel[] =>
+  assistant.modelBindings
+    .filter((binding) => binding.enabled)
+    .map((binding) => resolveModel(apiProfiles, binding))
+    .filter((model): model is ResolvedModel => Boolean(model))
+    .filter(({ apiProfile, model }) => apiProfile.enabled && model.enabled);
+
+const chooseModelForAssistant = (
+  assistant: Assistant,
+  currentRef: ModelRef,
+  apiProfiles: ApiProfile[],
+): ModelRef => {
+  const available = listAssistantModels(assistant, apiProfiles);
+
+  if (available.some((option) => option.key === modelRefKey(currentRef))) {
+    return currentRef;
+  }
+
+  const defaultBinding = assistant.modelBindings.find(
+    (binding) => binding.enabled && binding.isDefault,
+  );
+  if (defaultBinding) {
+    const resolvedDefault = resolveModel(apiProfiles, defaultBinding);
+    if (resolvedDefault?.apiProfile.enabled && resolvedDefault.model.enabled) {
+      return resolvedDefault.ref;
+    }
+  }
+
+  return available[0]?.ref ?? DEFAULT_MODEL_REF;
+};
+
+const estimateTokenCount = (messages: Message[], draft = "") => {
+  const textLength =
+    messages.reduce((sum, message) => sum + message.text.length, 0) +
+    draft.length;
+  return Math.max(1, Math.ceil(textLength / 2));
+};
+
+const formatUsage = (usage?: ResponseUsage) => {
+  if (!usage?.inputTokens) {
+    return "unknown";
+  }
+
+  const cached = usage.cachedInputTokens ?? 0;
+  return `${cached} / ${usage.inputTokens} tokens`;
+};
+
+const formatStorageUsage = (storageInfo: StorageInfo) => {
+  if (
+    typeof storageInfo.usage !== "number" ||
+    typeof storageInfo.quota !== "number"
+  ) {
+    return "unknown";
+  }
+
+  return `${(storageInfo.usage / 1024).toFixed(1)} KB / ${(
+    storageInfo.quota /
+    1024 /
+    1024
+  ).toFixed(1)} MB`;
+};
+
+const createSourceSnapshot = (
+  assistant: Assistant,
+  resolvedModel: ResolvedModel,
+) => ({
+  assistantId: assistant.id,
+  assistantName: assistant.name,
+  assistantDescription: assistant.description,
+  apiProfileId: resolvedModel.apiProfile.id,
+  apiProfileName: resolvedModel.apiProfile.name,
+  modelId: resolvedModel.model.id,
+  modelName: resolvedModel.model.name,
+  modelDescription: resolvedModel.model.description,
+});
+
 function App() {
+  const [apiProfiles, setApiProfiles] = useState<ApiProfile[]>(
+    bootSnapshot.apiProfiles,
+  );
   const [conversations, setConversations] = useState<Conversation[]>(
     bootSnapshot.conversations,
   );
@@ -70,8 +236,20 @@ function App() {
   const [activeAssistantId, setActiveAssistantId] = useState(
     bootSnapshot.settings.activeAssistantId,
   );
+  const [activeModelRef, setActiveModelRef] = useState<ModelRef>(
+    bootSnapshot.settings.activeModelRef,
+  );
   const [editingAssistantId, setEditingAssistantId] = useState(
     bootSnapshot.settings.editingAssistantId,
+  );
+  const [editingApiProfileId, setEditingApiProfileId] = useState(
+    bootSnapshot.apiProfiles[0]?.id ?? DEFAULT_MODEL_REF.apiProfileId,
+  );
+  const [editingModelId, setEditingModelId] = useState(
+    bootSnapshot.apiProfiles[0]?.models[0]?.id ?? DEFAULT_MODEL_REF.modelId,
+  );
+  const [themeMode, setThemeMode] = useState<ThemeMode>(
+    bootSnapshot.settings.themeMode,
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -94,8 +272,11 @@ function App() {
   });
   const [archiveSizeText, setArchiveSizeText] = useState("估算中");
   const [backupMessage, setBackupMessage] = useState("");
+  const [lastObservedUsage, setLastObservedUsage] = useState<
+    ResponseUsage | undefined
+  >();
   const [pwaNotice, setPwaNotice] = useState<PwaNotice>(null);
-  const responseTimerRef = useRef<number | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const latestSnapshotRef = useRef<LocalDataSnapshot>(bootSnapshot);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -113,6 +294,18 @@ function App() {
       activeAssistant,
     [activeAssistant, editingAssistantId, assistants],
   );
+  const editingApiProfile = useMemo(
+    () =>
+      apiProfiles.find((profile) => profile.id === editingApiProfileId) ??
+      apiProfiles[0],
+    [apiProfiles, editingApiProfileId],
+  );
+  const editingModel = useMemo(
+    () =>
+      editingApiProfile?.models.find((model) => model.id === editingModelId) ??
+      editingApiProfile?.models[0],
+    [editingApiProfile, editingModelId],
+  );
   const activeConversation = useMemo(
     () =>
       conversations.find(
@@ -126,6 +319,18 @@ function App() {
         (message) => message.conversationId === activeConversation?.id,
       ),
     [activeConversation?.id, messages],
+  );
+  const activeResolvedModel = useMemo(
+    () => resolveModel(apiProfiles, activeModelRef),
+    [activeModelRef, apiProfiles],
+  );
+  const assistantModelOptions = useMemo(
+    () => listAssistantModels(activeAssistant, apiProfiles),
+    [activeAssistant, apiProfiles],
+  );
+  const allModelOptions = useMemo(
+    () => listAllModels(apiProfiles),
+    [apiProfiles],
   );
   const visibleConversations = useMemo(() => {
     const keyword = conversationSearch.trim().toLocaleLowerCase();
@@ -150,12 +355,30 @@ function App() {
   const utilityAssistantCount = assistants.filter(
     (assistant) => assistant.kind === "utility",
   ).length;
-  const appSettings = useMemo<AppSettings>(
+  const diagnostics = useMemo(
+    () => [
+      ["输入估算", `${estimateTokenCount(activeMessages, draft)} tokens`],
+      [
+        "可缓存前缀估算",
+        activeMessages.length > 2
+          ? "high"
+          : activeMessages.length > 0
+            ? "low"
+            : "0%",
+      ],
+      ["发送前预算", activeResolvedModel?.model.name ?? "未选择模型"],
+      ["发送后 usage", formatUsage(lastObservedUsage)],
+    ],
+    [activeMessages, activeResolvedModel?.model.name, draft, lastObservedUsage],
+  );
+  const appSettings = useMemo(
     () => ({
       ...bootSnapshot.settings,
       activeConversationId,
       activeAssistantId,
+      activeModelRef,
       editingAssistantId,
+      themeMode,
       debugEnabled,
       lastSuccessfulExportAt,
       storagePersisted: storageInfo.persisted,
@@ -165,31 +388,43 @@ function App() {
     [
       activeAssistantId,
       activeConversationId,
+      activeModelRef,
       debugEnabled,
       editingAssistantId,
       lastSuccessfulExportAt,
       storageInfo.persisted,
       storageInfo.quota,
       storageInfo.usage,
+      themeMode,
     ],
   );
   const currentSnapshot = useMemo<LocalDataSnapshot>(
     () => ({
       settings: appSettings,
+      apiProfiles,
       assistants,
       conversations,
       messages,
     }),
-    [appSettings, assistants, conversations, messages],
+    [apiProfiles, appSettings, assistants, conversations, messages],
   );
 
   const applySnapshot = useCallback((snapshot: LocalDataSnapshot) => {
+    setApiProfiles(snapshot.apiProfiles);
     setAssistants(snapshot.assistants);
     setConversations(snapshot.conversations);
     setMessages(snapshot.messages);
     setActiveConversationId(snapshot.settings.activeConversationId);
     setActiveAssistantId(snapshot.settings.activeAssistantId);
+    setActiveModelRef(snapshot.settings.activeModelRef);
     setEditingAssistantId(snapshot.settings.editingAssistantId);
+    setEditingApiProfileId(
+      snapshot.apiProfiles[0]?.id ?? DEFAULT_MODEL_REF.apiProfileId,
+    );
+    setEditingModelId(
+      snapshot.apiProfiles[0]?.models[0]?.id ?? DEFAULT_MODEL_REF.modelId,
+    );
+    setThemeMode(snapshot.settings.themeMode);
     setDebugEnabled(snapshot.settings.debugEnabled);
     setLastSuccessfulExportAt(snapshot.settings.lastSuccessfulExportAt);
     setStorageInfo({
@@ -216,6 +451,18 @@ function App() {
     },
     [],
   );
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (themeMode === "system") {
+      root.removeAttribute("data-theme");
+      root.style.colorScheme = "light dark";
+      return;
+    }
+
+    root.dataset.theme = themeMode;
+    root.style.colorScheme = themeMode;
+  }, [themeMode]);
 
   useEffect(() => {
     const showOfflineReady = () => setPwaNotice("offline-ready");
@@ -304,6 +551,24 @@ function App() {
   }, [currentSnapshot, hydrated, saveCurrentSnapshot]);
 
   useEffect(() => {
+    const selectedRef = chooseModelForAssistant(
+      activeAssistant,
+      activeModelRef,
+      apiProfiles,
+    );
+    if (modelRefKey(selectedRef) !== modelRefKey(activeModelRef)) {
+      setActiveModelRef(selectedRef);
+    }
+  }, [activeAssistant, activeModelRef, apiProfiles]);
+
+  useEffect(() => {
+    if (!editingApiProfile && apiProfiles[0]) {
+      setEditingApiProfileId(apiProfiles[0].id);
+      setEditingModelId(apiProfiles[0].models[0]?.id ?? "");
+    }
+  }, [apiProfiles, editingApiProfile]);
+
+  useEffect(() => {
     const flushOnVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
         void saveCurrentSnapshot();
@@ -341,14 +606,44 @@ function App() {
 
   useEffect(() => {
     return () => {
-      if (responseTimerRef.current) {
-        window.clearTimeout(responseTimerRef.current);
-      }
+      abortControllerRef.current?.abort();
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current);
       }
     };
   }, []);
+
+  const stopResponse = useCallback(
+    (replacementText = "已停止生成。") => {
+      if (!pendingMessageId) {
+        return;
+      }
+
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === pendingMessageId
+            ? { ...message, status: "stopped", text: replacementText }
+            : message,
+        ),
+      );
+      setPendingMessageId(null);
+    },
+    [pendingMessageId],
+  );
+
+  const activateAssistant = (assistantId: string) => {
+    const nextAssistant =
+      assistants.find((assistant) => assistant.id === assistantId) ??
+      activeAssistant;
+    setActiveAssistantId(nextAssistant.id);
+    setEditingAssistantId(nextAssistant.id);
+    setActiveModelRef(
+      chooseModelForAssistant(nextAssistant, activeModelRef, apiProfiles),
+    );
+  };
 
   const createConversation = () => {
     const nextIndex = conversations.length + 1;
@@ -475,21 +770,26 @@ function App() {
   };
 
   const createAssistant = () => {
-    const nextAssistant: Assistant = {
+    const baseModel = activeResolvedModel ?? allModelOptions[0];
+    const newAssistant: Assistant = {
       id: createId("assistant"),
       name: `新助手 ${assistants.length + 1}`,
       description: "通过详情面板编辑这个助手。",
       kind: "chat",
-      apiProfileName: activeAssistant.apiProfileName,
-      model: activeAssistant.model,
+      modelBindings: baseModel
+        ? [createBinding(baseModel.apiProfile, baseModel.model, true)]
+        : [],
       prompt: "",
       initialMessage: "",
       enabled: true,
     };
 
-    setAssistants((current) => [...current, nextAssistant]);
-    setActiveAssistantId(nextAssistant.id);
-    setEditingAssistantId(nextAssistant.id);
+    setAssistants((current) => [...current, newAssistant]);
+    setActiveAssistantId(newAssistant.id);
+    setEditingAssistantId(newAssistant.id);
+    if (baseModel) {
+      setActiveModelRef(baseModel.ref);
+    }
   };
 
   const updateAssistantField = (
@@ -506,33 +806,256 @@ function App() {
     );
   };
 
-  const stopResponse = (replacementText = "已停止生成。") => {
-    if (!pendingMessageId) {
+  const createApiProfile = () => {
+    const newProfile: ApiProfile = {
+      id: createId("api-profile"),
+      name: `API Profile ${apiProfiles.length + 1}`,
+      description: "OpenAI-compatible Responses API 配置",
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "",
+      protocol: "openai-responses",
+      enabled: true,
+      models: [
+        {
+          id: "gpt-5.4",
+          name: "gpt-5.4",
+          description: "新建模型预设",
+          contextWindow: 128000,
+          enabled: true,
+        },
+      ],
+    };
+
+    setApiProfiles((current) => [...current, newProfile]);
+    setEditingApiProfileId(newProfile.id);
+    setEditingModelId(newProfile.models[0]?.id ?? "");
+  };
+
+  const updateApiProfileField = (
+    profileId: string,
+    key: keyof Pick<
+      ApiProfile,
+      "name" | "description" | "baseUrl" | "apiKey" | "enabled"
+    >,
+    value: string | boolean,
+  ) => {
+    setApiProfiles((current) =>
+      current.map((profile) =>
+        profile.id === profileId ? { ...profile, [key]: value } : profile,
+      ),
+    );
+
+    if (key === "name") {
+      setAssistants((current) =>
+        current.map((assistant) => ({
+          ...assistant,
+          modelBindings: assistant.modelBindings.map((binding) =>
+            binding.apiProfileId === profileId
+              ? { ...binding, apiProfileNameSnapshot: String(value) }
+              : binding,
+          ),
+        })),
+      );
+    }
+  };
+
+  const createModel = (profileId: string) => {
+    const profile = apiProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) {
       return;
     }
 
-    if (responseTimerRef.current) {
-      window.clearTimeout(responseTimerRef.current);
-      responseTimerRef.current = null;
-    }
-
-    setMessages((current) =>
-      current.map((message) =>
-        message.id === pendingMessageId
-          ? { ...message, status: "stopped", text: replacementText }
-          : message,
+    const modelId = `new-model-${profile.models.length + 1}`;
+    setApiProfiles((current) =>
+      current.map((candidate) =>
+        candidate.id === profileId
+          ? {
+              ...candidate,
+              models: [
+                ...candidate.models,
+                {
+                  id: modelId,
+                  name: modelId,
+                  description: "通过模型详情面板编辑这个模型。",
+                  contextWindow: 128000,
+                  enabled: true,
+                },
+              ],
+            }
+          : candidate,
       ),
     );
-    setPendingMessageId(null);
+    setEditingModelId(modelId);
   };
 
-  const sendMessage = () => {
+  const updateModelField = (
+    profileId: string,
+    modelId: string,
+    key: keyof Pick<
+      ModelDefinition,
+      "id" | "name" | "description" | "contextWindow" | "enabled"
+    >,
+    value: string | number | boolean,
+  ) => {
+    const nextModelId =
+      key === "id" && typeof value === "string" && value.trim()
+        ? value.trim()
+        : modelId;
+
+    setApiProfiles((current) =>
+      current.map((profile) =>
+        profile.id === profileId
+          ? {
+              ...profile,
+              models: profile.models.map((model) =>
+                model.id === modelId
+                  ? {
+                      ...model,
+                      [key]:
+                        key === "contextWindow"
+                          ? Number(value) || undefined
+                          : key === "id"
+                            ? nextModelId
+                            : value,
+                    }
+                  : model,
+              ),
+            }
+          : profile,
+      ),
+    );
+
+    setAssistants((current) =>
+      current.map((assistant) => ({
+        ...assistant,
+        modelBindings: assistant.modelBindings.map((binding) => {
+          if (
+            binding.apiProfileId !== profileId ||
+            binding.modelId !== modelId
+          ) {
+            return binding;
+          }
+
+          return {
+            ...binding,
+            modelId: nextModelId,
+            modelNameSnapshot:
+              key === "name" ? String(value) : binding.modelNameSnapshot,
+            modelDescriptionSnapshot:
+              key === "description"
+                ? String(value)
+                : binding.modelDescriptionSnapshot,
+          };
+        }),
+      })),
+    );
+
+    if (key === "id" && nextModelId !== modelId) {
+      setEditingModelId(nextModelId);
+      setActiveModelRef((current) =>
+        current.apiProfileId === profileId && current.modelId === modelId
+          ? { ...current, modelId: nextModelId }
+          : current,
+      );
+    }
+  };
+
+  const toggleAssistantModelBinding = (
+    assistantId: string,
+    option: ResolvedModel,
+    checked: boolean,
+  ) => {
+    setAssistants((current) =>
+      current.map((assistant) => {
+        if (assistant.id !== assistantId) {
+          return assistant;
+        }
+
+        const optionKey = option.key;
+        const existingBindings = assistant.modelBindings;
+        const hasBinding = existingBindings.some(
+          (binding) => modelRefKey(binding) === optionKey,
+        );
+
+        if (checked && !hasBinding) {
+          const nextBindings = [
+            ...existingBindings,
+            createBinding(
+              option.apiProfile,
+              option.model,
+              !existingBindings.some((binding) => binding.isDefault),
+            ),
+          ];
+          return { ...assistant, modelBindings: nextBindings };
+        }
+
+        if (!checked && hasBinding && existingBindings.length > 1) {
+          const remaining = existingBindings.filter(
+            (binding) => modelRefKey(binding) !== optionKey,
+          );
+          const hasDefault = remaining.some((binding) => binding.isDefault);
+          return {
+            ...assistant,
+            modelBindings: hasDefault
+              ? remaining
+              : remaining.map((binding, index) => ({
+                  ...binding,
+                  isDefault: index === 0,
+                })),
+          };
+        }
+
+        return assistant;
+      }),
+    );
+  };
+
+  const setAssistantDefaultModel = (
+    assistantId: string,
+    bindingKey: string,
+  ) => {
+    setAssistants((current) =>
+      current.map((assistant) =>
+        assistant.id === assistantId
+          ? {
+              ...assistant,
+              modelBindings: assistant.modelBindings.map((binding) => ({
+                ...binding,
+                isDefault: modelRefKey(binding) === bindingKey,
+              })),
+            }
+          : assistant,
+      ),
+    );
+
+    if (assistantId === activeAssistant.id) {
+      setActiveModelRef(parseModelRefKey(bindingKey));
+    }
+  };
+
+  const sendMessage = async () => {
     const text = draft.trim();
+    const resolvedModel = activeResolvedModel;
 
     if (!text || !activeConversation || pendingMessageId) {
       return;
     }
 
+    if (!resolvedModel) {
+      const assistantMessage: Message = {
+        id: createId("assistant"),
+        conversationId: activeConversation.id,
+        role: "assistant",
+        label: activeAssistant.name,
+        text: "当前助手没有可用模型。请先在设置页为助手绑定启用的模型。",
+        status: "error",
+      };
+      setDraft("");
+      setMessages((current) => [...current, assistantMessage]);
+      return;
+    }
+
+    const source = createSourceSnapshot(activeAssistant, resolvedModel);
     const userMessage: Message = {
       id: createId("message"),
       conversationId: activeConversation.id,
@@ -540,16 +1063,20 @@ function App() {
       label: "用户",
       text,
       status: "complete",
+      source,
     };
     const assistantMessage: Message = {
       id: createId("assistant"),
       conversationId: activeConversation.id,
       role: "assistant",
-      label: `${activeAssistant.name} · ${activeAssistant.model}`,
-      text: "正在生成模拟回复……",
+      label: `${activeAssistant.name} · ${resolvedModel.model.name}`,
+      text: "正在请求模型…",
       status: "streaming",
+      source,
     };
+    const controller = new AbortController();
 
+    abortControllerRef.current = controller;
     setDraft("");
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setPendingMessageId(assistantMessage.id);
@@ -564,21 +1091,57 @@ function App() {
       ),
     );
 
-    responseTimerRef.current = window.setTimeout(() => {
+    try {
+      const result = await requestResponsesChat({
+        apiProfile: resolvedModel.apiProfile,
+        assistant: activeAssistant,
+        conversation: activeConversation,
+        model: resolvedModel.model,
+        messages: [...activeMessages, userMessage],
+        signal: controller.signal,
+      });
+
+      setLastObservedUsage(result.usage);
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
             ? {
                 ...message,
                 status: "complete",
-                text: `这是首版本地交互占位回复：已收到「${text}」。下一阶段会接入本地持久化和真实 Responses API。`,
+                text: result.text,
+                providerResponseId: result.providerResponseId,
+                usage: result.usage,
               }
             : message,
         ),
       );
-      setPendingMessageId(null);
-      responseTimerRef.current = null;
-    }, 800);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantMessage.id
+            ? {
+                ...message,
+                status: "error",
+                text:
+                  error instanceof Error
+                    ? error.message
+                    : "请求模型失败，请检查 API Profile、模型和网络。",
+              }
+            : message,
+        ),
+      );
+    } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+      if (!controller.signal.aborted) {
+        setPendingMessageId(null);
+      }
+    }
   };
 
   const sendOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -587,7 +1150,7 @@ function App() {
     }
 
     event.preventDefault();
-    sendMessage();
+    void sendMessage();
   };
 
   return (
@@ -693,24 +1256,45 @@ function App() {
             <p>{activeConversation?.title ?? "未选择对话"}</p>
             <span>{activeConversation?.summary ?? "请新建或选择一个对话"}</span>
           </div>
-          <label className="assistant-picker">
-            <Bot size={18} />
-            <span className="sr-only">选择助手</span>
-            <select
-              aria-label="选择助手"
-              value={activeAssistant.id}
-              onChange={(event) => {
-                setActiveAssistantId(event.target.value);
-                setEditingAssistantId(event.target.value);
-              }}
-            >
-              {assistants.map((assistant) => (
-                <option key={assistant.id} value={assistant.id}>
-                  {assistant.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="chat-pickers">
+            <label className="assistant-picker">
+              <Bot size={18} />
+              <span className="sr-only">选择助手</span>
+              <select
+                aria-label="选择助手"
+                value={activeAssistant.id}
+                onChange={(event) => activateAssistant(event.target.value)}
+              >
+                {assistants.map((assistant) => (
+                  <option key={assistant.id} value={assistant.id}>
+                    {assistant.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="assistant-picker model-picker">
+              <Server size={18} />
+              <span className="sr-only">选择模型</span>
+              <select
+                aria-label="选择模型"
+                disabled={assistantModelOptions.length === 0}
+                value={
+                  activeResolvedModel
+                    ? modelRefKey(activeResolvedModel.ref)
+                    : modelRefKey(DEFAULT_MODEL_REF)
+                }
+                onChange={(event) =>
+                  setActiveModelRef(parseModelRefKey(event.target.value))
+                }
+              >
+                {assistantModelOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.model.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </header>
 
         <div className="message-thread">
@@ -721,6 +1305,7 @@ function App() {
                   {message.label}
                   {message.status === "streaming" ? " · 生成中" : ""}
                   {message.status === "stopped" ? " · 已停止" : ""}
+                  {message.status === "error" ? " · 错误" : ""}
                 </div>
                 <p>{message.text}</p>
               </article>
@@ -728,7 +1313,10 @@ function App() {
           ) : (
             <section className="empty-thread">
               <h2>开始一个新对话</h2>
-              <p>当前仍是本地交互原型，发送后会生成模拟回复。</p>
+              <p>
+                当前已接入最小 Responses 请求循环；请先在设置页填写本地 API
+                key。
+              </p>
             </section>
           )}
         </div>
@@ -772,7 +1360,7 @@ function App() {
             type="button"
             aria-label="发送"
             disabled={!draft.trim() || Boolean(pendingMessageId)}
-            onClick={sendMessage}
+            onClick={() => void sendMessage()}
           >
             <Send size={18} />
           </button>
@@ -813,18 +1401,27 @@ function App() {
             <section className="settings-summary" aria-label="设置概览">
               <div className="settings-row compact">
                 <span>保存状态</span>
-                <strong>
-                  {saveStatus === "loading"
-                    ? "加载中"
-                    : saveStatus === "unsaved"
-                      ? "未保存"
-                      : saveStatus === "saving"
-                        ? "保存中"
-                        : saveStatus === "saved"
-                          ? "已保存"
-                          : "保存失败"}
-                </strong>
+                <strong>{saveStatusLabels[saveStatus]}</strong>
               </div>
+              <label className="settings-row compact theme-select">
+                <span>
+                  <Palette size={16} />
+                  主题模式
+                </span>
+                <select
+                  aria-label="主题模式"
+                  value={themeMode}
+                  onChange={(event) =>
+                    setThemeMode(event.target.value as ThemeMode)
+                  }
+                >
+                  {Object.entries(themeLabels).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <div className="settings-row compact">
                 <span>调试模式</span>
                 <label className="switch">
@@ -838,7 +1435,7 @@ function App() {
               </div>
               <div className="settings-row compact">
                 <span>API Profiles</span>
-                <strong>1</strong>
+                <strong>{apiProfiles.length}</strong>
               </div>
               <div className="settings-row compact">
                 <span>聊天助手</span>
@@ -874,16 +1471,7 @@ function App() {
                 </div>
                 <div>
                   <span>用量 / 配额</span>
-                  <strong>
-                    {typeof storageInfo.usage === "number" &&
-                    typeof storageInfo.quota === "number"
-                      ? `${(storageInfo.usage / 1024).toFixed(1)} KB / ${(
-                          storageInfo.quota /
-                          1024 /
-                          1024
-                        ).toFixed(1)} MB`
-                      : "unknown"}
-                  </strong>
+                  <strong>{formatStorageUsage(storageInfo)}</strong>
                 </div>
                 <div>
                   <span>预计导出大小</span>
@@ -923,6 +1511,278 @@ function App() {
               ) : null}
             </section>
 
+            <section
+              className="api-profile-panel"
+              aria-label="API Profile 与模型"
+            >
+              <header>
+                <div>
+                  <p className="eyebrow">Routes</p>
+                  <h3>API Profile 与模型</h3>
+                </div>
+                <button type="button" onClick={createApiProfile}>
+                  <Plus size={16} />
+                  新增 Profile
+                </button>
+              </header>
+
+              <div className="profile-layout">
+                <aside className="profile-directory">
+                  <label className="assistant-config-select">
+                    <span>当前 Profile</span>
+                    <select
+                      aria-label="选择 API Profile"
+                      value={editingApiProfile?.id ?? ""}
+                      onChange={(event) => {
+                        const profile = apiProfiles.find(
+                          (candidate) => candidate.id === event.target.value,
+                        );
+                        setEditingApiProfileId(event.target.value);
+                        setEditingModelId(profile?.models[0]?.id ?? "");
+                      }}
+                    >
+                      {apiProfiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="assistant-card-list">
+                    {apiProfiles.map((profile) => (
+                      <button
+                        className={`assistant-card ${
+                          profile.id === editingApiProfile?.id ? "selected" : ""
+                        }`}
+                        key={profile.id}
+                        type="button"
+                        onClick={() => {
+                          setEditingApiProfileId(profile.id);
+                          setEditingModelId(profile.models[0]?.id ?? "");
+                        }}
+                      >
+                        <span>{profile.name}</span>
+                        <small>{profile.models.length} models</small>
+                      </button>
+                    ))}
+                  </div>
+                </aside>
+
+                {editingApiProfile ? (
+                  <section className="profile-detail">
+                    <div className="section-caption">
+                      <Server size={16} />
+                      <span>连接配置</span>
+                    </div>
+                    <div className="reflected-fields">
+                      <label className="detail-field">
+                        <span>Profile 名称</span>
+                        <input
+                          aria-label="Profile 名称"
+                          value={editingApiProfile.name}
+                          onChange={(event) =>
+                            updateApiProfileField(
+                              editingApiProfile.id,
+                              "name",
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </label>
+                      <label className="detail-field">
+                        <span>协议</span>
+                        <select
+                          aria-label="协议"
+                          value={editingApiProfile.protocol}
+                          disabled
+                        >
+                          <option value="openai-responses">
+                            OpenAI-compatible Responses
+                          </option>
+                        </select>
+                      </label>
+                      <label className="detail-field">
+                        <span>Base URL</span>
+                        <input
+                          aria-label="Base URL"
+                          value={editingApiProfile.baseUrl}
+                          onChange={(event) =>
+                            updateApiProfileField(
+                              editingApiProfile.id,
+                              "baseUrl",
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </label>
+                      <label className="detail-field">
+                        <span>
+                          <KeyRound size={14} />
+                          API Key
+                        </span>
+                        <input
+                          aria-label="API Key"
+                          type="password"
+                          value={editingApiProfile.apiKey}
+                          onChange={(event) =>
+                            updateApiProfileField(
+                              editingApiProfile.id,
+                              "apiKey",
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </label>
+                      <label className="detail-field checkbox-field">
+                        <span>启用 Profile</span>
+                        <input
+                          aria-label="启用 Profile"
+                          checked={editingApiProfile.enabled}
+                          type="checkbox"
+                          onChange={(event) =>
+                            updateApiProfileField(
+                              editingApiProfile.id,
+                              "enabled",
+                              event.target.checked,
+                            )
+                          }
+                        />
+                      </label>
+                      <label className="detail-field">
+                        <span>Profile 描述</span>
+                        <textarea
+                          aria-label="Profile 描述"
+                          rows={3}
+                          value={editingApiProfile.description}
+                          onChange={(event) =>
+                            updateApiProfileField(
+                              editingApiProfile.id,
+                              "description",
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </label>
+                    </div>
+
+                    <div className="model-editor-header">
+                      <div className="section-caption">
+                        <Database size={16} />
+                        <span>模型配置</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => createModel(editingApiProfile.id)}
+                      >
+                        <Plus size={16} />
+                        新增模型
+                      </button>
+                    </div>
+
+                    <label className="assistant-config-select">
+                      <span>当前模型</span>
+                      <select
+                        aria-label="选择模型配置"
+                        value={editingModel?.id ?? ""}
+                        onChange={(event) =>
+                          setEditingModelId(event.target.value)
+                        }
+                      >
+                        {editingApiProfile.models.map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    {editingModel ? (
+                      <div className="reflected-fields">
+                        <label className="detail-field">
+                          <span>模型 ID / slug</span>
+                          <input
+                            aria-label="模型 ID"
+                            value={editingModel.id}
+                            onChange={(event) =>
+                              updateModelField(
+                                editingApiProfile.id,
+                                editingModel.id,
+                                "id",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                        <label className="detail-field">
+                          <span>显示名称</span>
+                          <input
+                            aria-label="模型名称"
+                            value={editingModel.name}
+                            onChange={(event) =>
+                              updateModelField(
+                                editingApiProfile.id,
+                                editingModel.id,
+                                "name",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                        <label className="detail-field">
+                          <span>上下文窗口</span>
+                          <input
+                            aria-label="上下文窗口"
+                            inputMode="numeric"
+                            value={editingModel.contextWindow ?? ""}
+                            onChange={(event) =>
+                              updateModelField(
+                                editingApiProfile.id,
+                                editingModel.id,
+                                "contextWindow",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                        <label className="detail-field checkbox-field">
+                          <span>启用模型</span>
+                          <input
+                            aria-label="启用模型"
+                            checked={editingModel.enabled}
+                            type="checkbox"
+                            onChange={(event) =>
+                              updateModelField(
+                                editingApiProfile.id,
+                                editingModel.id,
+                                "enabled",
+                                event.target.checked,
+                              )
+                            }
+                          />
+                        </label>
+                        <label className="detail-field">
+                          <span>模型描述</span>
+                          <textarea
+                            aria-label="模型描述"
+                            rows={3}
+                            value={editingModel.description}
+                            onChange={(event) =>
+                              updateModelField(
+                                editingApiProfile.id,
+                                editingModel.id,
+                                "description",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
+              </div>
+            </section>
+
             <section className="settings-layout">
               <aside className="assistant-directory" aria-label="助手列表">
                 <div className="directory-header">
@@ -954,22 +1814,28 @@ function App() {
                 </label>
 
                 <div className="assistant-card-list">
-                  {assistants.map((assistant) => (
-                    <button
-                      className={`assistant-card ${
-                        assistant.id === editingAssistant.id ? "selected" : ""
-                      }`}
-                      key={assistant.id}
-                      type="button"
-                      onClick={() => setEditingAssistantId(assistant.id)}
-                    >
-                      <span>{assistant.name}</span>
-                      <small>
-                        {assistant.kind === "chat" ? "聊天助手" : "功能助手"} ·{" "}
-                        {assistant.model}
-                      </small>
-                    </button>
-                  ))}
+                  {assistants.map((assistant) => {
+                    const defaultBinding =
+                      assistant.modelBindings.find(
+                        (binding) => binding.isDefault,
+                      ) ?? assistant.modelBindings[0];
+                    return (
+                      <button
+                        className={`assistant-card ${
+                          assistant.id === editingAssistant.id ? "selected" : ""
+                        }`}
+                        key={assistant.id}
+                        type="button"
+                        onClick={() => setEditingAssistantId(assistant.id)}
+                      >
+                        <span>{assistant.name}</span>
+                        <small>
+                          {assistant.kind === "chat" ? "聊天助手" : "功能助手"}{" "}
+                          · {defaultBinding?.modelNameSnapshot ?? "未绑定模型"}
+                        </small>
+                      </button>
+                    );
+                  })}
                 </div>
               </aside>
 
@@ -981,7 +1847,7 @@ function App() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setActiveAssistantId(editingAssistant.id)}
+                    onClick={() => activateAssistant(editingAssistant.id)}
                   >
                     设为当前
                   </button>
@@ -1082,6 +1948,74 @@ function App() {
                     );
                   })}
                 </div>
+
+                <section className="model-bindings" aria-label="助手允许模型">
+                  <header>
+                    <div>
+                      <p className="eyebrow">Model access</p>
+                      <h3>助手允许模型</h3>
+                    </div>
+                  </header>
+                  <label className="assistant-config-select">
+                    <span>默认模型</span>
+                    <select
+                      aria-label="助手默认模型"
+                      value={modelRefKey(
+                        editingAssistant.modelBindings.find(
+                          (binding) => binding.isDefault,
+                        ) ??
+                          editingAssistant.modelBindings[0] ??
+                          DEFAULT_MODEL_REF,
+                      )}
+                      onChange={(event) =>
+                        setAssistantDefaultModel(
+                          editingAssistant.id,
+                          event.target.value,
+                        )
+                      }
+                    >
+                      {editingAssistant.modelBindings.map((binding) => (
+                        <option
+                          key={modelRefKey(binding)}
+                          value={modelRefKey(binding)}
+                        >
+                          {binding.apiProfileNameSnapshot} /{" "}
+                          {binding.modelNameSnapshot}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className="binding-list">
+                    {allModelOptions.map((option) => {
+                      const checked = editingAssistant.modelBindings.some(
+                        (binding) => modelRefKey(binding) === option.key,
+                      );
+                      return (
+                        <label className="binding-row" key={option.key}>
+                          <input
+                            aria-label={`允许模型 ${option.apiProfile.name} ${option.model.name}`}
+                            checked={checked}
+                            type="checkbox"
+                            onChange={(event) =>
+                              toggleAssistantModelBinding(
+                                editingAssistant.id,
+                                option,
+                                event.target.checked,
+                              )
+                            }
+                          />
+                          <span>
+                            <strong>
+                              {option.apiProfile.name} / {option.model.name}
+                            </strong>
+                            <small>{option.model.description}</small>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </section>
               </section>
             </section>
           </section>

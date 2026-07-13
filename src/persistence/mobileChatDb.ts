@@ -1,11 +1,16 @@
 import {
+  type ApiProfile,
   type AppSettings,
   type Assistant,
+  type AssistantModelBinding,
   type Conversation,
   createInitialSnapshot,
   DATABASE_SCHEMA_VERSION,
+  DEFAULT_MODEL_REF,
+  initialApiProfiles,
   type LocalDataSnapshot,
   type Message,
+  type ModelRef,
   type StorageInfo,
 } from "../domain";
 
@@ -25,6 +30,21 @@ const STORES = [
 ] as const;
 
 type StoreName = (typeof STORES)[number];
+type LegacyAssistant = Assistant & {
+  apiProfileName?: string;
+  model?: string;
+};
+type LegacySettings = Partial<AppSettings> & {
+  activeModelRef?: ModelRef;
+  themeMode?: AppSettings["themeMode"];
+};
+type SnapshotInput = Omit<
+  Partial<LocalDataSnapshot>,
+  "settings" | "assistants"
+> & {
+  settings?: LegacySettings;
+  assistants?: LegacyAssistant[];
+};
 
 const requestToPromise = <T>(request: IDBRequest<T>): Promise<T> =>
   new Promise((resolve, reject) => {
@@ -94,37 +114,148 @@ const replaceAll = <T>(store: IDBObjectStore, records: T[]) => {
   }
 };
 
-const normalizeSnapshot = (snapshot: LocalDataSnapshot): LocalDataSnapshot => {
+const cloneInitialApiProfiles = (): ApiProfile[] =>
+  initialApiProfiles.map((profile) => ({
+    ...profile,
+    models: profile.models.map((model) => ({ ...model })),
+  }));
+
+const findModelInProfiles = (apiProfiles: ApiProfile[], ref: ModelRef) => {
+  const apiProfile = apiProfiles.find(
+    (profile) => profile.id === ref.apiProfileId,
+  );
+  const model = apiProfile?.models.find(
+    (candidate) => candidate.id === ref.modelId,
+  );
+  return { apiProfile, model };
+};
+
+const bindingFromRef = (
+  apiProfiles: ApiProfile[],
+  ref: ModelRef,
+  isDefault: boolean,
+): AssistantModelBinding => {
+  const { apiProfile, model } = findModelInProfiles(apiProfiles, ref);
+  return {
+    apiProfileId: ref.apiProfileId,
+    modelId: ref.modelId,
+    enabled: true,
+    isDefault,
+    apiProfileNameSnapshot: apiProfile?.name ?? ref.apiProfileId,
+    modelNameSnapshot: model?.name ?? ref.modelId,
+    modelDescriptionSnapshot: model?.description ?? "",
+  };
+};
+
+const migrateAssistant = (
+  assistant: LegacyAssistant,
+  apiProfiles: ApiProfile[],
+): Assistant => {
+  const migratedBindings =
+    Array.isArray(assistant.modelBindings) && assistant.modelBindings.length > 0
+      ? assistant.modelBindings
+      : [
+          bindingFromRef(
+            apiProfiles,
+            {
+              apiProfileId:
+                apiProfiles.find(
+                  (profile) =>
+                    profile.name === assistant.apiProfileName ||
+                    profile.id === assistant.apiProfileName,
+                )?.id ?? DEFAULT_MODEL_REF.apiProfileId,
+              modelId: assistant.model ?? DEFAULT_MODEL_REF.modelId,
+            },
+            true,
+          ),
+        ];
+
+  const hasDefault = migratedBindings.some((binding) => binding.isDefault);
+  return {
+    id: assistant.id,
+    name: assistant.name,
+    description: assistant.description ?? "",
+    kind: assistant.kind ?? "chat",
+    modelBindings: migratedBindings.map((binding, index) => {
+      const { apiProfile, model } = findModelInProfiles(apiProfiles, binding);
+      return {
+        apiProfileId: binding.apiProfileId,
+        modelId: binding.modelId,
+        enabled: binding.enabled !== false,
+        isDefault: hasDefault ? Boolean(binding.isDefault) : index === 0,
+        apiProfileNameSnapshot:
+          binding.apiProfileNameSnapshot ??
+          apiProfile?.name ??
+          binding.apiProfileId,
+        modelNameSnapshot:
+          binding.modelNameSnapshot ?? model?.name ?? binding.modelId,
+        modelDescriptionSnapshot:
+          binding.modelDescriptionSnapshot ?? model?.description ?? "",
+      };
+    }),
+    prompt: assistant.prompt ?? "",
+    initialMessage: assistant.initialMessage ?? "",
+    enabled: assistant.enabled !== false,
+  };
+};
+
+export const normalizeSnapshot = (
+  snapshot: SnapshotInput,
+): LocalDataSnapshot => {
+  const initialSnapshot = createInitialSnapshot();
   const now = new Date().toISOString();
-  const firstConversation = snapshot.conversations.find(
+  const apiProfiles =
+    snapshot.apiProfiles && snapshot.apiProfiles.length > 0
+      ? snapshot.apiProfiles
+      : cloneInitialApiProfiles();
+  const assistants =
+    snapshot.assistants && snapshot.assistants.length > 0
+      ? snapshot.assistants.map((assistant) =>
+          migrateAssistant(assistant, apiProfiles),
+        )
+      : initialSnapshot.assistants;
+  const conversations =
+    snapshot.conversations && snapshot.conversations.length > 0
+      ? snapshot.conversations
+      : initialSnapshot.conversations;
+  const messages = snapshot.messages ?? initialSnapshot.messages;
+  const firstConversation = conversations.find(
     (conversation) => !conversation.archived,
   );
-  const firstAssistant = snapshot.assistants[0];
+  const firstAssistant = assistants[0];
+  const settings: LegacySettings = snapshot.settings ?? {};
 
   return {
     settings: {
-      ...snapshot.settings,
       id: "app",
       schemaVersion: DATABASE_SCHEMA_VERSION,
       activeConversationId:
-        snapshot.settings.activeConversationId ??
+        settings.activeConversationId ??
         firstConversation?.id ??
-        "local-context",
+        initialSnapshot.settings.activeConversationId,
       activeAssistantId:
-        snapshot.settings.activeAssistantId ??
+        settings.activeAssistantId ??
         firstAssistant?.id ??
-        "architect",
+        initialSnapshot.settings.activeAssistantId,
+      activeModelRef: settings.activeModelRef ?? DEFAULT_MODEL_REF,
       editingAssistantId:
-        snapshot.settings.editingAssistantId ??
-        snapshot.settings.activeAssistantId ??
+        settings.editingAssistantId ??
+        settings.activeAssistantId ??
         firstAssistant?.id ??
-        "architect",
-      debugEnabled: Boolean(snapshot.settings.debugEnabled),
-      updatedAt: snapshot.settings.updatedAt ?? now,
+        initialSnapshot.settings.editingAssistantId,
+      themeMode: settings.themeMode ?? "system",
+      debugEnabled:
+        settings.debugEnabled ?? initialSnapshot.settings.debugEnabled,
+      lastSuccessfulExportAt: settings.lastSuccessfulExportAt,
+      storagePersisted: settings.storagePersisted ?? null,
+      storageUsage: settings.storageUsage,
+      storageQuota: settings.storageQuota,
+      updatedAt: settings.updatedAt ?? now,
     },
-    assistants: snapshot.assistants,
-    conversations: snapshot.conversations,
-    messages: snapshot.messages,
+    apiProfiles,
+    assistants,
+    conversations,
+    messages,
   };
 };
 
@@ -141,11 +272,14 @@ export const replaceSnapshot = async (
     updatedAt: new Date().toISOString(),
   });
   transaction.objectStore("settings").put(nextSnapshot.settings);
-  transaction.objectStore("apiProfiles").clear();
   transaction.objectStore("drafts").clear();
   transaction.objectStore("contextCheckpoints").clear();
   transaction.objectStore("blobs").clear();
 
+  replaceAll<ApiProfile>(
+    transaction.objectStore("apiProfiles"),
+    nextSnapshot.apiProfiles,
+  );
   replaceAll<Assistant>(
     transaction.objectStore("assistants"),
     nextSnapshot.assistants,
@@ -178,22 +312,25 @@ export const saveSnapshot = async (
 export const loadSnapshot = async (): Promise<LocalDataSnapshot> => {
   const db = await openMobileChatDb();
   const transaction = db.transaction(
-    ["settings", "assistants", "conversations", "messages"],
+    ["settings", "apiProfiles", "assistants", "conversations", "messages"],
     "readonly",
   );
   const settingsRequest = transaction.objectStore("settings").get("app");
+  const apiProfilesRequest = transaction.objectStore("apiProfiles").getAll();
   const assistantsRequest = transaction.objectStore("assistants").getAll();
   const conversationsRequest = transaction
     .objectStore("conversations")
     .getAll();
   const messagesRequest = transaction.objectStore("messages").getAll();
 
-  const [settings, assistants, conversations, messages] = await Promise.all([
-    requestToPromise<AppSettings | undefined>(settingsRequest),
-    requestToPromise<Assistant[]>(assistantsRequest),
-    requestToPromise<Conversation[]>(conversationsRequest),
-    requestToPromise<Message[]>(messagesRequest),
-  ]);
+  const [settings, apiProfiles, assistants, conversations, messages] =
+    await Promise.all([
+      requestToPromise<LegacySettings | undefined>(settingsRequest),
+      requestToPromise<ApiProfile[]>(apiProfilesRequest),
+      requestToPromise<LegacyAssistant[]>(assistantsRequest),
+      requestToPromise<Conversation[]>(conversationsRequest),
+      requestToPromise<Message[]>(messagesRequest),
+    ]);
   await transactionDone(transaction);
   db.close();
 
@@ -205,6 +342,7 @@ export const loadSnapshot = async (): Promise<LocalDataSnapshot> => {
 
   return normalizeSnapshot({
     settings,
+    apiProfiles,
     assistants,
     conversations,
     messages,

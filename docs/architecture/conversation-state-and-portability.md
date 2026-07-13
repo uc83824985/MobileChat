@@ -44,7 +44,7 @@ Claude Messages API 更明确地采用无状态设计：每轮发送完整的会
 
 因此首版将 MNAPI 的 provider continuation 标记为不支持。能力探测必须验证唯一内容的实际回忆，不能只检查 HTTP 成功、字段被接受或 Response ID 是否存在。
 
-启动器当前配置的 `gpt-5.4-codex-high` 不在本次 `/models` 返回列表中，对该模型请求返回 503。它属于模型路由兼容问题，与 `store` 能力结论分开记录。
+当前前端预设会复用 `start_mnapi_codex` 的配置形态，内置 `https://api.mnapi.com/v1`、`wire_api=responses` 和 `gpt-5.4-codex-high` 等模型 slug，但不内置 API key。模型 slug 的可用性以用户实际 MNAPI 网关为准；若某个 slug 返回 503，应在设置页切换到其他预设或编辑模型 slug。这属于模型路由兼容问题，与 `store` 能力结论分开记录。
 
 ## 单对话 Memory 的含义
 
@@ -91,9 +91,9 @@ MobileChatDB
 其中：
 
 - `meta`：数据库 schema 版本、迁移状态、应用版本兼容信息。
-- `settings`：当前助手、当前对话、调试模式、存储持久化状态、最后成功导出时间等应用设置。
-- `apiProfiles`：API base URL、协议、凭据、模型列表和价格/上下文窗口元数据。
-- `assistants`：聊天助手和功能助手配置，包括 prompt、初始消息和模型绑定。
+- `settings`：当前助手、当前模型引用、当前对话、主题模式、调试模式、存储持久化状态、最后成功导出时间等应用设置。
+- `apiProfiles`：API base URL、协议、凭据、模型列表和价格/上下文窗口元数据。模型是独立记录，不应只作为助手字段存在。
+- `assistants`：聊天助手和功能助手配置，包括 prompt、初始消息和模型绑定。助手引用已有 API Profile + model，并保存关键显示字段快照，避免模型或助手删除后消息来源完全丢失。
 - `conversations`：标题、显示摘要、归档状态、活动助手/模型引用、活动检查点引用。
 - `messages`：规范消息、内容 parts、分支关系、助手/模型来源快照、usage/debug 观测。
 - `drafts`：每个对话的未发送草稿。
@@ -108,6 +108,8 @@ MobileChatDB
 4. 文本输入使用 300–500ms debounce；失焦、关闭设置页、发送消息和页面隐藏时 flush。
 5. 对话消息、导入替换、删除、归档、检查点切换等需要一致性的操作使用 IndexedDB transaction。
 6. UI 显示轻量保存状态：`未保存`、`保存中`、`已保存`、`保存失败`。失败时保留内存状态并提示重试或导出。
+
+当前首版实现为 normalized full snapshot autosave：每次保存会重写 settings、apiProfiles、assistants、conversations、messages 这些小规模 domain stores。该方案足以验证手机端持久化和导入导出；当消息历史、附件或检查点变大后，应切换到上面的 dirty record 写入策略。
 
 IndexedDB 是异步 API，正常的小记录写入不应阻塞主线程。手机端卡顿主要来自错误实现：每次输入都序列化大对象、同步写 `localStorage`、在 React render 中等待写库、或跨 store 做过大事务。首版禁止这些模式。若实机发现低端设备在 prompt 大文本编辑时卡顿，可把文本字段改为“失焦保存 + 手动保存”或增加 debounce；默认仍采用无感自动保存。
 
@@ -262,7 +264,7 @@ checksums.json
 - `blobs/`：可选附件原始二进制，避免 Base64 体积膨胀。
 - `checksums.json`：各条目完整性校验。
 
-完整迁移模式在用户明确确认后包含 API Key；无凭据模式保留 profile/model 元数据但清空秘密字段。浏览器持久文件句柄不导出。
+完整迁移模式在用户明确确认后包含 API Key；无凭据模式保留 profile/model 元数据但清空秘密字段。当前已实现的是无凭据导出：`.mobilechat` 会保留 API Profile、模型、助手绑定、对话和消息，但清空 `apiKey`。浏览器持久文件句柄不导出。
 
 导入必须先隔离解析并验证 ZIP 路径、校验值、格式版本、schema、内部引用与 blob 元数据，再显示预览，最后执行事务性覆盖或带 ID 重映射的合并。跨设备访问指手动导出、传输和导入，不代表实时同步。
 

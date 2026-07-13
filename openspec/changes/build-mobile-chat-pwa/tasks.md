@@ -6,6 +6,11 @@
 - [x] 1.4 Add the web manifest, icons, service-worker generation, offline shell caching, and update notification behavior
 - [x] 1.5 Configure repository-relative routing and a GitHub Actions workflow that builds and deploys to GitHub Pages
 
+## Current implementation notes
+
+- 2026-07-13: Implemented a first persistence/config/API slice that is intentionally narrower than several full tasks below: normalized full-snapshot `MobileChatDB` save/load, credential-free `.mobilechat` import/export, light/dark/system theme setting, editable API Profiles with nested model definitions, assistant model bindings, chat-page assistant/model selectors, and a non-streaming `store:false` Responses request loop.
+- The full task checklist remains open where the spec still requires streaming SSE, dirty-record repositories, endpoint validation, pricing metadata, utility roles, checkpoint execution, deletion flows, merge import, or complete context projection.
+
 ## 2. Domain model and local persistence
 
 - [ ] 2.1 Define versioned TypeScript domain types for API profiles, models, model pricing metadata, chat/utility assistants, bindings, conversations, messages, content parts, blobs, drafts, context checkpoints, display summaries, context budget reports, pre-send cache estimates, normalized usage stats, and settings
