@@ -14,6 +14,8 @@ export type ResponsesChatRequest = {
   model: ModelDefinition;
   messages: Message[];
   signal: AbortSignal;
+  stream: boolean;
+  onTextDelta?: (delta: string, fullText: string) => void;
 };
 
 export type ResponsesChatResult = {
@@ -23,6 +25,10 @@ export type ResponsesChatResult = {
 };
 
 type UnknownRecord = Record<string, unknown>;
+type SseEvent = {
+  event?: string;
+  data: string;
+};
 
 const isRecord = (value: unknown): value is UnknownRecord =>
   typeof value === "object" && value !== null;
@@ -32,6 +38,9 @@ const normalizeBaseUrl = (baseUrl: string) =>
 
 const readString = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
+
+const readNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
 const collectTextFragments = (value: unknown, fragments: string[]) => {
   if (!value) {
@@ -100,14 +109,11 @@ export const extractResponseText = (payload: unknown): string => {
 
   const id = readString(payload.id);
   return id
-    ? `模型已返回响应，但首版解析器没有找到文本输出。Response ID: ${id}`
-    : "模型已返回响应，但首版解析器没有找到文本输出。";
+    ? `模型已返回响应，但解析器没有找到文本输出。Response ID: ${id}`
+    : "模型已返回响应，但解析器没有找到文本输出。";
 };
 
-const readNumber = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value) ? value : undefined;
-
-const extractUsage = (payload: unknown): ResponseUsage | undefined => {
+export const extractUsage = (payload: unknown): ResponseUsage | undefined => {
   if (!isRecord(payload) || !isRecord(payload.usage)) {
     return undefined;
   }
@@ -141,6 +147,28 @@ const createInputItems = (messages: Message[]) =>
     content: message.text,
   }));
 
+const buildRequestBody = ({
+  assistant,
+  conversation,
+  model,
+  messages,
+  stream,
+}: Pick<
+  ResponsesChatRequest,
+  "assistant" | "conversation" | "model" | "messages" | "stream"
+>) =>
+  JSON.stringify({
+    model: model.id,
+    instructions: assistant.prompt || undefined,
+    input: createInputItems(messages),
+    store: false,
+    stream,
+    metadata: {
+      mobilechat_conversation_id: conversation.id,
+      mobilechat_assistant_id: assistant.id,
+    },
+  });
+
 const buildErrorMessage = async (response: Response) => {
   const rawBody = await response.text().catch(() => "");
 
@@ -166,6 +194,206 @@ const buildErrorMessage = async (response: Response) => {
   )}`;
 };
 
+const fetchResponses = async ({
+  apiProfile,
+  apiKey,
+  body,
+  signal,
+}: {
+  apiProfile: ApiProfile;
+  apiKey: string;
+  body: string;
+  signal: AbortSignal;
+}) =>
+  fetch(`${normalizeBaseUrl(apiProfile.baseUrl)}/responses`, {
+    method: "POST",
+    signal,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body,
+  }).catch((error: unknown) => {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error;
+    }
+    throw new Error(
+      "网络请求失败。若 API 地址正确且 key 有效，常见原因是中转站没有开放浏览器 CORS；静态页直连会被浏览器拦截。",
+    );
+  });
+
+const parseSseBlock = (block: string): SseEvent | undefined => {
+  const lines = block.split(/\r?\n/);
+  let event: string | undefined;
+  const dataLines: string[] = [];
+
+  for (const line of lines) {
+    if (!line || line.startsWith(":")) {
+      continue;
+    }
+    if (line.startsWith("event:")) {
+      event = line.slice("event:".length).trim();
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length).trimStart());
+      continue;
+    }
+  }
+
+  const data = dataLines.length > 0 ? dataLines.join("\n") : block.trim();
+  return data ? { event, data } : undefined;
+};
+
+const parseStreamJson = (event: SseEvent): unknown | undefined => {
+  if (event.data === "[DONE]") {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(event.data) as unknown;
+  } catch {
+    return undefined;
+  }
+};
+
+const getResponsePayload = (payload: unknown): unknown => {
+  if (!isRecord(payload)) {
+    return payload;
+  }
+  return isRecord(payload.response) ? payload.response : payload;
+};
+
+const extractStreamDelta = (payload: unknown): string | undefined => {
+  if (!isRecord(payload)) {
+    return undefined;
+  }
+
+  const type = readString(payload.type);
+  if (
+    type === "response.output_text.delta" ||
+    type === "response.refusal.delta"
+  ) {
+    return readString(payload.delta);
+  }
+
+  if (Array.isArray(payload.choices)) {
+    const firstChoice = payload.choices[0];
+    if (isRecord(firstChoice) && isRecord(firstChoice.delta)) {
+      return readString(firstChoice.delta.content);
+    }
+  }
+
+  return undefined;
+};
+
+const extractStreamError = (payload: unknown): string | undefined => {
+  if (!isRecord(payload)) {
+    return undefined;
+  }
+
+  const type = readString(payload.type);
+  if (type !== "error" && type !== "response.failed") {
+    return undefined;
+  }
+
+  if (isRecord(payload.error)) {
+    return readString(payload.error.message) ?? "流式响应返回错误。";
+  }
+  if (isRecord(payload.response) && isRecord(payload.response.error)) {
+    return readString(payload.response.error.message) ?? "流式响应返回错误。";
+  }
+  return readString(payload.message) ?? "流式响应返回错误。";
+};
+
+const readResponsesStream = async (
+  response: Response,
+  onTextDelta?: (delta: string, fullText: string) => void,
+): Promise<ResponsesChatResult> => {
+  if (!response.body) {
+    throw new Error("当前浏览器没有返回可读取的流式响应体。");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  let providerResponseId: string | undefined;
+  let finalPayload: unknown | undefined;
+
+  const handleEvent = (event: SseEvent) => {
+    const payload = parseStreamJson(event);
+    if (!payload) {
+      return;
+    }
+
+    const errorMessage = extractStreamError(payload);
+    if (errorMessage || event.event === "error") {
+      throw new Error(errorMessage ?? "流式响应返回错误。");
+    }
+
+    const responsePayload = getResponsePayload(payload);
+    if (isRecord(responsePayload)) {
+      providerResponseId ??= readString(responsePayload.id);
+    }
+
+    const delta = extractStreamDelta(payload);
+    if (delta) {
+      text += delta;
+      onTextDelta?.(delta, text);
+    }
+
+    if (
+      isRecord(payload) &&
+      (payload.type === "response.completed" ||
+        payload.type === "response.failed" ||
+        payload.type === "response.incomplete")
+    ) {
+      finalPayload = responsePayload;
+    }
+  };
+
+  const processBuffer = (flush = false) => {
+    let separatorIndex = buffer.search(/\r?\n\r?\n/);
+    while (separatorIndex !== -1) {
+      const block = buffer.slice(0, separatorIndex);
+      const separator = buffer.match(/\r?\n\r?\n/)?.[0] ?? "\n\n";
+      buffer = buffer.slice(separatorIndex + separator.length);
+      const event = parseSseBlock(block);
+      if (event) {
+        handleEvent(event);
+      }
+      separatorIndex = buffer.search(/\r?\n\r?\n/);
+    }
+
+    if (flush && buffer.trim()) {
+      const event = parseSseBlock(buffer);
+      buffer = "";
+      if (event) {
+        handleEvent(event);
+      }
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    processBuffer();
+  }
+  buffer += decoder.decode();
+  processBuffer(true);
+
+  const fallbackText = finalPayload ? extractResponseText(finalPayload) : "";
+  return {
+    text: text.trim() ? text : fallbackText,
+    providerResponseId,
+    usage: extractUsage(finalPayload),
+  };
+};
+
 export const requestResponsesChat = async ({
   apiProfile,
   assistant,
@@ -173,6 +401,8 @@ export const requestResponsesChat = async ({
   model,
   messages,
   signal,
+  stream,
+  onTextDelta,
 }: ResponsesChatRequest): Promise<ResponsesChatResult> => {
   const baseUrl = normalizeBaseUrl(apiProfile.baseUrl);
   const apiKey = apiProfile.apiKey.trim();
@@ -190,35 +420,25 @@ export const requestResponsesChat = async ({
     throw new Error(`请先在设置页为「${apiProfile.name}」填写 API key。`);
   }
 
-  const response = await fetch(`${baseUrl}/responses`, {
-    method: "POST",
+  const response = await fetchResponses({
+    apiProfile,
+    apiKey,
     signal,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: model.id,
-      instructions: assistant.prompt || undefined,
-      input: createInputItems(messages),
-      store: false,
-      stream: false,
-      metadata: {
-        mobilechat_conversation_id: conversation.id,
-        mobilechat_assistant_id: assistant.id,
-      },
+    body: buildRequestBody({
+      assistant,
+      conversation,
+      model,
+      messages,
+      stream,
     }),
-  }).catch((error: unknown) => {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw error;
-    }
-    throw new Error(
-      "网络请求失败。若 API 地址正确且 key 有效，常见原因是中转站没有开放浏览器 CORS；静态页直连会被浏览器拦截。",
-    );
   });
 
   if (!response.ok) {
     throw new Error(await buildErrorMessage(response));
+  }
+
+  if (stream) {
+    return readResponsesStream(response, onTextDelta);
   }
 
   const payload = (await response.json()) as unknown;

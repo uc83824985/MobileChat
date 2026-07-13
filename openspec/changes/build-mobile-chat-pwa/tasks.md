@@ -8,8 +8,8 @@
 
 ## Current implementation notes
 
-- 2026-07-13: Implemented a first persistence/config/API slice that is intentionally narrower than several full tasks below: normalized full-snapshot `MobileChatDB` save/load, credential-free `.mobilechat` import/export, light/dark/system theme setting, editable API Profiles with nested model definitions, assistant model bindings, chat-page assistant/model selectors, and a non-streaming `store:false` Responses request loop.
-- The full task checklist remains open where the spec still requires streaming SSE, dirty-record repositories, endpoint validation, pricing metadata, utility roles, checkpoint execution, deletion flows, merge import, or complete context projection.
+- 2026-07-13: Implemented a first persistence/config/API slice that is intentionally narrower than several full tasks below: normalized full-snapshot `MobileChatDB` save/load, credential-free `.mobilechat` import/export, light/dark/system theme setting, editable API Profiles with nested model definitions, assistant model bindings, chat-page assistant/model selectors, direct title editing, and a settings-toggleable `store:false` Responses request loop with SSE text-delta streaming.
+- The full task checklist remains open where the spec still requires dirty-record repositories, endpoint validation, pricing metadata, utility roles, checkpoint execution, deletion flows, merge import, complete context projection, and full streaming event/error coverage beyond the current text-delta path.
 
 ## 2. Domain model and local persistence
 

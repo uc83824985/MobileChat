@@ -5,9 +5,9 @@ Date: 2026-07-13
 ## Current verified state
 
 - The mobile/desktop shell is usable with persisted local state.
-- Conversation creation, conversation selection, title/summary search, archive action, draft input, send, stop, debug panel toggle, settings open/close, theme switch, assistant switch, and model switch are covered by Playwright.
-- Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, backup, and theme controls.
-- The app has a minimal OpenAI-compatible Responses request loop. Without an API key it shows a local configuration error; with an API key it sends `POST {baseUrl}/responses` using `store:false`.
+- Conversation creation, conversation selection, title edit, title/summary search, archive action, draft input, send, stop, debug panel toggle, settings open/close, theme switch, streaming switch, assistant switch, and model switch are covered by Playwright.
+- Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, backup, theme, and streaming controls.
+- The app has a minimal OpenAI-compatible Responses request loop. Without an API key it shows a local configuration error; with an API key it sends `POST {baseUrl}/responses` using `store:false`. Streaming mode uses SSE text deltas; non-streaming mode still works as a fallback.
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
 
 ## Implemented response to mobile feedback
@@ -16,6 +16,8 @@ Date: 2026-07-13
 - Model selection is a second native `<select>` and is limited to the currently selected assistant's allowed model bindings.
 - The settings panel is full-screen on small screens and a wide details panel on desktop.
 - The conversation drawer keeps the bottom archive/settings actions visible while the conversation list scrolls.
+- The chat header provides a direct title edit entry. Press Enter or the check button to save; Esc or the close button cancels.
+- Dark mode styles native select options and applies `color-scheme: dark` to avoid white dropdown backgrounds with pale text.
 - The assistant details panel is schema-rendered from `assistantFields`, so newly added assistants use the same reflected editor instead of a special hard-coded page.
 
 ## API Profile and model configuration
@@ -49,10 +51,21 @@ Date: 2026-07-13
 
 - `MobileChatDB` stores settings, API profiles, assistants, conversations, messages, and reserved stores for drafts/checkpoints/blobs.
 - UI edits update memory immediately and are autosaved after a short debounce. Settings close and page visibility changes flush the latest snapshot.
+- Settings persist the selected theme and whether Responses streaming is enabled.
 - The current implementation persists normalized full snapshots. This is acceptable for the current small prototype; future large histories should move to dirty-record writes as specified in the architecture document.
 - `.mobilechat` archives contain `manifest.json`, `records.json`, and `checksums.json`.
 - The current export path is credential-free: API Profile metadata and model definitions are exported, but `apiKey` is cleared.
-- Desktop Playwright verifies edit → autosave → reload → export → local mutation → import → restored records with API key removed.
+- Desktop Playwright verifies title edit → settings edit → autosave → reload → export → local mutation → import → restored records with API key removed.
+
+## Diagnostics and usage display
+
+- The pre-send token count is still a local estimate based on text length, not a tokenizer-accurate billable number.
+- The post-send usage display uses explicit labels:
+  - `in`: provider-reported input tokens;
+  - `out`: provider-reported output tokens;
+  - `total`: provider-reported total tokens, or `in + out` fallback;
+  - `cache cached/input`: cached input tokens divided by input tokens.
+- A display such as `cache 0/95` means no cached input tokens were reported for 95 input tokens. It is not the total usage.
 
 ## Verification
 
@@ -65,7 +78,6 @@ Current automated coverage includes Desktop Chrome and Pixel-class Mobile Chrome
 
 ## Remaining limitations
 
-- No streaming response rendering yet; the first request loop is non-streaming.
 - No endpoint validation button yet.
 - No model discovery (`GET /models`) UI yet; model list is manually edited.
 - No real context compression/checkpoint execution yet.

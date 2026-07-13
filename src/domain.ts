@@ -103,12 +103,13 @@ export type AssistantField = {
 
 export type AppSettings = {
   id: "app";
-  schemaVersion: 2;
+  schemaVersion: 3;
   activeConversationId: string;
   activeAssistantId: string;
   activeModelRef: ModelRef;
   editingAssistantId: string;
   themeMode: ThemeMode;
+  streamingEnabled: boolean;
   debugEnabled: boolean;
   lastSuccessfulExportAt?: string;
   storagePersisted?: boolean | null;
@@ -133,7 +134,7 @@ export type LocalDataSnapshot = {
 
 export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 
-export const DATABASE_SCHEMA_VERSION = 2;
+export const DATABASE_SCHEMA_VERSION = 3;
 
 export const MNAPI_PROFILE_ID = "mnapi";
 export const DEFAULT_MODEL_REF: ModelRef = {
@@ -366,6 +367,7 @@ export const createInitialSettings = (
   activeModelRef: DEFAULT_MODEL_REF,
   editingAssistantId: defaultAssistant.id,
   themeMode: "system",
+  streamingEnabled: true,
   debugEnabled: true,
   storagePersisted: null,
   updatedAt: now,

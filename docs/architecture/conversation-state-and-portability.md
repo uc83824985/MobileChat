@@ -91,7 +91,7 @@ MobileChatDB
 其中：
 
 - `meta`：数据库 schema 版本、迁移状态、应用版本兼容信息。
-- `settings`：当前助手、当前模型引用、当前对话、主题模式、调试模式、存储持久化状态、最后成功导出时间等应用设置。
+- `settings`：当前助手、当前模型引用、当前对话、主题模式、流式输出开关、调试模式、存储持久化状态、最后成功导出时间等应用设置。
 - `apiProfiles`：API base URL、协议、凭据、模型列表和价格/上下文窗口元数据。模型是独立记录，不应只作为助手字段存在。
 - `assistants`：聊天助手和功能助手配置，包括 prompt、初始消息和模型绑定。助手引用已有 API Profile + model，并保存关键显示字段快照，避免模型或助手删除后消息来源完全丢失。
 - `conversations`：标题、显示摘要、归档状态、活动助手/模型引用、活动检查点引用。
@@ -171,6 +171,14 @@ reasoningTokens
 ```text
 cacheReadHitRate = cachedInputTokens / inputTokens
 ```
+
+UI 展示必须避免把 cache 命中分子/分母误写成总 usage。首版显示格式为：
+
+```text
+in <inputTokens> / out <outputTokens> / total <totalTokens> · cache <cachedInputTokens>/<inputTokens>
+```
+
+其中 `cache 0/95` 只表示本次 95 个输入 token 中 provider 报告 0 个 cached input tokens，不代表总 token 为 95，也不代表输出 token 为 0。
 
 对话滚动 cache 读命中率（仅当分母大于 0 时计算）：
 

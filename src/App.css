@@ -78,7 +78,26 @@ textarea {
 }
 
 select {
+  background: var(--field);
   color: inherit;
+  color-scheme: light;
+}
+
+option {
+  background: var(--field);
+  color: var(--text-strong);
+}
+
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] option {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) select,
+  :root:not([data-theme]) option {
+    color-scheme: dark;
+  }
 }
 
 button {
@@ -226,12 +245,50 @@ button:disabled {
   min-width: 0;
 }
 
+.title-display,
+.title-editor {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
 .chat-title p {
   font-weight: 800;
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.title-edit-button,
+.title-action {
+  background: transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  width: 28px;
+}
+
+.title-edit-button:hover,
+.title-action:hover {
+  background: var(--button-hover);
+  color: var(--text-strong);
+}
+
+.title-editor input {
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-strong);
+  font-weight: 800;
+  min-width: 0;
+  outline: 0;
+  padding: 7px 9px;
+  width: min(360px, 52vw);
 }
 
 .chat-pickers {
@@ -262,6 +319,11 @@ button:disabled {
   max-width: 140px;
   min-width: 0;
   outline: 0;
+}
+
+.assistant-picker select option {
+  background: var(--field);
+  color: var(--text-strong);
 }
 
 .model-picker select {
@@ -849,6 +911,7 @@ button:disabled {
   }
 
   .chat-header {
+    display: grid;
     grid-template-columns: auto minmax(0, 1fr);
   }
 

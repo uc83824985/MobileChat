@@ -1,12 +1,14 @@
 import {
   Archive,
   Bot,
+  Check,
   Database,
   Download,
   KeyRound,
   MessageSquarePlus,
   Palette,
   PanelLeft,
+  Pencil,
   Plus,
   Search,
   Send,
@@ -15,6 +17,7 @@ import {
   SlidersHorizontal,
   StopCircle,
   Upload,
+  X,
 } from "lucide-react";
 import {
   type ChangeEvent,
@@ -181,13 +184,24 @@ const estimateTokenCount = (messages: Message[], draft = "") => {
   return Math.max(1, Math.ceil(textLength / 2));
 };
 
-const formatUsage = (usage?: ResponseUsage) => {
-  if (!usage?.inputTokens) {
+const formatObservedUsage = (usage?: ResponseUsage) => {
+  if (
+    !usage ||
+    typeof usage.inputTokens !== "number" ||
+    usage.inputTokens <= 0
+  ) {
     return "unknown";
   }
 
-  const cached = usage.cachedInputTokens ?? 0;
-  return `${cached} / ${usage.inputTokens} tokens`;
+  const output = usage.outputTokens ?? 0;
+  const total = usage.totalTokens ?? usage.inputTokens + output;
+  const cached = usage.cachedInputTokens;
+  const cacheLabel =
+    typeof cached === "number"
+      ? `cache ${cached}/${usage.inputTokens}`
+      : "cache unknown";
+
+  return `in ${usage.inputTokens} / out ${output} / total ${total} · ${cacheLabel}`;
 };
 
 const formatStorageUsage = (storageInfo: StorageInfo) => {
@@ -251,6 +265,9 @@ function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(
     bootSnapshot.settings.themeMode,
   );
+  const [streamingEnabled, setStreamingEnabled] = useState(
+    bootSnapshot.settings.streamingEnabled,
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [debugEnabled, setDebugEnabled] = useState(
@@ -258,6 +275,10 @@ function App() {
   );
   const [draft, setDraft] = useState("");
   const [conversationSearch, setConversationSearch] = useState("");
+  const [editingTitleConversationId, setEditingTitleConversationId] = useState<
+    string | null
+  >(null);
+  const [titleDraft, setTitleDraft] = useState("");
   const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("loading");
@@ -367,7 +388,7 @@ function App() {
             : "0%",
       ],
       ["发送前预算", activeResolvedModel?.model.name ?? "未选择模型"],
-      ["发送后 usage", formatUsage(lastObservedUsage)],
+      ["发送后 usage", formatObservedUsage(lastObservedUsage)],
     ],
     [activeMessages, activeResolvedModel?.model.name, draft, lastObservedUsage],
   );
@@ -379,6 +400,7 @@ function App() {
       activeModelRef,
       editingAssistantId,
       themeMode,
+      streamingEnabled,
       debugEnabled,
       lastSuccessfulExportAt,
       storagePersisted: storageInfo.persisted,
@@ -392,6 +414,7 @@ function App() {
       debugEnabled,
       editingAssistantId,
       lastSuccessfulExportAt,
+      streamingEnabled,
       storageInfo.persisted,
       storageInfo.quota,
       storageInfo.usage,
@@ -425,6 +448,7 @@ function App() {
       snapshot.apiProfiles[0]?.models[0]?.id ?? DEFAULT_MODEL_REF.modelId,
     );
     setThemeMode(snapshot.settings.themeMode);
+    setStreamingEnabled(snapshot.settings.streamingEnabled);
     setDebugEnabled(snapshot.settings.debugEnabled);
     setLastSuccessfulExportAt(snapshot.settings.lastSuccessfulExportAt);
     setStorageInfo({
@@ -625,7 +649,14 @@ function App() {
       setMessages((current) =>
         current.map((message) =>
           message.id === pendingMessageId
-            ? { ...message, status: "stopped", text: replacementText }
+            ? {
+                ...message,
+                status: "stopped",
+                text:
+                  message.text && message.text !== "正在请求模型…"
+                    ? message.text
+                    : replacementText,
+              }
             : message,
         ),
       );
@@ -659,6 +690,8 @@ function App() {
     setConversationSearch("");
     setDrawerOpen(false);
     setDraft("");
+    setEditingTitleConversationId(null);
+    setTitleDraft("");
     stopResponse("已停止上一条未完成回复。");
   };
 
@@ -666,7 +699,42 @@ function App() {
     setActiveConversationId(conversationId);
     setDrawerOpen(false);
     setDraft("");
+    setEditingTitleConversationId(null);
+    setTitleDraft("");
     stopResponse("已停止上一条未完成回复。");
+  };
+
+  const startTitleEdit = () => {
+    if (!activeConversation) {
+      return;
+    }
+
+    setEditingTitleConversationId(activeConversation.id);
+    setTitleDraft(activeConversation.title);
+  };
+
+  const cancelTitleEdit = () => {
+    setEditingTitleConversationId(null);
+    setTitleDraft("");
+  };
+
+  const saveTitleEdit = () => {
+    if (!activeConversation) {
+      return;
+    }
+
+    const nextTitle = titleDraft.trim();
+    if (nextTitle) {
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === activeConversation.id
+            ? { ...conversation, title: nextTitle }
+            : conversation,
+        ),
+      );
+    }
+
+    cancelTitleEdit();
   };
 
   const archiveActiveConversation = () => {
@@ -1075,6 +1143,7 @@ function App() {
       source,
     };
     const controller = new AbortController();
+    let streamedText = "";
 
     abortControllerRef.current = controller;
     setDraft("");
@@ -1099,6 +1168,19 @@ function App() {
         model: resolvedModel.model,
         messages: [...activeMessages, userMessage],
         signal: controller.signal,
+        stream: streamingEnabled,
+        onTextDelta: streamingEnabled
+          ? (_delta, fullText) => {
+              streamedText = fullText;
+              setMessages((current) =>
+                current.map((message) =>
+                  message.id === assistantMessage.id
+                    ? { ...message, text: fullText || "正在请求模型…" }
+                    : message,
+                ),
+              );
+            }
+          : undefined,
       });
 
       setLastObservedUsage(result.usage);
@@ -1108,7 +1190,7 @@ function App() {
             ? {
                 ...message,
                 status: "complete",
-                text: result.text,
+                text: result.text || streamedText || "模型未返回文本内容。",
                 providerResponseId: result.providerResponseId,
                 usage: result.usage,
               }
@@ -1253,7 +1335,56 @@ function App() {
             <PanelLeft size={20} />
           </button>
           <div className="chat-title">
-            <p>{activeConversation?.title ?? "未选择对话"}</p>
+            {editingTitleConversationId === activeConversation?.id ? (
+              <div className="title-editor">
+                <input
+                  aria-label="对话标题"
+                  autoFocus
+                  value={titleDraft}
+                  onChange={(event) => setTitleDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      saveTitleEdit();
+                    }
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      cancelTitleEdit();
+                    }
+                  }}
+                />
+                <button
+                  className="title-action"
+                  type="button"
+                  aria-label="保存标题"
+                  onClick={saveTitleEdit}
+                >
+                  <Check size={15} />
+                </button>
+                <button
+                  className="title-action"
+                  type="button"
+                  aria-label="取消标题编辑"
+                  onClick={cancelTitleEdit}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            ) : (
+              <div className="title-display">
+                <p>{activeConversation?.title ?? "未选择对话"}</p>
+                {activeConversation ? (
+                  <button
+                    className="title-edit-button"
+                    type="button"
+                    aria-label="编辑标题"
+                    onClick={startTitleEdit}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                ) : null}
+              </div>
+            )}
             <span>{activeConversation?.summary ?? "请新建或选择一个对话"}</span>
           </div>
           <div className="chat-pickers">
@@ -1428,6 +1559,20 @@ function App() {
                   <input
                     checked={debugEnabled}
                     onChange={(event) => setDebugEnabled(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span />
+                </label>
+              </div>
+              <div className="settings-row compact">
+                <span>流式输出</span>
+                <label className="switch">
+                  <input
+                    aria-label="流式输出"
+                    checked={streamingEnabled}
+                    onChange={(event) =>
+                      setStreamingEnabled(event.target.checked)
+                    }
                     type="checkbox"
                   />
                   <span />

@@ -37,6 +37,7 @@ type LegacyAssistant = Assistant & {
 type LegacySettings = Partial<AppSettings> & {
   activeModelRef?: ModelRef;
   themeMode?: AppSettings["themeMode"];
+  streamingEnabled?: boolean;
 };
 type SnapshotInput = Omit<
   Partial<LocalDataSnapshot>,
@@ -244,6 +245,8 @@ export const normalizeSnapshot = (
         firstAssistant?.id ??
         initialSnapshot.settings.editingAssistantId,
       themeMode: settings.themeMode ?? "system",
+      streamingEnabled:
+        settings.streamingEnabled ?? initialSnapshot.settings.streamingEnabled,
       debugEnabled:
         settings.debugEnabled ?? initialSnapshot.settings.debugEnabled,
       lastSuccessfulExportAt: settings.lastSuccessfulExportAt,

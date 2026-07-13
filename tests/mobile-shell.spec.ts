@@ -43,14 +43,20 @@ test("opens the mobile chat shell", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("supports basic mobile interactions and model switching", async ({
+test("supports basic mobile interactions, title editing, and model switching", async ({
   page,
 }) => {
   if (await page.getByLabel("打开对话列表").isVisible()) {
     await page.getByLabel("打开对话列表").click();
   }
   await page.getByLabel("新建对话").click();
+  await expect(page.locator(".conversation-rail")).not.toHaveClass(/open/);
   await expect(page.getByText("开始一个新对话")).toBeVisible();
+
+  await page.getByLabel("编辑标题").click();
+  await page.getByLabel("对话标题").fill("手机标题");
+  await page.getByLabel("保存标题").click();
+  await expect(page.getByText("手机标题")).toHaveCount(2);
 
   await page.getByLabel("选择助手").selectOption("research");
   await expect(page.getByLabel("选择助手")).toHaveValue("research");
@@ -71,6 +77,9 @@ test("supports basic mobile interactions and model switching", async ({
 
   await page.getByLabel("主题模式").selectOption("light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.getByLabel("流式输出")).toBeChecked();
+  await page.getByLabel("流式输出").uncheck({ force: true });
+  await expect(page.getByLabel("流式输出")).not.toBeChecked();
 
   await page.getByLabel("助手名称").fill("手机研究助手");
   await page.getByLabel("初始 Prompt").fill("手机端可编辑当前助手 prompt。");
@@ -99,9 +108,14 @@ test("verifies persistence and .mobilechat import/export on desktop", async ({
     "PC persistence verification runs on the desktop project.",
   );
 
+  await page.getByLabel("新建对话").click();
+  await page.getByLabel("编辑标题").click();
+  await page.getByLabel("对话标题").fill("PC 自定义标题");
+  await page.getByLabel("保存标题").click();
   await openSettings(page);
 
   await page.getByLabel("主题模式").selectOption("light");
+  await page.getByLabel("流式输出").uncheck({ force: true });
   await page.getByLabel("API Key").fill("desktop-local-key");
   await page.getByLabel("模型名称").fill("PC MNAPI High");
   await page.getByLabel("助手名称").fill("PC 持久化助手");
@@ -109,8 +123,12 @@ test("verifies persistence and .mobilechat import/export on desktop", async ({
   await expect(page.getByText("已保存")).toBeVisible({ timeout: 6000 });
 
   await page.reload();
+  await expect(
+    page.getByLabel("当前对话").getByText("PC 自定义标题"),
+  ).toBeVisible();
   await openSettings(page);
   await expect(page.getByLabel("主题模式")).toHaveValue("light");
+  await expect(page.getByLabel("流式输出")).not.toBeChecked();
   await expect(page.getByLabel("API Key")).toHaveValue("desktop-local-key");
   await expect(page.getByLabel("模型名称")).toHaveValue("PC MNAPI High");
   await expect(page.getByLabel("助手名称")).toHaveValue("PC 持久化助手");

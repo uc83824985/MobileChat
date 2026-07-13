@@ -22,6 +22,7 @@ describe("MobileChat persistence", () => {
 
     expect(snapshot.settings.activeAssistantId).toBe("architect");
     expect(snapshot.settings.themeMode).toBe("system");
+    expect(snapshot.settings.streamingEnabled).toBe(true);
     expect(snapshot.settings.activeModelRef.modelId).toBe("gpt-5.4-codex-high");
     expect(snapshot.apiProfiles).toHaveLength(1);
     expect(snapshot.apiProfiles[0]?.models.length).toBeGreaterThan(1);
@@ -38,6 +39,7 @@ describe("MobileChat persistence", () => {
         activeAssistantId: "research",
         editingAssistantId: "research",
         themeMode: "light",
+        streamingEnabled: false,
         activeModelRef: {
           apiProfileId: "mnapi",
           modelId: "gpt-5.4-mini",
@@ -68,6 +70,7 @@ describe("MobileChat persistence", () => {
 
     expect(restored.settings.activeAssistantId).toBe("research");
     expect(restored.settings.themeMode).toBe("light");
+    expect(restored.settings.streamingEnabled).toBe(false);
     expect(restored.settings.activeModelRef.modelId).toBe("gpt-5.4-mini");
     expect(restored.apiProfiles[0]?.apiKey).toBe("local-only-key");
     expect(

@@ -22,6 +22,19 @@ describe("App", () => {
     expect(screen.getByLabelText("调试诊断")).toBeInTheDocument();
   });
 
+  it("edits the active conversation title from the chat header", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByLabelText("新建对话"));
+    fireEvent.click(screen.getByLabelText("编辑标题"));
+    fireEvent.change(screen.getByLabelText("对话标题"), {
+      target: { value: "自定义标题" },
+    });
+    fireEvent.click(screen.getByLabelText("保存标题"));
+
+    expect(screen.getAllByText("自定义标题")).toHaveLength(2);
+  });
+
   it("creates a conversation and reports missing API key for the real request loop", async () => {
     render(<App />);
 
@@ -72,7 +85,7 @@ describe("App", () => {
     );
   });
 
-  it("opens settings and toggles theme mode", () => {
+  it("opens settings and toggles theme and streaming mode", () => {
     render(<App />);
 
     fireEvent.click(screen.getByText("设置"));
@@ -84,6 +97,10 @@ describe("App", () => {
       target: { value: "light" },
     });
     expect(document.documentElement.dataset.theme).toBe("light");
+
+    expect(screen.getByLabelText("流式输出")).toBeChecked();
+    fireEvent.click(screen.getByLabelText("流式输出"));
+    expect(screen.getByLabelText("流式输出")).not.toBeChecked();
 
     fireEvent.click(screen.getByLabelText("关闭设置"));
     expect(
