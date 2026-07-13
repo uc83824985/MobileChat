@@ -8,7 +8,7 @@
 
 ## 2. Domain model and local persistence
 
-- [ ] 2.1 Define versioned TypeScript domain types for API profiles, models, chat/utility assistants, bindings, conversations, messages, content parts, blobs, drafts, context checkpoints, display summaries, and settings
+- [ ] 2.1 Define versioned TypeScript domain types for API profiles, models, model pricing metadata, chat/utility assistants, bindings, conversations, messages, content parts, blobs, drafts, context checkpoints, display summaries, context budget reports, normalized usage stats, and settings
 - [ ] 2.2 Create the IndexedDB database schema, including immutable context-checkpoint storage, typed repository interfaces, transactions, and store indexes
 - [ ] 2.3 Implement schema-version metadata and an ordered migration runner with rollback-safe failure handling
 - [ ] 2.4 Implement ID, timestamp, validation, and reference-resolution utilities shared by repositories and imports
@@ -20,7 +20,7 @@
 - [ ] 3.1 Implement API-profile create, edit, enable, disable, and delete operations with nested model definitions
 - [ ] 3.2 Implement assistant create, edit, enable, disable, and delete operations with chat/utility kinds, utility roles, nested model bindings, and default-binding enforcement
 - [ ] 3.3 Implement binding resolution and invalid-reference reporting without deleting historical or disabled configuration
-- [ ] 3.4 Build the settings pages for API-profile details, model lists, assistant kind/utility role, identity, prompt, initial message, and model bindings
+- [ ] 3.4 Build the settings pages for API-profile details, model lists, optional context-window and pricing metadata, assistant kind/utility role, identity, prompt, initial message, and model bindings
 - [ ] 3.5 Add credential, endpoint, protocol, model-parameter, avatar, and prompt form validation with recoverable validation messages
 - [ ] 3.6 Build reusable active-chat-assistant and model-binding selectors for conversation creation and mid-conversation switching while excluding utility assistants from speaker selection
 
@@ -31,8 +31,9 @@
 - [ ] 4.3 Implement robust SSE parsing and normalized text-delta, completion, refusal, interruption, and error events
 - [ ] 4.4 Implement abort handling and ensure cancellation closes the stream and produces a persistent interrupted response state
 - [ ] 4.5 Implement API-profile/model connection testing with differentiated CORS, authentication, endpoint, protocol, and model-route diagnostics
-- [ ] 4.6 Add an optional provider-continuation capability probe that verifies unique-marker recall and does not treat accepted parameters or returned IDs alone as support
-- [ ] 4.7 Add adapter tests for fragmented SSE frames, unknown events, terminal errors, aborts, local stateless request construction, and false-positive continuation probes
+- [ ] 4.6 Normalize provider usage fields for input, output, total, cached input, cache writes, reasoning tokens, and raw provider usage when returned
+- [ ] 4.7 Ensure provider response IDs, provider conversation IDs, and continuation-looking fields are retained only as diagnostics and never used for first-release context construction
+- [ ] 4.8 Add adapter tests for fragmented SSE frames, unknown events, terminal errors, aborts, local stateless request construction, missing usage fields, cache-metric normalization, and ignored continuation fields
 
 ## 5. Conversation and message experience
 
@@ -42,10 +43,12 @@
 - [ ] 5.4 Implement draft persistence, send validation, optimistic user-message persistence, streamed assistant persistence, and terminal statuses
 - [ ] 5.5 Implement deterministic same-conversation context projection from the current chat prompt, latest valid checkpoint, and raw active-path tail after assistant switches
 - [ ] 5.6 Implement request-time conversation metadata construction that reads the latest title and checkpoint without adding or rewriting chat messages
-- [ ] 5.7 Implement assistant initial-message behavior and snapshot attribution for newly created conversations
-- [ ] 5.8 Implement copy, retry, stop, regenerate, user-message edit, branch creation, and active-path selection actions
-- [ ] 5.9 Handle missing/deleted active assistants or models by retaining history and requiring a valid replacement before sending
-- [ ] 5.10 Invalidate checkpoints whose covered boundary is not an ancestor of the selected active leaf and rebuild from local canonical messages
+- [ ] 5.7 Implement local deterministic algorithmic-anchor selection for pinned or keyword-matched original message spans without model rewriting
+- [ ] 5.8 Generate a context budget report for every request with estimated tokens and percentages by section and origin
+- [ ] 5.9 Implement assistant initial-message behavior and snapshot attribution for newly created conversations
+- [ ] 5.10 Implement copy, retry, stop, regenerate, user-message edit, branch creation, and active-path selection actions
+- [ ] 5.11 Handle missing/deleted active assistants or models by retaining history and requiring a valid replacement before sending
+- [ ] 5.12 Invalidate checkpoints whose covered boundary is not an ancestor of the selected active leaf and rebuild from local canonical messages
 
 ## 6. Search, titles, and context compaction
 
@@ -82,8 +85,9 @@
 ## 9. End-to-end verification and documentation
 
 - [ ] 9.1 Add component tests for settings CRUD, assistant kinds, assistant/model switching, dynamic title/checkpoint awareness, conversation management, message actions, search, and compaction states
-- [ ] 9.2 Add phone-viewport browser tests for first-run configuration, streaming chat, relaunch persistence, manual compact, archive/restore, and `.mobilechat` backup restore
-- [ ] 9.3 Verify keyboard, screen-reader labels, focus handling, reduced motion, touch targets, drawers, dialogs, and streaming announcements
-- [ ] 9.4 Verify installability, offline reading, service-worker updates, IndexedDB persistence, and local content preview on supported desktop and mobile browsers
-- [ ] 9.5 Perform a real direct-endpoint smoke test for Responses streaming and semantic provider-continuation support, documenting relay-specific compatibility observations separately from model-route failures
-- [ ] 9.6 Write README instructions for local development, GitHub Pages deployment, first-run API configuration, same-conversation memory and compaction, `.mobilechat` cross-device migration, supported protocol, and known mobile file limitations
+- [ ] 9.2 Add component tests for debug mode, context budget display, normalized usage display, cache unknown states, and credential redaction
+- [ ] 9.3 Add phone-viewport browser tests for first-run configuration, streaming chat, relaunch persistence, manual compact, diagnostics panel, archive/restore, and `.mobilechat` backup restore
+- [ ] 9.4 Verify keyboard, screen-reader labels, focus handling, reduced motion, touch targets, drawers, dialogs, and streaming announcements
+- [ ] 9.5 Verify installability, offline reading, service-worker updates, IndexedDB persistence, and local content preview on supported desktop and mobile browsers
+- [ ] 9.6 Perform a real direct-endpoint smoke test for Responses streaming, usage fields, cache metric availability, and local stateless context behavior, documenting relay-specific compatibility observations separately from model-route failures
+- [ ] 9.7 Write README instructions for local development, GitHub Pages deployment, first-run API configuration, same-conversation memory and compaction, debug diagnostics, `.mobilechat` cross-device migration, supported protocol, and known mobile file limitations

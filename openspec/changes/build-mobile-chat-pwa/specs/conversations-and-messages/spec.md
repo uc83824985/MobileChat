@@ -66,7 +66,7 @@ The system SHALL share the ordered user and assistant message context across ass
 - **THEN** the request includes prior conversational messages, excludes prior assistants' system prompts, and applies the newly selected assistant's prompt
 
 ### Requirement: Local single-conversation memory projection
-The system SHALL construct every request from the current chat assistant prompt, latest conversation metadata, latest valid context checkpoint, and active-path messages after that checkpoint, using local records as the source of truth.
+The system SHALL construct every request from the current chat assistant prompt, latest conversation metadata, latest valid context checkpoint, optional locally selected algorithmic anchors, and active-path messages after that checkpoint, using local records as the source of truth.
 
 #### Scenario: Continue without provider-side storage
 - **WHEN** a user continues a conversation through an endpoint that does not implement response storage
@@ -75,6 +75,21 @@ The system SHALL construct every request from the current chat assistant prompt,
 #### Scenario: Do not duplicate checkpoint-covered history
 - **WHEN** a valid checkpoint covers older active-path messages
 - **THEN** the request uses the checkpoint in place of those covered messages and does not send both the checkpoint and the full covered history
+
+#### Scenario: Add deterministic algorithmic anchors
+- **WHEN** local selection rules include a pinned message or a keyword-matched message span outside the raw tail
+- **THEN** the request may include that original span with its message reference and SHALL NOT rewrite it through a model before send
+
+### Requirement: Context budget report
+Every locally constructed request SHALL produce a context budget report with estimated tokens and percentages grouped by section and origin, including chat assistant prompt, application metadata, checkpoint summary, algorithmic anchors, user raw messages, assistant raw messages, and latest user input.
+
+#### Scenario: Show section proportions
+- **WHEN** a request is built for an active conversation
+- **THEN** the report contains estimated token totals and percentage shares for each included context section before the network request starts
+
+#### Scenario: Distinguish assistant participation
+- **WHEN** the report groups context by origin
+- **THEN** it separates current assistant prompt, historical assistant raw messages, and utility-assistant checkpoint summary instead of combining them into one assistant bucket
 
 ### Requirement: Conversation memory isolation
 The system SHALL NOT automatically read messages, summaries, checkpoints, or derived facts from another conversation when building a request.

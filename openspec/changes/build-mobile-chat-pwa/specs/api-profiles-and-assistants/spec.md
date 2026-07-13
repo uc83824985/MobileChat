@@ -8,11 +8,15 @@ The system SHALL allow a user to create, edit, disable, and delete API profiles 
 - **THEN** every model definition reuses that profile's endpoint, credential, and protocol without duplicating the credential
 
 ### Requirement: Configurable model definitions
-The system SHALL allow each API profile to define one or more models with stable local identifiers, provider model IDs, display names, enabled state, and default generation parameters.
+The system SHALL allow each API profile to define one or more models with stable local identifiers, provider model IDs, display names, enabled state, default generation parameters, optional context-window metadata, and optional pricing metadata for local estimates.
 
 #### Scenario: Disable a model without removing its history
 - **WHEN** a user disables a configured model that appears in historical message snapshots
 - **THEN** the model is unavailable for new selections while historical messages retain their recorded model information
+
+#### Scenario: Configure optional pricing for diagnostics
+- **WHEN** a user adds estimated pricing categories to a model definition
+- **THEN** budget diagnostics can calculate estimated costs for that model while chat sending remains possible if pricing metadata is absent
 
 ### Requirement: Assistant encapsulation
 The system SHALL allow a user to create, edit, disable, and delete assistants containing a kind, name, description, avatar, system prompt, optional initial message, and a list of model bindings.
@@ -60,9 +64,20 @@ The first release SHALL implement a minimal OpenAI-compatible Responses API adap
 - **WHEN** an enabled assistant model binding references an API profile configured for the initial Responses protocol
 - **THEN** the system sends the conversation through that adapter and streams supported response events
 
-### Requirement: Provider continuation is optional and verified
-The system SHALL NOT require provider-side response storage for conversation correctness, and any future provider continuation mode SHALL be enabled only after a probe proves that a later request can recall unique content solely through the returned continuation reference.
+### Requirement: Provider continuation is excluded from the first release
+The first release SHALL NOT use provider-side response storage, `previous_response_id`, provider conversation IDs, or any returned continuation reference when building chat context or resuming conversations.
 
-#### Scenario: Relay accepts but ignores a continuation parameter
-- **WHEN** a relay returns successful HTTP responses for state parameters but a recall probe does not preserve the unique prior content
-- **THEN** the system reports provider continuation as unsupported and continues using local stateless context
+#### Scenario: Ignore a returned continuation identifier
+- **WHEN** a provider response includes a response ID, conversation ID, or other continuation-looking field
+- **THEN** the system may retain it as raw diagnostics but builds the next request from local records only
+
+### Requirement: Provider usage normalization
+The initial adapter SHALL normalize provider usage data into local usage fields for input, output, total, cached input, cache writes, reasoning tokens, and raw provider usage when those values are returned by the endpoint.
+
+#### Scenario: Response includes cache usage
+- **WHEN** a completed response reports input tokens and cached input tokens
+- **THEN** the system stores both the normalized usage values and a cache-read hit rate calculated as cached input tokens divided by input tokens
+
+#### Scenario: Response omits usage data
+- **WHEN** a relay streams a successful response but omits usage or cache fields
+- **THEN** the system marks observed usage and cache metrics as unknown while preserving the completed chat response

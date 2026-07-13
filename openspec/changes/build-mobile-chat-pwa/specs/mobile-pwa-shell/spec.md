@@ -22,8 +22,19 @@ The system SHALL cache the static application shell and SHALL distinguish betwee
 - **THEN** locally stored settings and conversations remain readable and chat sending is disabled with a clear offline indication
 
 ### Requirement: Dedicated settings surface
-The system SHALL reserve a settings surface for API profiles, chat and utility assistants, context-compaction rules, data portability, appearance, and future application options.
+The system SHALL reserve a settings surface for API profiles, chat and utility assistants, context-compaction rules, diagnostics and debug mode, data portability, appearance, and future application options.
 
 #### Scenario: Open settings from a conversation
 - **WHEN** a user activates the settings control from the chat interface
 - **THEN** the system opens the settings surface without deleting or replacing the active conversation
+
+### Requirement: Developer debug mode
+The system SHALL provide a settings toggle for debug mode that defaults off and, when enabled, exposes developer diagnostics for request context composition, token-budget estimates, provider usage, cache metrics, compaction decisions, and adapter diagnostics.
+
+#### Scenario: Enable debug diagnostics
+- **WHEN** debug mode is enabled and a chat request completes
+- **THEN** the active conversation can show the latest context budget report, normalized provider usage, cache read/write metrics when available, and unsupported/unknown markers for fields the provider did not return
+
+#### Scenario: Redact credentials from diagnostics
+- **WHEN** debug diagnostics render raw adapter or request metadata
+- **THEN** API keys and authorization headers are redacted or omitted

@@ -15,6 +15,7 @@ The initial endpoint already known to work exposes an OpenAI-compatible Response
 - Allow assistant/model switching inside a shared conversation context with accurate per-response attribution.
 - Preserve robust memory within each conversation using local canonical messages and compacted context checkpoints, independently of provider-side response storage.
 - Provide local conversation management, metadata-only history search, in-conversation content search, and configurable context compaction.
+- Expose optional debug diagnostics for context composition, token budget estimates, provider usage, and cache metrics.
 - Establish versioned content-part and persistence schemas suitable for later multimodal expansion.
 - Deploy repeatably to GitHub Pages from this repository.
 
@@ -74,6 +75,8 @@ type ApiProfile = {
 
 If two models need different credentials, headers, URLs, or protocols, they belong to different API profiles. Updating a credential updates every assistant binding that references it.
 
+Each model definition may include optional context-window metadata and pricing categories for uncached input, cached input, cache writes, output, and reasoning tokens. These values are user-maintained estimates used only for local budget display; they are not required to send chat requests.
+
 ### 4. Assistants aggregate model bindings
 
 Do not persist a standalone AssistantRoute entity. An `Assistant` owns identity and prompt data plus model references. Its kind also determines whether it can speak in the visible conversation or only perform a semantic utility operation:
@@ -130,7 +133,7 @@ Snapshots never include API keys. The message snapshot is immutable after the re
 
 ### 6. Local single-conversation memory and current-assistant instructions
 
-Canonical conversation memory consists of locally persisted messages on the active path. The model has no durable memory of a prior browser request, and provider response IDs are neither portable across profiles nor reliable across compatible relays. The local database is therefore the source of truth even if a future adapter can use a provider-side continuation ID as an optimization.
+Canonical conversation memory consists of locally persisted messages on the active path. The model has no durable memory of a prior browser request, and provider response IDs are neither portable across profiles nor reliable across compatible relays. The local database is therefore the source of truth. Returned provider IDs may be retained as diagnostics, but they are not part of the first-release context mechanism.
 
 For every chat request, the request builder produces a deterministic `ConversationContextProjection` in this order:
 
@@ -138,15 +141,18 @@ For every chat request, the request builder produces a deterministic `Conversati
 current chat assistant prompt
 current conversation metadata, including the latest title
 latest valid context checkpoint summary
+optional locally selected algorithmic anchors
 raw active-path messages after the checkpoint boundary
 latest user message
 ```
 
-The context checkpoint replaces the covered older messages in the model input; it is not appended in addition to the full covered history. Covered messages remain in IndexedDB and remain visible, searchable inside the open conversation, exportable, and available for rebuilding a checkpoint. Only the currently selected chat assistant's system prompt is applied. Earlier assistants' visible messages remain ordinary shared context, while their old system prompts are not replayed.
+The context checkpoint replaces the covered older messages in the model input; it is not appended in addition to the full covered history. Covered messages remain in IndexedDB and remain visible, searchable inside the open conversation, exportable, and available for rebuilding a checkpoint. Optional algorithmic anchors are deterministic local selections of existing message spans, such as pinned messages or keyword matches, and include source message IDs; they are not model-generated rewrites. Only the currently selected chat assistant's system prompt is applied. Earlier assistants' visible messages remain ordinary shared context, while their old system prompts are not replayed.
 
 The latest title and checkpoint summary are serialized as clearly delimited application-owned context, not executable instructions. The title is deliberately kept outside the checkpoint, so renaming a conversation updates the next request without invalidating or regenerating the checkpoint. Empty fields are omitted, and no synthetic synchronization message is persisted.
 
 Messages include `parentMessageId` and the conversation records the active leaf. Edit-and-resubmit, regeneration, or active-branch changes invalidate a checkpoint when its covered boundary is not an ancestor of the new active leaf. Invalid checkpoints remain auditable but are not used; the application rebuilds from the active raw path until compaction succeeds. No context is silently borrowed from another conversation.
+
+Each projection also produces a `ContextBudgetReport` before network send. It records estimated tokens and percentages by section and origin, including chat assistant prompt, application metadata, utility-assistant checkpoint summary, algorithmic anchors, user raw messages, assistant raw messages, and latest user input. Estimates are used for local budget decisions and debug display; provider usage returned after the response is stored separately as observed data.
 
 ### 7. Protocol adapter boundary with one initial implementation
 
@@ -161,9 +167,23 @@ interface ChatProtocolAdapter {
 }
 ```
 
-Implement only `openai-responses` initially. It sends the local context projection, the current assistant instructions, `stream: true`, and `store: false`, then normalizes output-text deltas, completion, refusal, and error events. Provider-specific events not understood by the adapter are ignored only when they do not contain user-visible output or terminal errors.
+Implement only `openai-responses` initially. It sends the local context projection, the current assistant instructions, `stream: true`, and `store: false`, then normalizes output-text deltas, completion, refusal, error events, and usage events when present. Provider-specific events not understood by the adapter are ignored only when they do not contain user-visible output, terminal errors, or usage data.
 
-The adapter capability model may later expose provider continuation modes such as `previous_response_id` or provider conversation IDs, but they are never the only stored representation of a conversation. A capability probe must verify semantic continuity, not merely a 2xx response or the presence of an ID. Switching API profile, model, assistant, or active branch can discard provider continuation state and rebuild the request from the local projection.
+The first release does not use provider continuation modes such as `previous_response_id` or provider conversation IDs. The adapter contract may preserve raw diagnostic fields for future analysis, but conversation correctness, resume, export, import, branch changes, assistant switching, and context compaction all use local records only.
+
+The adapter normalizes provider usage into a `UsageStats` shape when available:
+
+```text
+inputTokens
+outputTokens
+totalTokens
+cachedInputTokens
+cacheWriteTokens
+reasoningTokens
+rawProviderUsage
+```
+
+Cache read hit rate is calculated only after a response completes or emits final usage and the denominator is greater than zero: `cachedInputTokens / inputTokens`. Rolling conversation cache hit rate uses `sum(cachedInputTokens) / sum(inputTokens)` over the selected message range. Cache write ratio uses `cacheWriteTokens / inputTokens` when the provider reports write tokens and input tokens. If the endpoint omits usage or cache fields, the metric is marked unsupported or unknown instead of inferred from the local estimate.
 
 Compatibility observation from 2026-07-13: `https://api.mnapi.com/v1` returned 200 for a baseline `gpt-5.4` Responses request and also accepted `store: true` plus `previous_response_id`. However, retrieving the created Response returned 404 and the chained request did not recall a unique marker from the stored response. MobileChat therefore treats provider state chaining on this relay as unsupported. The launcher-configured `gpt-5.4-codex-high` was not present in the relay's model listing and returned 503, which is a separate model-route issue rather than evidence about state support.
 
@@ -200,7 +220,15 @@ Failure retains the prior valid checkpoint and completed chat response, records 
 
 This is the only Memory mechanism in the first release: same-conversation canonical messages plus derived checkpoints and a recent raw tail. There is no user-level, assistant-level, project-level, or cross-conversation memory record.
 
-### 11. Versioned compressed archive as the portability boundary
+### 11. Debug mode and context budget dashboard
+
+Debug mode is an application setting that defaults off. When enabled, the conversation UI exposes a developer diagnostics panel for the latest request and response. It shows the pre-send `ContextBudgetReport`, post-response `UsageStats`, cache read/write rates where available, compaction decisions, active checkpoint identity, raw-tail boundaries, algorithmic anchor message IDs, and adapter diagnostics. API keys and credential headers are never rendered in debug output.
+
+The dashboard distinguishes estimated, observed, and unsupported values. Estimated values come from the local projection builder before the request. Observed values come from provider usage fields after or during the response stream. Unsupported values are displayed when the provider or relay does not expose enough information. Cost estimates are optional and require configured per-model price categories for uncached input, cached input, cache writes, output, and reasoning tokens where applicable; they are labelled estimates, not invoices.
+
+Prompt-cache planning is local and conservative. Static prefix sections such as assistant instructions and stable formatting are placed before variable metadata and raw messages to improve possible provider cache reuse, but the UI reports actual cache hit rate only from returned usage fields.
+
+### 12. Versioned compressed archive as the portability boundary
 
 The portable format is a ZIP-compatible file with a `.mobilechat` extension rather than a raw IndexedDB, browser-profile, or SQLite file. Browser database files are implementation-specific and cannot be restored reliably across browsers. A complete archive contains:
 
@@ -217,15 +245,15 @@ Import reads the archive into an isolated representation, checks ZIP entry safet
 
 Cross-device access is a manual export-transfer-import workflow through the phone or desktop file system, cloud drive, or another user-chosen transport. It does not imply account synchronization or a MobileChat server. A plain JSON diagnostic export may be offered separately, but `.mobilechat` is the normative complete-backup format.
 
-### 12. Static deployment and verification
+### 13. Static deployment and verification
 
-Use GitHub Actions to build and publish the static artifact to GitHub Pages. Verification includes unit tests for adapters, migrations, context projection, compaction thresholds, checkpoint validity, archive round trips, and search scope; component tests for conversation and settings flows; and browser tests at representative phone viewport sizes.
+Use GitHub Actions to build and publish the static artifact to GitHub Pages. Verification includes unit tests for adapters, migrations, context projection, budget reports, usage normalization, compaction thresholds, checkpoint validity, archive round trips, and search scope; component tests for conversation, diagnostics, and settings flows; and browser tests at representative phone viewport sizes.
 
 ## Risks / Trade-offs
 
 - **Direct endpoint CORS varies by provider** → Connection testing reports CORS separately and the first release documents that browser-compatible endpoints are required.
 - **Provider Responses implementations may differ** → Normalize events through one adapter and preserve diagnostic details for unsupported terminal responses.
-- **A relay may accept state parameters but ignore their semantics** → Keep `store: false` local projection as the baseline and require a recall-based capability probe before enabling provider continuation.
+- **A relay may accept state parameters but ignore their semantics** → Keep `store: false` local projection as the only first-release context mechanism and treat provider continuation fields as diagnostics.
 - **Browser storage can be evicted or cleared** → Provide visible backup/export controls and schema-versioned imports.
 - **Large image/file blobs can exceed quota or backup size** → Check storage estimates, enforce configurable attachment limits, and warn before large imports or exports.
 - **PWA updates can leave an old client open** → Use versioned caches and prompt the user to reload after a new service worker is ready.
