@@ -1,9 +1,9 @@
 import {
   Archive,
   Bot,
-  ChevronsUpDown,
   MessageSquarePlus,
   PanelLeft,
+  Plus,
   Search,
   Send,
   Settings,
@@ -35,10 +35,49 @@ type Message = {
   status?: "streaming" | "stopped" | "complete";
 };
 
+type AssistantKind = "chat" | "utility";
+
 type Assistant = {
   id: string;
-  label: string;
+  name: string;
+  description: string;
+  kind: AssistantKind;
+  apiProfileName: string;
   model: string;
+  prompt: string;
+  initialMessage: string;
+  enabled: boolean;
+};
+
+type AssistantFieldKey =
+  | "name"
+  | "description"
+  | "kind"
+  | "apiProfileName"
+  | "model"
+  | "prompt"
+  | "initialMessage"
+  | "enabled";
+
+type AssistantField = {
+  key: AssistantFieldKey;
+  label: string;
+  control: "text" | "textarea" | "select" | "checkbox";
+  helper?: string;
+  placeholder?: string;
+  options?: Array<{ label: string; value: string }>;
+};
+
+const defaultAssistant: Assistant = {
+  id: "architect",
+  name: "架构助手",
+  description: "用于架构讨论、技术路线确认和上下文机制设计。",
+  kind: "chat",
+  apiProfileName: "MNAPI",
+  model: "gpt-5.4",
+  prompt: "你是一个务实的软件架构助手，优先给出可落地的设计。",
+  initialMessage: "我会根据当前对话上下文协助推进实现。",
+  enabled: true,
 };
 
 const initialConversations: Conversation[] = [
@@ -93,9 +132,84 @@ const initialMessages: Message[] = [
   },
 ];
 
-const assistants: Assistant[] = [
-  { id: "architect", label: "架构助手", model: "gpt-5.4" },
-  { id: "compact", label: "压缩助手", model: "gpt-5.4-mini" },
+const initialAssistants: Assistant[] = [
+  defaultAssistant,
+  {
+    id: "research",
+    name: "研究助手",
+    description: "用于资料整理、方案比较和长问题拆解。",
+    kind: "chat",
+    apiProfileName: "MNAPI",
+    model: "gpt-5.4-mini",
+    prompt: "你是研究型助手，先澄清事实边界，再给出结论。",
+    initialMessage: "我可以帮助梳理资料和比较方案。",
+    enabled: true,
+  },
+  {
+    id: "compact",
+    name: "压缩助手",
+    description: "功能助手，用于后续上下文压缩和摘要生成。",
+    kind: "utility",
+    apiProfileName: "MNAPI",
+    model: "gpt-5.4-mini",
+    prompt: "你只输出结构化摘要，不参与普通聊天。",
+    initialMessage: "",
+    enabled: true,
+  },
+];
+
+const assistantFields: AssistantField[] = [
+  {
+    key: "name",
+    label: "助手名称",
+    control: "text",
+    placeholder: "例如：架构助手",
+    helper: "显示在聊天页和消息来源快照中的名称。",
+  },
+  {
+    key: "description",
+    label: "描述",
+    control: "text",
+    placeholder: "说明这个助手适合处理什么任务",
+  },
+  {
+    key: "kind",
+    label: "用途",
+    control: "select",
+    options: [
+      { label: "聊天助手", value: "chat" },
+      { label: "功能助手", value: "utility" },
+    ],
+  },
+  {
+    key: "apiProfileName",
+    label: "API Profile",
+    control: "text",
+    placeholder: "例如：MNAPI",
+  },
+  {
+    key: "model",
+    label: "模型",
+    control: "text",
+    placeholder: "例如：gpt-5.4",
+  },
+  {
+    key: "prompt",
+    label: "初始 Prompt",
+    control: "textarea",
+    helper: "仅作用于该助手；对话上下文仍由本地共享。",
+  },
+  {
+    key: "initialMessage",
+    label: "初始消息",
+    control: "textarea",
+    helper: "后续新建对话时可用于助手开场白。",
+  },
+  {
+    key: "enabled",
+    label: "启用",
+    control: "checkbox",
+  },
 ];
 
 const diagnostics = [
@@ -114,9 +228,15 @@ function App() {
   const [conversations, setConversations] =
     useState<Conversation[]>(initialConversations);
   const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [assistants, setAssistants] = useState<Assistant[]>(initialAssistants);
   const [activeConversationId, setActiveConversationId] =
     useState("local-context");
-  const [activeAssistantIndex, setActiveAssistantIndex] = useState(0);
+  const [activeAssistantId, setActiveAssistantId] = useState(
+    defaultAssistant.id,
+  );
+  const [editingAssistantId, setEditingAssistantId] = useState(
+    defaultAssistant.id,
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [debugEnabled, setDebugEnabled] = useState(true);
@@ -126,7 +246,19 @@ function App() {
   const [pwaNotice, setPwaNotice] = useState<PwaNotice>(null);
   const responseTimerRef = useRef<number | null>(null);
 
-  const activeAssistant = assistants[activeAssistantIndex];
+  const activeAssistant = useMemo(
+    () =>
+      assistants.find((assistant) => assistant.id === activeAssistantId) ??
+      assistants[0] ??
+      defaultAssistant,
+    [activeAssistantId, assistants],
+  );
+  const editingAssistant = useMemo(
+    () =>
+      assistants.find((assistant) => assistant.id === editingAssistantId) ??
+      activeAssistant,
+    [activeAssistant, editingAssistantId, assistants],
+  );
   const activeConversation = useMemo(
     () =>
       conversations.find(
@@ -157,6 +289,13 @@ function App() {
         .includes(keyword);
     });
   }, [conversationSearch, conversations]);
+
+  const chatAssistantCount = assistants.filter(
+    (assistant) => assistant.kind === "chat",
+  ).length;
+  const utilityAssistantCount = assistants.filter(
+    (assistant) => assistant.kind === "utility",
+  ).length;
 
   useEffect(() => {
     const showOfflineReady = () => setPwaNotice("offline-ready");
@@ -245,6 +384,44 @@ function App() {
     setActiveConversationId(fallbackConversation.id);
   };
 
+  const openSettings = () => {
+    setEditingAssistantId(activeAssistant.id);
+    setDrawerOpen(false);
+    setSettingsOpen(true);
+  };
+
+  const createAssistant = () => {
+    const nextAssistant: Assistant = {
+      id: createId("assistant"),
+      name: `新助手 ${assistants.length + 1}`,
+      description: "通过详情面板编辑这个助手。",
+      kind: "chat",
+      apiProfileName: activeAssistant.apiProfileName,
+      model: activeAssistant.model,
+      prompt: "",
+      initialMessage: "",
+      enabled: true,
+    };
+
+    setAssistants((current) => [...current, nextAssistant]);
+    setActiveAssistantId(nextAssistant.id);
+    setEditingAssistantId(nextAssistant.id);
+  };
+
+  const updateAssistantField = (
+    assistantId: string,
+    key: AssistantFieldKey,
+    value: string | boolean,
+  ) => {
+    setAssistants((current) =>
+      current.map((assistant) =>
+        assistant.id === assistantId
+          ? { ...assistant, [key]: value }
+          : assistant,
+      ),
+    );
+  };
+
   const stopResponse = (replacementText = "已停止生成。") => {
     if (!pendingMessageId) {
       return;
@@ -284,7 +461,7 @@ function App() {
       id: createId("assistant"),
       conversationId: activeConversation.id,
       role: "assistant",
-      label: `${activeAssistant.label} · ${activeAssistant.model}`,
+      label: `${activeAssistant.name} · ${activeAssistant.model}`,
       text: "正在生成模拟回复……",
       status: "streaming",
     };
@@ -411,7 +588,7 @@ function App() {
             <Archive size={18} />
             归档当前
           </button>
-          <button type="button" onClick={() => setSettingsOpen(true)}>
+          <button type="button" onClick={openSettings}>
             <Settings size={18} />
             设置
           </button>
@@ -432,19 +609,24 @@ function App() {
             <p>{activeConversation?.title ?? "未选择对话"}</p>
             <span>{activeConversation?.summary ?? "请新建或选择一个对话"}</span>
           </div>
-          <button
-            className="assistant-switch"
-            type="button"
-            onClick={() =>
-              setActiveAssistantIndex(
-                (current) => (current + 1) % assistants.length,
-              )
-            }
-          >
+          <label className="assistant-picker">
             <Bot size={18} />
-            {activeAssistant.label}
-            <ChevronsUpDown size={16} />
-          </button>
+            <span className="sr-only">选择助手</span>
+            <select
+              aria-label="选择助手"
+              value={activeAssistant.id}
+              onChange={(event) => {
+                setActiveAssistantId(event.target.value);
+                setEditingAssistantId(event.target.value);
+              }}
+            >
+              {assistants.map((assistant) => (
+                <option key={assistant.id} value={assistant.id}>
+                  {assistant.name}
+                </option>
+              ))}
+            </select>
+          </label>
         </header>
 
         <div className="message-thread">
@@ -543,8 +725,9 @@ function App() {
                 ×
               </button>
             </header>
-            <div className="settings-list">
-              <div className="settings-row">
+
+            <section className="settings-summary" aria-label="设置概览">
+              <div className="settings-row compact">
                 <span>调试模式</span>
                 <label className="switch">
                   <input
@@ -555,23 +738,181 @@ function App() {
                   <span />
                 </label>
               </div>
-              <div className="settings-row">
+              <div className="settings-row compact">
                 <span>API Profiles</span>
                 <strong>1</strong>
               </div>
-              <div className="settings-row">
+              <div className="settings-row compact">
                 <span>聊天助手</span>
-                <strong>{assistants.length}</strong>
+                <strong>{chatAssistantCount}</strong>
               </div>
-              <div className="settings-row">
-                <span>当前助手</span>
-                <strong>{activeAssistant.label}</strong>
-              </div>
-              <div className="settings-row">
+              <div className="settings-row compact">
                 <span>功能助手</span>
-                <strong>1</strong>
+                <strong>{utilityAssistantCount}</strong>
               </div>
-            </div>
+            </section>
+
+            <section className="settings-layout">
+              <aside className="assistant-directory" aria-label="助手列表">
+                <div className="directory-header">
+                  <div>
+                    <p className="eyebrow">Assistants</p>
+                    <h3>助手</h3>
+                  </div>
+                  <button type="button" onClick={createAssistant}>
+                    <Plus size={16} />
+                    新增
+                  </button>
+                </div>
+
+                <label className="assistant-config-select">
+                  <span>当前编辑</span>
+                  <select
+                    aria-label="设置中选择助手"
+                    value={editingAssistant.id}
+                    onChange={(event) =>
+                      setEditingAssistantId(event.target.value)
+                    }
+                  >
+                    {assistants.map((assistant) => (
+                      <option key={assistant.id} value={assistant.id}>
+                        {assistant.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="assistant-card-list">
+                  {assistants.map((assistant) => (
+                    <button
+                      className={`assistant-card ${
+                        assistant.id === editingAssistant.id ? "selected" : ""
+                      }`}
+                      key={assistant.id}
+                      type="button"
+                      onClick={() => setEditingAssistantId(assistant.id)}
+                    >
+                      <span>{assistant.name}</span>
+                      <small>
+                        {assistant.kind === "chat" ? "聊天助手" : "功能助手"} ·{" "}
+                        {assistant.model}
+                      </small>
+                    </button>
+                  ))}
+                </div>
+              </aside>
+
+              <section className="assistant-detail" aria-label="助手详情">
+                <header>
+                  <div>
+                    <p className="eyebrow">Details</p>
+                    <h3>{editingAssistant.name}</h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveAssistantId(editingAssistant.id)}
+                  >
+                    设为当前
+                  </button>
+                </header>
+
+                <div className="reflected-fields">
+                  {assistantFields.map((field) => {
+                    const value = editingAssistant[field.key];
+
+                    if (field.control === "checkbox") {
+                      return (
+                        <label
+                          className="detail-field checkbox-field"
+                          key={field.key}
+                        >
+                          <span>{field.label}</span>
+                          <input
+                            aria-label={field.label}
+                            checked={Boolean(value)}
+                            type="checkbox"
+                            onChange={(event) =>
+                              updateAssistantField(
+                                editingAssistant.id,
+                                field.key,
+                                event.target.checked,
+                              )
+                            }
+                          />
+                        </label>
+                      );
+                    }
+
+                    if (field.control === "select") {
+                      return (
+                        <label className="detail-field" key={field.key}>
+                          <span>{field.label}</span>
+                          <select
+                            aria-label={field.label}
+                            value={String(value)}
+                            onChange={(event) =>
+                              updateAssistantField(
+                                editingAssistant.id,
+                                field.key,
+                                event.target.value,
+                              )
+                            }
+                          >
+                            {field.options?.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                          {field.helper ? <small>{field.helper}</small> : null}
+                        </label>
+                      );
+                    }
+
+                    if (field.control === "textarea") {
+                      return (
+                        <label className="detail-field" key={field.key}>
+                          <span>{field.label}</span>
+                          <textarea
+                            aria-label={field.label}
+                            placeholder={field.placeholder}
+                            rows={field.key === "prompt" ? 4 : 3}
+                            value={String(value)}
+                            onChange={(event) =>
+                              updateAssistantField(
+                                editingAssistant.id,
+                                field.key,
+                                event.target.value,
+                              )
+                            }
+                          />
+                          {field.helper ? <small>{field.helper}</small> : null}
+                        </label>
+                      );
+                    }
+
+                    return (
+                      <label className="detail-field" key={field.key}>
+                        <span>{field.label}</span>
+                        <input
+                          aria-label={field.label}
+                          placeholder={field.placeholder}
+                          value={String(value)}
+                          onChange={(event) =>
+                            updateAssistantField(
+                              editingAssistant.id,
+                              field.key,
+                              event.target.value,
+                            )
+                          }
+                        />
+                        {field.helper ? <small>{field.helper}</small> : null}
+                      </label>
+                    );
+                  })}
+                </div>
+              </section>
+            </section>
           </section>
         </div>
       ) : null}

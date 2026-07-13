@@ -47,4 +47,35 @@ describe("App", () => {
       screen.queryByRole("dialog", { name: "设置" }),
     ).not.toBeInTheDocument();
   });
+
+  it("selects and edits assistants through reflected settings fields", () => {
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("选择助手"), {
+      target: { value: "research" },
+    });
+
+    expect(screen.getByLabelText("选择助手")).toHaveValue("research");
+
+    fireEvent.click(screen.getByText("设置"));
+
+    expect(screen.getByLabelText("设置中选择助手")).toHaveValue("research");
+
+    fireEvent.change(screen.getByLabelText("助手名称"), {
+      target: { value: "移动助手" },
+    });
+    fireEvent.change(screen.getByLabelText("初始 Prompt"), {
+      target: { value: "移动端编辑后的 prompt" },
+    });
+
+    expect(screen.getByLabelText("选择助手")).toHaveDisplayValue("移动助手");
+    expect(screen.getByLabelText("初始 Prompt")).toHaveValue(
+      "移动端编辑后的 prompt",
+    );
+
+    fireEvent.click(screen.getByText("新增"));
+    expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
+      "新助手 4",
+    );
+  });
 });
