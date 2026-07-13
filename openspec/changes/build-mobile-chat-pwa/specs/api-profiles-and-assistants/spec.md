@@ -64,6 +64,32 @@ The first release SHALL implement a minimal OpenAI-compatible Responses API adap
 - **WHEN** an enabled assistant model binding references an API profile configured for the initial Responses protocol
 - **THEN** the system sends the conversation through that adapter and streams supported response events
 
+#### Scenario: Relay buffers a streaming request
+- **WHEN** the user enables streaming but a compatible relay returns a completed JSON response instead of server-sent events
+- **THEN** the system parses the JSON response, stores the completed assistant message, and records that true incremental streaming was not observed
+
+### Requirement: Explicit hosted tool capabilities
+The system SHALL treat web search and other hosted provider tools as explicit capabilities of the selected protocol/profile/model rather than assuming that a prompt can make the model access the internet.
+
+#### Scenario: Enable web search for a Responses-compatible route
+- **WHEN** a user enables web access for a model binding whose adapter supports hosted search
+- **THEN** the request includes the adapter-specific tool configuration, such as a Responses `tools` entry for `web_search`, and stores any returned search/citation diagnostics without making them part of local memory
+
+#### Scenario: Web search unsupported by the selected route
+- **WHEN** a user sends a request that requires web access through a profile, model, or protocol that does not declare search support
+- **THEN** the system reports the unsupported capability before or during send instead of silently relying on the model to browse
+
+### Requirement: Explicit multimodal send capabilities
+The system SHALL treat image, file, and other non-text content as adapter-declared capabilities and SHALL serialize content parts only when the selected adapter/profile/model can accept them.
+
+#### Scenario: Send an image-capable draft
+- **WHEN** a draft contains an image URL or local image content part and the selected model binding declares image-input support
+- **THEN** the request builder serializes the image using the adapter's expected content-part shape while preserving the local generic message record
+
+#### Scenario: Multimodal input unsupported by route
+- **WHEN** a draft contains an image or file content part but the active route does not declare support for that part type
+- **THEN** the system blocks sending with a clear compatibility message and does not silently omit the content
+
 ### Requirement: Provider continuation is excluded from the first release
 The first release SHALL NOT use provider-side response storage, `previous_response_id`, provider conversation IDs, or any returned continuation reference when building chat context or resuming conversations.
 

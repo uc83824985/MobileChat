@@ -9,7 +9,8 @@
 ## Current implementation notes
 
 - 2026-07-13: Implemented a first persistence/config/API slice that is intentionally narrower than several full tasks below: normalized full-snapshot `MobileChatDB` save/load, credential-free `.mobilechat` import/export, light/dark/system theme setting, editable API Profiles with nested model definitions, assistant model bindings, chat-page assistant/model selectors, direct title editing, and a settings-toggleable `store:false` Responses request loop with SSE text-delta streaming.
-- The full task checklist remains open where the spec still requires dirty-record repositories, endpoint validation, pricing metadata, utility roles, checkpoint execution, deletion flows, merge import, complete context projection, and full streaming event/error coverage beyond the current text-delta path.
+- 2026-07-13: Follow-up UI/API hardening added visible model-side cards for every configured model, archived-conversation browsing/search/restore, message retry/delete actions, cache-only post-send usage display, and JSON fallback when a `stream:true` relay returns a buffered non-SSE response.
+- The full task checklist remains open where the spec still requires dirty-record repositories, endpoint validation, pricing metadata, utility roles, checkpoint execution, confirmed conversation deletion flows, merge import, complete context projection, hosted tool capability settings such as web search, multimodal content sending, and full streaming event/error coverage beyond the current text-delta path.
 
 ## 2. Domain model and local persistence
 
@@ -40,11 +41,12 @@
 - [ ] 4.6 Normalize provider usage fields for input, output, total, cached input, cache writes, reasoning tokens, and raw provider usage when returned
 - [ ] 4.7 Ensure provider response IDs, provider conversation IDs, and continuation-looking fields are retained only as diagnostics and never used for first-release context construction
 - [ ] 4.8 Add adapter tests for fragmented SSE frames, unknown events, terminal errors, aborts, local stateless request construction, missing usage fields, cache-metric normalization, and ignored continuation fields
+- [ ] 4.9 Add explicit provider capability settings for hosted web search, image/file input, and other tools; ensure the request builder sends only capabilities supported by the selected protocol/profile/model and reports unsupported combinations before sending
 
 ## 5. Conversation and message experience
 
 - [ ] 5.1 Implement conversation create, open, continue, rename, active-selection update, archive, unarchive, and confirmed permanent deletion services
-- [ ] 5.2 Build the active conversation screen, mobile conversation drawer, archived view, and empty/new-conversation states
+- [x] 5.2 Build the active conversation screen, mobile conversation drawer, archived view, and empty/new-conversation states
 - [ ] 5.3 Render ordered user and assistant messages with role labels, timestamps, content parts, and per-response assistant/model snapshots
 - [ ] 5.4 Implement draft persistence, send validation, optimistic user-message persistence, streamed assistant persistence, and terminal statuses
 - [ ] 5.5 Implement deterministic same-conversation context projection from the current chat prompt, latest valid checkpoint, and raw active-path tail after assistant switches

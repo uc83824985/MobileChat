@@ -173,6 +173,10 @@ interface ChatProtocolAdapter {
 
 Implement only `openai-responses` initially. It sends the local context projection, the current assistant instructions, `stream: true`, and `store: false`, then normalizes output-text deltas, completion, refusal, error events, and usage events when present. Provider-specific events not understood by the adapter are ignored only when they do not contain user-visible output, terminal errors, or usage data.
 
+Hosted provider tools are not inferred from prompt text. Web access is represented as an explicit route capability and request option. For an OpenAI-compatible Responses route this means adding an adapter-owned tool entry such as `tools: [{ type: "web_search" }]` when enabled and supported by the selected model route. If the gateway exposes a different flag, the API Profile or model definition must describe that provider-specific request shape. Returned search calls, opened-page diagnostics, and citations are display/debug data; they do not replace local conversation memory.
+
+Streaming support is also observed at the adapter boundary. The UI may request `stream: true`, but a relay can still buffer and return one JSON response. In that case the adapter parses the completed JSON response and records that true SSE deltas were not observed, because the browser client cannot force incremental rendering if the gateway does not flush SSE chunks.
+
 The first release does not use provider continuation modes such as `previous_response_id` or provider conversation IDs. The adapter contract may preserve raw diagnostic fields for future analysis, but conversation correctness, resume, export, import, branch changes, assistant switching, and context compaction all use local records only.
 
 The adapter normalizes provider usage into a `UsageStats` shape when available:
@@ -195,7 +199,7 @@ Compatibility observation from 2026-07-13: `https://api.mnapi.com/v1` returned 2
 
 Messages use ordered `contents` rather than a single provider payload. Initial part types include text plus metadata-bearing local image/file references. Binary data is stored once in a `blobs` store and referenced by content parts; previews use temporary object URLs.
 
-The initial protocol adapter guarantees text. A draft containing non-text parts can be previewed and persisted, but can be sent only when the active adapter declares support for those part types. This prevents accidental omission. Backup export stores selected blob records as archive entries instead of embedding large binary payloads in JSON.
+The initial protocol adapter guarantees text. A draft containing non-text parts can be previewed and persisted, but can be sent only when the active adapter declares support for those part types. For OpenAI-compatible image input this is expected to serialize as image content parts such as image URLs or uploaded/base64 image data, depending on the provider and gateway. This prevents accidental omission. Backup export stores selected blob records as archive entries instead of embedding large binary payloads in JSON.
 
 Writable file handles are never required by the domain model. If a supported browser grants a persistent writable handle, it is stored as optional capability metadata and accessed behind an experimental feature flag.
 

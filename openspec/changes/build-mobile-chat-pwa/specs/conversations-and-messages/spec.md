@@ -116,6 +116,14 @@ The system SHALL display supported response text incrementally and SHALL allow t
 ### Requirement: Message actions
 The system SHALL support copying message text, retrying a failed or interrupted assistant response, regenerating an assistant response, and editing a prior user message before resubmission.
 
+#### Scenario: Retry an assistant response
+- **WHEN** a user retries an assistant response
+- **THEN** the system keeps the messages before that response, removes that response and later messages from the active path, and regenerates using the current assistant and model selection
+
+#### Scenario: Delete a single message
+- **WHEN** a user deletes a message
+- **THEN** the message is removed from the local conversation record and subsequent context construction uses the remaining ordered messages
+
 #### Scenario: Edit and resubmit a user message
 - **WHEN** a user edits an earlier user message and confirms resubmission
 - **THEN** the system preserves a valid ordered conversation path and generates a new response using the active assistant and model

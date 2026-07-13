@@ -9,6 +9,7 @@ Date: 2026-07-13
 - Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, backup, theme, and streaming controls.
 - The app has a minimal OpenAI-compatible Responses request loop. Without an API key it shows a local configuration error; with an API key it sends `POST {baseUrl}/responses` using `store:false`. Streaming mode uses SSE text deltas when the gateway truly streams; if a `stream:true` request is buffered into JSON, the client falls back to one-shot JSON parsing.
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
+- Web access and multimodal input are not yet wired into the MobileChat request builder. They must be implemented as explicit adapter/profile/model capabilities rather than prompt-only expectations.
 
 ## Implemented response to mobile feedback
 
@@ -67,6 +68,13 @@ Date: 2026-07-13
 - The post-send usage display is intentionally compact: `cache cached/input`.
 - A display such as `cache 0/95` means no cached input tokens were reported for 95 provider-reported input tokens. It is not total usage, output usage, or cost.
 - Full provider usage is still stored on the assistant message record for future cost and budget panels.
+
+## Web access and multimodal route flags
+
+- For an OpenAI-compatible Responses route, web access requires an explicit tool configuration such as `tools: [{ "type": "web_search" }]`. A UI toggle named “联网” should map to this request field or a relay-specific equivalent.
+- Prompting “请联网查询” is not sufficient if the request does not declare a search tool or the selected model route does not support it.
+- Image URL/file input should use generic MobileChat content parts locally, then serialize only when the active adapter/profile/model declares image-input support.
+- Streaming can be requested by sending `stream: true`, but true incremental display still requires the gateway to flush SSE events. If the gateway returns JSON, MobileChat falls back to one-shot display.
 
 ## Verification
 
