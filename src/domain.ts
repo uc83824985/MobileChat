@@ -30,6 +30,8 @@ export type Message = {
   label: string;
   text: string;
   createdAt: string;
+  completedAt?: string;
+  elapsedMs?: number;
   status?: "streaming" | "stopped" | "complete" | "error";
   source?: MessageSourceSnapshot;
   providerResponseId?: string;

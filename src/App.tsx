@@ -253,9 +253,70 @@ const formatObservedUsage = (usage?: ResponseUsage) => {
   }
 
   const cached =
-    typeof usage.cachedInputTokens === "number" ? usage.cachedInputTokens : "?";
+    typeof usage.cachedInputTokens === "number"
+      ? usage.cachedInputTokens
+      : "未返回";
 
   return `cache ${cached}/${usage.inputTokens}`;
+};
+
+const formatMessageTime = (iso?: string) => {
+  if (!iso) {
+    return "";
+  }
+
+  const parsed = new Date(iso);
+  if (!Number.isFinite(parsed.getTime())) {
+    return "";
+  }
+
+  return parsed.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+};
+
+const formatElapsedMs = (elapsedMs?: number) => {
+  if (
+    typeof elapsedMs !== "number" ||
+    !Number.isFinite(elapsedMs) ||
+    elapsedMs < 0
+  ) {
+    return "";
+  }
+
+  if (elapsedMs < 1000) {
+    return `${Math.round(elapsedMs)}ms`;
+  }
+
+  if (elapsedMs < 60_000) {
+    const seconds = elapsedMs / 1000;
+    return `${seconds < 10 ? seconds.toFixed(1) : seconds.toFixed(0)}s`;
+  }
+
+  const minutes = Math.floor(elapsedMs / 60_000);
+  const seconds = Math.round((elapsedMs % 60_000) / 1000);
+  return `${minutes}m ${seconds}s`;
+};
+
+const createCompletionTiming = (startedAt: number) => {
+  const completedMs = Date.now();
+  const safeStartedAt = Number.isFinite(startedAt) ? startedAt : completedMs;
+  return {
+    completedAt: new Date(completedMs).toISOString(),
+    elapsedMs: Math.max(0, completedMs - safeStartedAt),
+  };
+};
+
+const createCompletionTimingFromMessage = (message: Message) => {
+  const parsedStartedAt = Date.parse(message.createdAt);
+  return createCompletionTiming(
+    Number.isFinite(parsedStartedAt) ? parsedStartedAt : Date.now(),
+  );
 };
 
 const formatStorageUsage = (storageInfo: StorageInfo) => {
@@ -749,6 +810,7 @@ function App() {
             ? {
                 ...message,
                 status: "stopped",
+                ...createCompletionTimingFromMessage(message),
                 text:
                   message.text &&
                   message.text !== "正在请求模型…" &&
@@ -1499,13 +1561,14 @@ function App() {
     }
 
     const source = createSourceSnapshot(activeAssistant, resolvedModel);
+    const requestStartedAt = Date.now();
     const assistantMessage: Message = {
       id: createId("assistant"),
       conversationId: activeConversation.id,
       role: "assistant",
       label: `${activeAssistant.name} · ${resolvedModel.model.name}`,
       text: streamingEnabled ? "正在等待流式输出…" : "正在请求模型…",
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(requestStartedAt).toISOString(),
       status: "streaming",
       source,
     };
@@ -1561,12 +1624,14 @@ function App() {
       });
 
       setLastObservedUsage(result.usage);
+      const completionTiming = createCompletionTiming(requestStartedAt);
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
             ? {
                 ...message,
                 status: "complete",
+                ...completionTiming,
                 text: result.text || streamedText || "模型未返回文本内容。",
                 providerResponseId: result.providerResponseId,
                 usage: result.usage,
@@ -1579,12 +1644,14 @@ function App() {
         return;
       }
 
+      const completionTiming = createCompletionTiming(requestStartedAt);
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
             ? {
                 ...message,
                 status: "error",
+                ...completionTiming,
                 text:
                   error instanceof Error
                     ? error.message
@@ -1640,13 +1707,14 @@ function App() {
     }
 
     const source = createSourceSnapshot(activeAssistant, resolvedModel);
+    const requestStartedAt = Date.now();
     const assistantMessage: Message = {
       id: createId("assistant"),
       conversationId: activeConversation.id,
       role: "assistant",
       label: `${activeAssistant.name} · ${resolvedModel.model.name}`,
       text: streamingEnabled ? "正在等待流式输出…" : "正在请求模型…",
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(requestStartedAt).toISOString(),
       status: "streaming",
       source,
     };
@@ -1702,12 +1770,14 @@ function App() {
       });
 
       setLastObservedUsage(result.usage);
+      const completionTiming = createCompletionTiming(requestStartedAt);
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
             ? {
                 ...message,
                 status: "complete",
+                ...completionTiming,
                 text: result.text || streamedText || "模型未返回文本内容。",
                 providerResponseId: result.providerResponseId,
                 usage: result.usage,
@@ -1720,12 +1790,14 @@ function App() {
         return;
       }
 
+      const completionTiming = createCompletionTiming(requestStartedAt);
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
             ? {
                 ...message,
                 status: "error",
+                ...completionTiming,
                 text:
                   error instanceof Error
                     ? error.message
@@ -1774,6 +1846,7 @@ function App() {
 
     const source = createSourceSnapshot(activeAssistant, resolvedModel);
     const { userCreatedAt, assistantCreatedAt } = createTurnTimestamps();
+    const requestStartedAt = Date.parse(assistantCreatedAt);
     const userMessage: Message = {
       id: createId("message"),
       conversationId: activeConversation.id,
@@ -1844,12 +1917,14 @@ function App() {
       });
 
       setLastObservedUsage(result.usage);
+      const completionTiming = createCompletionTiming(requestStartedAt);
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
             ? {
                 ...message,
                 status: "complete",
+                ...completionTiming,
                 text: result.text || streamedText || "模型未返回文本内容。",
                 providerResponseId: result.providerResponseId,
                 usage: result.usage,
@@ -1862,12 +1937,14 @@ function App() {
         return;
       }
 
+      const completionTiming = createCompletionTiming(requestStartedAt);
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
             ? {
                 ...message,
                 status: "error",
+                ...completionTiming,
                 text:
                   error instanceof Error
                     ? error.message
@@ -2135,53 +2212,70 @@ function App() {
 
         <div className="message-thread">
           {activeMessages.length > 0 ? (
-            activeMessages.map((message) => (
-              <article className={`message ${message.role}`} key={message.id}>
-                <div className="message-label">
-                  {message.label}
-                  {message.status === "streaming" ? " · 生成中" : ""}
-                  {message.status === "stopped" ? " · 已停止" : ""}
-                  {message.status === "error" ? " · 错误" : ""}
-                </div>
-                <p>{message.text}</p>
-                <div className="message-actions">
-                  {message.role === "assistant" ? (
+            activeMessages.map((message) => {
+              const createdTime = formatMessageTime(message.createdAt);
+              const completedTime = formatMessageTime(message.completedAt);
+              const elapsedText = formatElapsedMs(message.elapsedMs);
+
+              return (
+                <article className={`message ${message.role}`} key={message.id}>
+                  <div className="message-label">
+                    {message.label}
+                    {createdTime ? ` · ${createdTime}` : ""}
+                    {message.status === "streaming" ? " · 生成中" : ""}
+                    {message.status === "stopped" ? " · 已停止" : ""}
+                    {message.status === "error" ? " · 错误" : ""}
+                  </div>
+                  <p>{message.text}</p>
+                  {completedTime || elapsedText ? (
+                    <div className="message-meta">
+                      {completedTime ? <span>完成 {completedTime}</span> : null}
+                      {elapsedText ? <span>用时 {elapsedText}</span> : null}
+                    </div>
+                  ) : null}
+                  <div className="message-actions">
+                    {message.role === "assistant" ? (
+                      <button
+                        type="button"
+                        aria-label="重试回复"
+                        disabled={
+                          activeConversationReadOnly ||
+                          Boolean(pendingMessageId)
+                        }
+                        onClick={() => void retryAssistantMessage(message.id)}
+                      >
+                        <RotateCcw size={14} />
+                        重试
+                      </button>
+                    ) : null}
+                    {message.role === "user" ? (
+                      <button
+                        type="button"
+                        aria-label="重答消息"
+                        disabled={
+                          activeConversationReadOnly ||
+                          Boolean(pendingMessageId)
+                        }
+                        onClick={() =>
+                          void regenerateFromUserMessage(message.id)
+                        }
+                      >
+                        <RotateCcw size={14} />
+                        重答
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      aria-label="重试回复"
-                      disabled={
-                        activeConversationReadOnly || Boolean(pendingMessageId)
-                      }
-                      onClick={() => void retryAssistantMessage(message.id)}
+                      aria-label="删除消息"
+                      onClick={() => deleteMessage(message.id)}
                     >
-                      <RotateCcw size={14} />
-                      重试
+                      <Trash2 size={14} />
+                      删除
                     </button>
-                  ) : null}
-                  {message.role === "user" ? (
-                    <button
-                      type="button"
-                      aria-label="重答消息"
-                      disabled={
-                        activeConversationReadOnly || Boolean(pendingMessageId)
-                      }
-                      onClick={() => void regenerateFromUserMessage(message.id)}
-                    >
-                      <RotateCcw size={14} />
-                      重答
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    aria-label="删除消息"
-                    onClick={() => deleteMessage(message.id)}
-                  >
-                    <Trash2 size={14} />
-                    删除
-                  </button>
-                </div>
-              </article>
-            ))
+                  </div>
+                </article>
+              );
+            })
           ) : (
             <section className="empty-thread">
               <h2>开始一个新对话</h2>

@@ -41,6 +41,7 @@ Date: 2026-07-13
   - display name;
   - description;
   - optional context window;
+  - web access flag;
   - enabled flag.
 - The API Profile editor shows the full model list as selectable model cards, so every model visible in assistant model access can be traced back to a model-side configuration record.
 - Assistants no longer own raw `apiProfileName` / `model` fields as the active configuration path. They own model bindings that reference existing API Profile + model records, with snapshots of key display fields for provenance.
@@ -58,7 +59,7 @@ Date: 2026-07-13
 ## Persistence and import/export
 
 - `MobileChatDB` stores settings, API profiles, assistants, conversations, messages, and reserved stores for drafts/checkpoints/blobs.
-- Messages now store `createdAt` and are rendered chronologically. Legacy generated message IDs are migrated into timestamps where possible, preventing IndexedDB key ordering from grouping `assistant-*` records before `message-*` records after reload.
+- Messages now store `createdAt`, assistant `completedAt`, and assistant `elapsedMs` where available. They are rendered chronologically by creation time, while completed assistant responses show finish time and request duration. Legacy generated message IDs are migrated into timestamps where possible, preventing IndexedDB key ordering from grouping `assistant-*` records before `message-*` records after reload.
 - UI edits update memory immediately and are autosaved after a short debounce. Settings close and page visibility changes flush the latest snapshot.
 - Settings persist the selected theme and whether Responses streaming is enabled.
 - The current implementation persists normalized full snapshots. This is acceptable for the current small prototype; future large histories should move to dirty-record writes as specified in the architecture document.
@@ -71,6 +72,7 @@ Date: 2026-07-13
 - The pre-send token count is still a local estimate based on text length, not a tokenizer-accurate billable number.
 - The post-send usage display is intentionally compact: `cache cached/input`.
 - A display such as `cache 0/95` means no cached input tokens were reported for 95 provider-reported input tokens. It is not total usage, output usage, or cost.
+- A display such as `cache 未返回/989` means the endpoint returned the input-token denominator but omitted the cached-input numerator. It is an unsupported/unknown cache metric, not proof that 989 tokens all missed cache.
 - Full provider usage is still stored on the assistant message record for future cost and budget panels.
 
 ## Web access and multimodal route flags
@@ -79,6 +81,7 @@ Date: 2026-07-13
 - Prompting “请联网查询” is not sufficient if the request does not declare a search tool or the selected model route does not support it.
 - Image URL/file input should use generic MobileChat content parts locally, then serialize only when the active adapter/profile/model declares image-input support.
 - Streaming can be requested by sending `stream: true`, but true incremental display still requires the gateway to flush SSE events. If the gateway returns JSON, MobileChat falls back to one-shot display.
+- Enabling web access can legitimately increase response latency because the provider or relay may perform hosted search/tool execution before producing the final assistant text. Successful searched responses are therefore not treated as an implementation error solely because they are slower than non-search turns.
 
 ## Verification
 

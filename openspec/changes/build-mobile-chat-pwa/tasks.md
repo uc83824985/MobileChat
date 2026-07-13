@@ -15,6 +15,7 @@
 - 2026-07-13: Added an `openai-chat-completions` protocol option for relays/models that expose `/chat/completions` but not `/responses`; route diagnostics now include the selected protocol.
 - 2026-07-13: Recorded route-specific compatibility finding: a user-configured Grok route succeeded through Chat Completions after returning 404 on Responses. Added the user-message "重答" action to regenerate the assistant response from a chosen user message.
 - 2026-07-13: Added Chat Completions web-search serialization through `web_search_options: {}` and added confirmation for individual message deletion.
+- 2026-07-13: Added persisted message timing metadata (`createdAt`, `completedAt`, `elapsedMs`) and clarified cache diagnostics when a relay returns input tokens but omits cached-token detail.
 - 2026-07-13: Replaced the ambiguous "电脑端布局" toggle with a persisted layout mode: `auto`, `mobile`, or `desktop`. Layout changes apply immediately and remain display-only.
 - The full task checklist remains open where the spec still requires dirty-record repositories, endpoint validation, pricing metadata, utility roles, checkpoint execution, merge import, complete context projection, provider-specific hosted tool variants, multimodal content sending, and full streaming event/error coverage beyond the current text-delta path.
 

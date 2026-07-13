@@ -202,6 +202,7 @@ button:disabled {
 .chat-title span,
 .empty-list,
 .message-label,
+.message-meta,
 .empty-thread p {
   color: var(--text-muted);
   font-size: 12px;
@@ -382,6 +383,14 @@ button:disabled {
 .message p {
   line-height: 1.55;
   margin: 4px 0 0;
+}
+
+.message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
 }
 
 .message-actions {

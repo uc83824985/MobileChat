@@ -102,7 +102,39 @@ describe("App", () => {
     expect(screen.getByText("正在等待流式输出…")).toBeInTheDocument();
     expect(await screen.findByText("usage ok")).toBeInTheDocument();
     expect(screen.getByText("cache 0/5")).toBeInTheDocument();
+    expect(screen.getByText(/用时 /)).toBeInTheDocument();
     expect(screen.queryByText(/in 5 \/ out/)).not.toBeInTheDocument();
+  });
+
+  it("marks cache usage as not returned when the relay omits cached tokens", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: "resp_no_cache_detail",
+            output_text: "no cache detail",
+            usage: {
+              prompt_tokens: 989,
+              completion_tokens: 4,
+              total_tokens: 993,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    render(<App />);
+    configureApiProfile({ apiKey: "test-key" });
+
+    fireEvent.click(screen.getByLabelText("新建对话"));
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "cache detail test" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    expect(await screen.findByText("no cache detail")).toBeInTheDocument();
+    expect(screen.getByText("cache 未返回/989")).toBeInTheDocument();
   });
 
   it("can stop a pending model request after API key is configured", async () => {

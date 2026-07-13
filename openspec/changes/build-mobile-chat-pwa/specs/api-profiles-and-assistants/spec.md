@@ -115,3 +115,7 @@ The initial adapter SHALL normalize provider usage data into local usage fields 
 #### Scenario: Response omits usage data
 - **WHEN** a relay streams a successful response but omits usage or cache fields
 - **THEN** the system marks observed usage and cache metrics as unknown while preserving the completed chat response
+
+#### Scenario: Response omits only cached-token detail
+- **WHEN** a completed response reports input tokens but omits cached input tokens
+- **THEN** the system may display the input-token denominator but SHALL mark cached-token count and cache hit rate as not returned or unsupported rather than treating the value as zero

@@ -94,7 +94,7 @@ MobileChatDB
 - `apiProfiles`：API base URL、协议、凭据、模型列表和价格/上下文窗口元数据。模型是独立记录，不应只作为助手字段存在。
 - `assistants`：聊天助手和功能助手配置，包括 prompt、初始消息和模型绑定。助手引用已有 API Profile + model，并保存关键显示字段快照，避免模型或助手删除后消息来源完全丢失。
 - `conversations`：标题、显示摘要、归档状态、活动助手/模型引用、活动检查点引用。归档不是移动到另一张表，而是通过 `archived=true` 在同一数据集中切换到只读浏览/搜索/恢复视图。
-- `messages`：规范消息、创建时间、content parts、分支关系、助手/模型来源快照、usage/debug 观测。渲染顺序必须基于 `createdAt` 或显式序号，不能依赖 IndexedDB `getAll()` 的主键顺序，因为 `assistant-*` / `message-*` 前缀会破坏真实对话顺序。
+- `messages`：规范消息、创建时间、助手回复完成时间、浏览器观测耗时、content parts、分支关系、助手/模型来源快照、usage/debug 观测。渲染顺序必须基于 `createdAt` 或显式序号，不能依赖 IndexedDB `getAll()` 的主键顺序，因为 `assistant-*` / `message-*` 前缀会破坏真实对话顺序。
 - `drafts`：每个对话的未发送草稿。
 - `contextCheckpoints`：不可变压缩检查点。
 - `blobs`：后续多模态附件的二进制内容和元数据。
@@ -210,7 +210,9 @@ estimatedCacheReadHitRate =
 - `low`：当前前缀理论可缓存，但本地没有近期相同前缀观测。
 - `none`：provider 不支持或未声明 cache usage，或输入 token 分母不可用。
 
-返回后观测仍以 provider usage 为准。若 usage 或 cache 字段缺失，observed 表盘显示 unknown/unsupported，不用发送前估算回填真实命中率。
+返回后观测仍以 provider usage 为准。若 usage 或 cache 字段缺失，observed 表盘显示 unknown/unsupported，不用发送前估算回填真实命中率。若端点返回输入 token 但未返回 cached input token，UI 可以显示 `cache 未返回/N` 作为“分母已知、分子未知”的状态；这不能等同于 `cache 0/N`。
+
+助手消息还记录本地墙钟耗时：`createdAt` 是助手占位消息/请求开始时间，`completedAt` 是进入 complete、stopped 或 error 等终态的时间，`elapsedMs` 是浏览器观测到的持续时间。该耗时包含中转站排队、provider 延迟、联网工具执行、流式/缓冲行为和网络时间，只用于体验与调试，不是 provider 账单指标。
 
 成本估算需要每个模型配置价格分类，例如未缓存输入、缓存输入、cache write、输出、reasoning。没有价格配置时只显示 token；有价格配置时也标记为 estimate，不作为账单。
 
