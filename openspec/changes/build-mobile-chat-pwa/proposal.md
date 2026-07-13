@@ -12,7 +12,7 @@ MobileChat needs a phone-first, one-tap chat experience that can talk directly t
 - Allow the active assistant and model to change within an existing conversation while sharing the same conversation context.
 - Define memory strictly within one conversation, using canonical local messages, a versioned context checkpoint, and a recent raw-message tail; do not add cross-conversation memory.
 - Build all chat request context locally with `store: false`; do not use provider-side response storage, `previous_response_id`, or provider conversation IDs in the first release.
-- Add local context budget reporting, provider usage normalization, and a settings-controlled debug mode that exposes developer diagnostics for context composition and cache metrics.
+- Add local context budget reporting, pre-send cache estimates, provider usage normalization, and a settings-controlled debug mode that exposes developer diagnostics for context composition and cache metrics.
 - Add ChatGPT-style conversation and message presentation, streaming responses, and core conversation management.
 - Make the current user-defined title and latest context checkpoint available to the active assistant as dynamic conversation metadata on every request.
 - Add in-conversation message search and history search limited to user-editable titles and generated summaries.
@@ -41,5 +41,5 @@ None. This is a new repository with no existing product specifications.
 - Stores API credentials and all conversation data in the user's browser; no application backend or cloud database is required.
 - The initial network adapter targets a minimal OpenAI-compatible Responses API contract while preserving an adapter boundary for later protocols.
 - Provider-side response storage and continuation are not first-release capabilities; the initial adapter always uses local stateless context because compatible relays may accept state parameters without implementing their semantics.
-- Cache hit rates and cost dashboards are observational diagnostics: request construction can estimate token budgets, while actual cache read/write metrics are shown only when the provider returns compatible usage fields.
+- Cache hit rates and cost dashboards are diagnostics: request construction estimates cacheability and likely hit rate from local prefix observations, while actual cache read/write metrics are shown only when the provider returns compatible usage fields.
 - Mobile file editing is not a release requirement; only permission-tolerant selection and preview are required initially.

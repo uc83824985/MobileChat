@@ -137,11 +137,45 @@ cache 写入比例：
 cacheWriteRate = cacheWriteTokens / inputTokens
 ```
 
-这些 cache 指标只能在 provider 或中转站返回对应 usage 字段后显示。请求前只能显示“预计可缓存前缀 token”，不能称为命中率。若 usage 或 cache 字段缺失，表盘显示 unknown/unsupported。
+发送前也显示本地 cache 估算，但必须标记为 estimate，并和返回后的 observed 指标分开。发送前估算基于渲染后的请求前缀、模型/端点作用域和本地最近观测记录：
+
+```text
+cacheScope = apiProfileId + baseUrl + protocol + providerModelId + promptCacheKey? + requestShapeVersion
+stablePrefixFingerprint = hash(renderedPrefixBeforeFirstVolatileSection)
+potentialCacheableRate = cacheablePrefixTokens / estimatedInputTokens
+estimatedCacheReadHitRate =
+  recentSameScopeAndPrefix ? cacheablePrefixTokens / estimatedInputTokens : 0
+```
+
+`potentialCacheableRate` 用来调试上下文结构：如果这个值很低，说明标题、摘要、raw tail 或其他动态内容过早进入 prompt，破坏了可复用前缀。`estimatedCacheReadHitRate` 用来调试“这一次大概率是否命中”：只有本地记录里存在同 endpoint、同模型、同 request shape、同稳定前缀的近期请求时才给出非零估算。估算还要带 `confidence`：
+
+- `high`：近期相同前缀请求返回过非零 `cachedInputTokens`。
+- `medium`：近期相同前缀请求成功过，但 provider 没返回 cache usage。
+- `low`：当前前缀理论可缓存，但本地没有近期相同前缀观测。
+- `none`：provider 不支持或未声明 cache usage，或输入 token 分母不可用。
+
+返回后观测仍以 provider usage 为准。若 usage 或 cache 字段缺失，observed 表盘显示 unknown/unsupported，不用发送前估算回填真实命中率。
 
 成本估算需要每个模型配置价格分类，例如未缓存输入、缓存输入、cache write、输出、reasoning。没有价格配置时只显示 token；有价格配置时也标记为 estimate，不作为账单。
 
 调试模式默认关闭。启用后，对话页可显示最新请求的 `ContextBudgetReport`、最新响应的 `UsageStats`、cache 读写指标、压缩触发原因、活动 checkpoint、raw tail 边界、算法锚点 message ID 和 adapter 诊断。API key 和 Authorization header 不输出。
+
+## 当前边界情况与需明确点
+
+以下问题不阻塞首版，但实现时需要明确处理：
+
+1. **token 估算误差**：发送前预算使用本地估算，provider 实际 usage 可能不同。UI 必须区分 estimated 和 observed。
+2. **cache 估算误差**：本地只能根据近期相同前缀观测估算；provider 路由、TTL、限流、中转站实现和 prompt 细微变化都会导致实际命中不同。
+3. **动态内容过早进入 prompt**：标题、时间、摘要、raw tail、调试标记等如果放在静态前缀前，会破坏 prefix cache。请求渲染应尽量保持“稳定说明 + 当前助手 prompt”在前，动态上下文在后。
+4. **中转站 usage 缺失**：部分 relay 可能不返回 usage 或 cache 字段。此时只能显示本地预算和 unknown/unsupported，不能补假数据。
+5. **多模态 token 估算**：图片、文件、未来音频/视频内容的 token 成本可能无法准确本地估算。预算表盘需要按 content part 标记 estimated/unsupported。
+6. **算法锚点重复**：本地锚点可能和 raw tail 或 checkpoint 覆盖内容重复。构建 projection 时需要按 message ID 和 span 去重。
+7. **算法锚点冲突**：关键词命中的旧消息可能已经在当前分支失效。锚点只能来自当前 active path，且不能跨 checkpoint 无条件复用。
+8. **checkpoint 质量漂移**：压缩助手可能遗漏或误写关键信息。完整原文必须保留，支持手动重新 compact，并在调试面板显示 checkpoint 来源和边界。
+9. **分支与并发**：用户编辑旧消息、重新生成、多个标签页同时发送都可能改变 active leaf。首版应限制同一对话同一时间只有一个生成请求，或把并发请求显式分支化。
+10. **部分响应无 usage**：用户中止、网络断开或 provider 流结束异常时，消息可保留 partial/interrupted 状态，但 usage/cache 观测应为 unknown。
+11. **模型价格过期**：成本估算依赖用户维护的价格元数据，必须标记为 estimate，不作为账单。
+12. **调试信息隐私**：除 API key 和 Authorization 外，请求正文也可能包含敏感内容。debug 面板默认只本地显示，完整 debug dump 不应默认导出。
 
 ## 压缩助手与 `/compact` 风格流程
 

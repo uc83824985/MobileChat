@@ -33,7 +33,7 @@ The system SHALL provide a settings toggle for debug mode that defaults off and,
 
 #### Scenario: Enable debug diagnostics
 - **WHEN** debug mode is enabled and a chat request completes
-- **THEN** the active conversation can show the latest context budget report, normalized provider usage, cache read/write metrics when available, and unsupported/unknown markers for fields the provider did not return
+- **THEN** the active conversation can show the latest context budget report, pre-send cache estimate, normalized provider usage, observed cache read/write metrics when available, and unsupported/unknown markers for fields the provider did not return
 
 #### Scenario: Redact credentials from diagnostics
 - **WHEN** debug diagnostics render raw adapter or request metadata

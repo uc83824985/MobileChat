@@ -81,7 +81,7 @@ The system SHALL construct every request from the current chat assistant prompt,
 - **THEN** the request may include that original span with its message reference and SHALL NOT rewrite it through a model before send
 
 ### Requirement: Context budget report
-Every locally constructed request SHALL produce a context budget report with estimated tokens and percentages grouped by section and origin, including chat assistant prompt, application metadata, checkpoint summary, algorithmic anchors, user raw messages, assistant raw messages, and latest user input.
+Every locally constructed request SHALL produce a context budget report with estimated tokens and percentages grouped by section and origin, including chat assistant prompt, application metadata, checkpoint summary, algorithmic anchors, user raw messages, assistant raw messages, latest user input, and a pre-send cache estimate.
 
 #### Scenario: Show section proportions
 - **WHEN** a request is built for an active conversation
@@ -90,6 +90,14 @@ Every locally constructed request SHALL produce a context budget report with est
 #### Scenario: Distinguish assistant participation
 - **WHEN** the report groups context by origin
 - **THEN** it separates current assistant prompt, historical assistant raw messages, and utility-assistant checkpoint summary instead of combining them into one assistant bucket
+
+#### Scenario: Estimate cacheability before send
+- **WHEN** a request is built before network send
+- **THEN** the report includes cache scope, stable prefix fingerprint, cacheable prefix tokens, potential cacheable rate, estimated cache-read hit rate, confidence, and any prefix-instability reasons
+
+#### Scenario: No matching cache observation
+- **WHEN** the stable prefix is cacheable but there is no recent matching local observation for the same endpoint, model, request shape, and prefix fingerprint
+- **THEN** the report shows the potential cacheable rate separately from a low-confidence or zero estimated hit rate
 
 ### Requirement: Conversation memory isolation
 The system SHALL NOT automatically read messages, summaries, checkpoints, or derived facts from another conversation when building a request.

@@ -8,7 +8,7 @@
 
 ## 2. Domain model and local persistence
 
-- [ ] 2.1 Define versioned TypeScript domain types for API profiles, models, model pricing metadata, chat/utility assistants, bindings, conversations, messages, content parts, blobs, drafts, context checkpoints, display summaries, context budget reports, normalized usage stats, and settings
+- [ ] 2.1 Define versioned TypeScript domain types for API profiles, models, model pricing metadata, chat/utility assistants, bindings, conversations, messages, content parts, blobs, drafts, context checkpoints, display summaries, context budget reports, pre-send cache estimates, normalized usage stats, and settings
 - [ ] 2.2 Create the IndexedDB database schema, including immutable context-checkpoint storage, typed repository interfaces, transactions, and store indexes
 - [ ] 2.3 Implement schema-version metadata and an ordered migration runner with rollback-safe failure handling
 - [ ] 2.4 Implement ID, timestamp, validation, and reference-resolution utilities shared by repositories and imports
@@ -44,7 +44,7 @@
 - [ ] 5.5 Implement deterministic same-conversation context projection from the current chat prompt, latest valid checkpoint, and raw active-path tail after assistant switches
 - [ ] 5.6 Implement request-time conversation metadata construction that reads the latest title and checkpoint without adding or rewriting chat messages
 - [ ] 5.7 Implement local deterministic algorithmic-anchor selection for pinned or keyword-matched original message spans without model rewriting
-- [ ] 5.8 Generate a context budget report for every request with estimated tokens and percentages by section and origin
+- [ ] 5.8 Generate a context budget report for every request with estimated tokens and percentages by section and origin plus a pre-send cache estimate with prefix fingerprint, potential cacheable rate, estimated hit rate, confidence, and instability reasons
 - [ ] 5.9 Implement assistant initial-message behavior and snapshot attribution for newly created conversations
 - [ ] 5.10 Implement copy, retry, stop, regenerate, user-message edit, branch creation, and active-path selection actions
 - [ ] 5.11 Handle missing/deleted active assistants or models by retaining history and requiring a valid replacement before sending
@@ -85,7 +85,7 @@
 ## 9. End-to-end verification and documentation
 
 - [ ] 9.1 Add component tests for settings CRUD, assistant kinds, assistant/model switching, dynamic title/checkpoint awareness, conversation management, message actions, search, and compaction states
-- [ ] 9.2 Add component tests for debug mode, context budget display, normalized usage display, cache unknown states, and credential redaction
+- [ ] 9.2 Add component tests for debug mode, context budget display, pre-send cache estimates, normalized usage display, cache unknown states, and credential redaction
 - [ ] 9.3 Add phone-viewport browser tests for first-run configuration, streaming chat, relaunch persistence, manual compact, diagnostics panel, archive/restore, and `.mobilechat` backup restore
 - [ ] 9.4 Verify keyboard, screen-reader labels, focus handling, reduced motion, touch targets, drawers, dialogs, and streaming announcements
 - [ ] 9.5 Verify installability, offline reading, service-worker updates, IndexedDB persistence, and local content preview on supported desktop and mobile browsers
