@@ -155,6 +155,9 @@ describe("App", () => {
     expect(
       screen.getByRole("button", { name: "编辑模型 gpt-5.4-mini" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "编辑模型 grok-4.2" }),
+    ).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Base URL"), {
       target: { value: "https://api.mnapi.com/v1" },
@@ -168,6 +171,11 @@ describe("App", () => {
       screen.getByRole("button", { name: "编辑模型 gpt-5.4-mini" }),
     );
     expect(screen.getByLabelText("模型名称")).toHaveValue("gpt-5.4-mini");
+    expect(screen.getByLabelText("启用联网工具")).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑模型 grok-4.2" }));
+    expect(screen.getByLabelText("模型名称")).toHaveValue("grok-4.2");
+    expect(screen.getByLabelText("启用联网工具")).toBeChecked();
 
     fireEvent.change(screen.getByLabelText("设置中选择助手"), {
       target: { value: "research" },

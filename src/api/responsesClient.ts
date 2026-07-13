@@ -161,6 +161,7 @@ const buildRequestBody = ({
     model: model.id,
     instructions: assistant.prompt || undefined,
     input: createInputItems(messages),
+    tools: model.webSearchEnabled ? [{ type: "web_search" }] : undefined,
     store: false,
     stream,
     metadata: {

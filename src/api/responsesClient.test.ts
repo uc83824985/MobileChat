@@ -42,6 +42,7 @@ const model: ModelDefinition = {
   name: "gpt-5.4-mini",
   description: "",
   enabled: true,
+  webSearchEnabled: false,
 };
 
 const messages: Message[] = [
@@ -110,8 +111,46 @@ describe("responsesClient", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).stream).toBe(
       true,
     );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).tools).toBe(
+      undefined,
+    );
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
       Accept: "text/event-stream, application/json",
+    });
+  });
+
+  it("adds the web_search tool when the selected model enables web access", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "resp_web",
+          output_text: "web response",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestResponsesChat({
+      apiProfile,
+      assistant,
+      conversation,
+      model: {
+        ...model,
+        id: "grok-4.2",
+        name: "grok-4.2",
+        webSearchEnabled: true,
+      },
+      messages,
+      signal: new AbortController().signal,
+      stream: false,
+    });
+
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)),
+    ).toMatchObject({
+      model: "grok-4.2",
+      tools: [{ type: "web_search" }],
     });
   });
 

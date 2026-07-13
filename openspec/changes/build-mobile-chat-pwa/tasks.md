@@ -10,7 +10,8 @@
 
 - 2026-07-13: Implemented a first persistence/config/API slice that is intentionally narrower than several full tasks below: normalized full-snapshot `MobileChatDB` save/load, credential-free `.mobilechat` import/export, light/dark/system theme setting, editable API Profiles with nested model definitions, assistant model bindings, chat-page assistant/model selectors, direct title editing, and a settings-toggleable `store:false` Responses request loop with SSE text-delta streaming.
 - 2026-07-13: Follow-up UI/API hardening added visible model-side cards for every configured model, archived-conversation browsing/search/restore, message retry/delete actions, cache-only post-send usage display, and JSON fallback when a `stream:true` relay returns a buffered non-SSE response.
-- The full task checklist remains open where the spec still requires dirty-record repositories, endpoint validation, pricing metadata, utility roles, checkpoint execution, confirmed conversation deletion flows, merge import, complete context projection, hosted tool capability settings such as web search, multimodal content sending, and full streaming event/error coverage beyond the current text-delta path.
+- 2026-07-13: Added model-level `webSearchEnabled`, MNAPI `grok-4.2` preset, and Responses `web_search` tool emission for models that enable web access.
+- The full task checklist remains open where the spec still requires dirty-record repositories, endpoint validation, pricing metadata, utility roles, checkpoint execution, confirmed conversation deletion flows, merge import, complete context projection, provider-specific hosted tool variants, multimodal content sending, and full streaming event/error coverage beyond the current text-delta path.
 
 ## 2. Domain model and local persistence
 

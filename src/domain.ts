@@ -46,6 +46,7 @@ export type ModelDefinition = {
   description: string;
   contextWindow?: number;
   enabled: boolean;
+  webSearchEnabled: boolean;
 };
 
 export type ApiProfile = {
@@ -104,7 +105,7 @@ export type AssistantField = {
 
 export type AppSettings = {
   id: "app";
-  schemaVersion: 4;
+  schemaVersion: 5;
   activeConversationId: string;
   activeAssistantId: string;
   activeModelRef: ModelRef;
@@ -135,7 +136,7 @@ export type LocalDataSnapshot = {
 
 export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 
-export const DATABASE_SCHEMA_VERSION = 4;
+export const DATABASE_SCHEMA_VERSION = 5;
 
 export const MNAPI_PROFILE_ID = "mnapi";
 export const DEFAULT_MODEL_REF: ModelRef = {
@@ -185,6 +186,7 @@ export const initialApiProfiles: ApiProfile[] = [
           "来自 start_mnapi_codex 的默认模型；MNAPI 通过模型名后缀表达 high 推理强度。",
         contextWindow: 128000,
         enabled: true,
+        webSearchEnabled: false,
       },
       {
         id: "gpt-5.4-codex-medium",
@@ -192,6 +194,7 @@ export const initialApiProfiles: ApiProfile[] = [
         description: "MNAPI 推理强度 medium 变体，需以网关实际支持为准。",
         contextWindow: 128000,
         enabled: true,
+        webSearchEnabled: false,
       },
       {
         id: "gpt-5.4-codex-low",
@@ -199,6 +202,7 @@ export const initialApiProfiles: ApiProfile[] = [
         description: "MNAPI 推理强度 low 变体，需以网关实际支持为准。",
         contextWindow: 128000,
         enabled: true,
+        webSearchEnabled: false,
       },
       {
         id: "gpt-5.4",
@@ -206,6 +210,7 @@ export const initialApiProfiles: ApiProfile[] = [
         description: "通用 GPT-5.4 路由，供非 Codex 场景或网关兼容路由使用。",
         contextWindow: 128000,
         enabled: true,
+        webSearchEnabled: false,
       },
       {
         id: "gpt-5.4-mini",
@@ -213,6 +218,16 @@ export const initialApiProfiles: ApiProfile[] = [
         description: "轻量模型预设，适合研究整理、摘要和功能助手。",
         contextWindow: 128000,
         enabled: true,
+        webSearchEnabled: false,
+      },
+      {
+        id: "grok-4.2",
+        name: "grok-4.2",
+        description:
+          "MNAPI Grok 4.2 路由；按网页端可用配置预设为模型级联网工具开启。",
+        contextWindow: 128000,
+        enabled: true,
+        webSearchEnabled: true,
       },
     ],
   },
@@ -298,6 +313,7 @@ export const initialAssistants: Assistant[] = [
     kind: "chat",
     modelBindings: [
       mnapiBinding("gpt-5.4-mini", true),
+      mnapiBinding("grok-4.2"),
       mnapiBinding("gpt-5.4"),
       mnapiBinding("gpt-5.4-codex-medium"),
     ],

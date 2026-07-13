@@ -69,7 +69,7 @@ The first release SHALL implement a minimal OpenAI-compatible Responses API adap
 - **THEN** the system parses the JSON response, stores the completed assistant message, and records that true incremental streaming was not observed
 
 ### Requirement: Explicit hosted tool capabilities
-The system SHALL treat web search and other hosted provider tools as explicit capabilities of the selected protocol/profile/model rather than assuming that a prompt can make the model access the internet.
+The system SHALL treat web search and other hosted provider tools as explicit model-level capabilities of the selected protocol/profile/model rather than assuming that a prompt can make the model access the internet.
 
 #### Scenario: Enable web search for a Responses-compatible route
 - **WHEN** a user enables web access for a model binding whose adapter supports hosted search

@@ -84,6 +84,52 @@ describe("MobileChat persistence", () => {
     ).toBe("持久化研究助手");
   });
 
+  it("backfills new MNAPI preset models without replacing local credentials", async () => {
+    const snapshot = createInitialSnapshot();
+    const legacySnapshot: LocalDataSnapshot = {
+      ...snapshot,
+      apiProfiles: snapshot.apiProfiles.map((profile) =>
+        profile.id === "mnapi"
+          ? {
+              ...profile,
+              apiKey: "local-only-key",
+              models: profile.models.filter((model) => model.id !== "grok-4.2"),
+            }
+          : profile,
+      ),
+      assistants: snapshot.assistants.map((assistant) =>
+        assistant.id === "research"
+          ? {
+              ...assistant,
+              modelBindings: assistant.modelBindings.filter(
+                (binding) => binding.modelId !== "grok-4.2",
+              ),
+            }
+          : assistant,
+      ),
+    };
+
+    await replaceSnapshot(legacySnapshot);
+    const restored = await loadSnapshot();
+    const restoredMnapi = restored.apiProfiles.find(
+      (profile) => profile.id === "mnapi",
+    );
+    const restoredResearch = restored.assistants.find(
+      (assistant) => assistant.id === "research",
+    );
+
+    expect(restoredMnapi?.apiKey).toBe("local-only-key");
+    expect(
+      restoredMnapi?.models.find((model) => model.id === "grok-4.2")
+        ?.webSearchEnabled,
+    ).toBe(true);
+    expect(
+      restoredResearch?.modelBindings.some(
+        (binding) => binding.modelId === "grok-4.2",
+      ),
+    ).toBe(true);
+  });
+
   it("migrates legacy messages with timestamp-like ids into createdAt order", async () => {
     const snapshot = createInitialSnapshot();
     const legacySnapshot = {

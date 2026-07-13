@@ -9,7 +9,7 @@ Date: 2026-07-13
 - Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, backup, theme, and streaming controls.
 - The app has a minimal OpenAI-compatible Responses request loop. Without an API key it shows a local configuration error; with an API key it sends `POST {baseUrl}/responses` using `store:false`. Streaming mode uses SSE text deltas when the gateway truly streams; if a `stream:true` request is buffered into JSON, the client falls back to one-shot JSON parsing.
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
-- Web access and multimodal input are not yet wired into the MobileChat request builder. They must be implemented as explicit adapter/profile/model capabilities rather than prompt-only expectations.
+- Web access is now wired as a model-level request option. Multimodal input is still not wired into the MobileChat request builder and must be implemented as explicit adapter/profile/model capabilities rather than prompt-only expectations.
 
 ## Implemented response to mobile feedback
 
@@ -49,6 +49,7 @@ Date: 2026-07-13
   - protocol: `openai-responses`
   - default preset model: `gpt-5.4-codex-high`
 - Preset model slugs include high/medium/low Codex variants plus generic `gpt-5.4` and `gpt-5.4-mini`.
+- Presets also include `grok-4.2` on the MNAPI profile. The preset keeps the same gateway URL and enables the model-level web search tool by default, matching the route that was reported to work in the relay's web UI.
 - No API key from the local launcher is committed. The key must be entered in the settings page and remains in the browser's IndexedDB unless the user exports with credentials in a future explicit flow.
 
 ## Persistence and import/export
@@ -71,7 +72,7 @@ Date: 2026-07-13
 
 ## Web access and multimodal route flags
 
-- For an OpenAI-compatible Responses route, web access requires an explicit tool configuration such as `tools: [{ "type": "web_search" }]`. A UI toggle named “联网” should map to this request field or a relay-specific equivalent.
+- For an OpenAI-compatible Responses route, web access requires an explicit tool configuration such as `tools: [{ "type": "web_search" }]`. MobileChat stores this as `ModelDefinition.webSearchEnabled` and sends the tool only when the active model enables it.
 - Prompting “请联网查询” is not sufficient if the request does not declare a search tool or the selected model route does not support it.
 - Image URL/file input should use generic MobileChat content parts locally, then serialize only when the active adapter/profile/model declares image-input support.
 - Streaming can be requested by sending `stream: true`, but true incremental display still requires the gateway to flush SSE events. If the gateway returns JSON, MobileChat falls back to one-shot display.

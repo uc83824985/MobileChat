@@ -964,6 +964,7 @@ function App() {
           description: "新建模型预设",
           contextWindow: 128000,
           enabled: true,
+          webSearchEnabled: false,
         },
       ],
     };
@@ -1021,6 +1022,7 @@ function App() {
                   description: "通过模型详情面板编辑这个模型。",
                   contextWindow: 128000,
                   enabled: true,
+                  webSearchEnabled: false,
                 },
               ],
             }
@@ -1035,7 +1037,12 @@ function App() {
     modelId: string,
     key: keyof Pick<
       ModelDefinition,
-      "id" | "name" | "description" | "contextWindow" | "enabled"
+      | "id"
+      | "name"
+      | "description"
+      | "contextWindow"
+      | "enabled"
+      | "webSearchEnabled"
     >,
     value: string | number | boolean,
   ) => {
@@ -2165,7 +2172,10 @@ function App() {
                         >
                           <span>{model.name}</span>
                           <small>{model.id}</small>
-                          <small>{model.enabled ? "已启用" : "已停用"}</small>
+                          <small>
+                            {model.enabled ? "已启用" : "已停用"}
+                            {model.webSearchEnabled ? " · 联网" : ""}
+                          </small>
                         </button>
                       ))}
                     </div>
@@ -2233,6 +2243,26 @@ function App() {
                               )
                             }
                           />
+                        </label>
+                        <label className="detail-field checkbox-field">
+                          <span>启用联网工具</span>
+                          <input
+                            aria-label="启用联网工具"
+                            checked={editingModel.webSearchEnabled}
+                            type="checkbox"
+                            onChange={(event) =>
+                              updateModelField(
+                                editingApiProfile.id,
+                                editingModel.id,
+                                "webSearchEnabled",
+                                event.target.checked,
+                              )
+                            }
+                          />
+                          <small>
+                            开启后该模型请求会发送 Responses web_search
+                            工具配置。
+                          </small>
                         </label>
                         <label className="detail-field">
                           <span>模型描述</span>

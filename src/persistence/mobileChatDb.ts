@@ -10,6 +10,7 @@ import {
   initialApiProfiles,
   type LocalDataSnapshot,
   type Message,
+  type ModelDefinition,
   type ModelRef,
   type StorageInfo,
 } from "../domain";
@@ -122,8 +123,38 @@ const replaceAll = <T>(store: IDBObjectStore, records: T[]) => {
 const cloneInitialApiProfiles = (): ApiProfile[] =>
   initialApiProfiles.map((profile) => ({
     ...profile,
-    models: profile.models.map((model) => ({ ...model })),
+    models: profile.models.map((model) => normalizeModel(model)),
   }));
+
+const normalizeModel = (model: ModelDefinition): ModelDefinition => ({
+  ...model,
+  webSearchEnabled: Boolean(model.webSearchEnabled),
+});
+
+const normalizeApiProfiles = (apiProfiles: ApiProfile[]): ApiProfile[] => {
+  const normalizedProfiles = apiProfiles.map((profile) => ({
+    ...profile,
+    models: profile.models.map((model) => normalizeModel(model)),
+  }));
+
+  return normalizedProfiles.map((profile) => {
+    const initialProfile = initialApiProfiles.find(
+      (candidate) => candidate.id === profile.id,
+    );
+    if (!initialProfile) {
+      return profile;
+    }
+
+    const existingModelIds = new Set(profile.models.map((model) => model.id));
+    const missingPresetModels = initialProfile.models
+      .filter((model) => !existingModelIds.has(model.id))
+      .map((model) => normalizeModel(model));
+
+    return missingPresetModels.length > 0
+      ? { ...profile, models: [...profile.models, ...missingPresetModels] }
+      : profile;
+  });
+};
 
 const findModelInProfiles = (apiProfiles: ApiProfile[], ref: ModelRef) => {
   const apiProfile = apiProfiles.find(
@@ -204,6 +235,38 @@ const migrateAssistant = (
   };
 };
 
+const ensurePresetAssistantBindings = (
+  assistant: Assistant,
+  apiProfiles: ApiProfile[],
+): Assistant => {
+  if (assistant.id !== "research") {
+    return assistant;
+  }
+
+  const grokRef: ModelRef = {
+    apiProfileId: "mnapi",
+    modelId: "grok-4.2",
+  };
+  const alreadyBound = assistant.modelBindings.some(
+    (binding) =>
+      binding.apiProfileId === grokRef.apiProfileId &&
+      binding.modelId === grokRef.modelId,
+  );
+  const { apiProfile, model } = findModelInProfiles(apiProfiles, grokRef);
+
+  if (alreadyBound || !apiProfile || !model) {
+    return assistant;
+  }
+
+  return {
+    ...assistant,
+    modelBindings: [
+      ...assistant.modelBindings,
+      bindingFromRef(apiProfiles, grokRef, false),
+    ],
+  };
+};
+
 const parseCreatedAtFromMessageId = (
   messageId: string,
   fallbackIndex: number,
@@ -232,12 +295,15 @@ export const normalizeSnapshot = (
   const now = new Date().toISOString();
   const apiProfiles =
     snapshot.apiProfiles && snapshot.apiProfiles.length > 0
-      ? snapshot.apiProfiles
+      ? normalizeApiProfiles(snapshot.apiProfiles)
       : cloneInitialApiProfiles();
   const assistants =
     snapshot.assistants && snapshot.assistants.length > 0
       ? snapshot.assistants.map((assistant) =>
-          migrateAssistant(assistant, apiProfiles),
+          ensurePresetAssistantBindings(
+            migrateAssistant(assistant, apiProfiles),
+            apiProfiles,
+          ),
         )
       : initialSnapshot.assistants;
   const conversations =
