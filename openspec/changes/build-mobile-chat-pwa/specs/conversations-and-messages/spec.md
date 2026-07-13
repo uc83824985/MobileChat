@@ -132,6 +132,10 @@ The system SHALL support copying message text, retrying a failed or interrupted 
 - **WHEN** a user deletes a message
 - **THEN** the message is removed from the local conversation record and subsequent context construction uses the remaining ordered messages
 
+#### Scenario: Confirm before deleting a single message
+- **WHEN** a user requests deletion of an individual message record inside a conversation
+- **THEN** the system asks for confirmation using message-level wording distinct from conversation deletion
+
 #### Scenario: Edit and resubmit a user message
 - **WHEN** a user edits an earlier user message and confirms resubmission
 - **THEN** the system preserves a valid ordered conversation path and generates a new response using the active assistant and model

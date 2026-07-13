@@ -1423,6 +1423,14 @@ function App() {
   };
 
   const deleteMessage = (messageId: string) => {
+    const targetMessage = messages.find((message) => message.id === messageId);
+    if (!targetMessage) {
+      return;
+    }
+    if (!confirmDestructiveAction("删除这条消息？")) {
+      return;
+    }
+
     if (pendingMessageId === messageId) {
       abortControllerRef.current?.abort();
       abortControllerRef.current = null;
@@ -1966,7 +1974,7 @@ function App() {
             <Archive size={18} />
             {showArchived
               ? "返回对话"
-              : `归档对话${archivedConversations.length ? ` (${archivedConversations.length})` : ""}`}
+              : `已归档${archivedConversations.length ? `(${archivedConversations.length})` : ""}`}
           </button>
           <button
             type="button"
@@ -1982,7 +1990,7 @@ function App() {
             ) : (
               <Archive size={18} />
             )}
-            {activeConversation?.archived ? "恢复当前" : "归档当前"}
+            {activeConversation?.archived ? "恢复当前" : "归档"}
           </button>
           <button
             className="danger-button"
@@ -1991,7 +1999,7 @@ function App() {
             onClick={deleteActiveConversation}
           >
             <Trash2 size={18} />
-            删除当前
+            删除
           </button>
           <button type="button" onClick={openSettings}>
             <Settings size={18} />

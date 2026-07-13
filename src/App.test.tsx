@@ -6,6 +6,7 @@ import { deleteMobileChatDb } from "./persistence/mobileChatDb";
 
 describe("App", () => {
   beforeEach(async () => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     await deleteMobileChatDb();
   });
@@ -212,9 +213,9 @@ describe("App", () => {
       target: { value: "归档测试" },
     });
     fireEvent.click(screen.getByLabelText("保存标题"));
-    fireEvent.click(screen.getByText("归档当前"));
+    fireEvent.click(screen.getByText("归档"));
 
-    fireEvent.click(screen.getByText(/归档对话/));
+    fireEvent.click(screen.getByText(/已归档/));
     expect(
       screen.getByRole("navigation", { name: "归档对话列表" }),
     ).toBeInTheDocument();
@@ -241,7 +242,7 @@ describe("App", () => {
 
     fireEvent.click(screen.getByLabelText("新建对话"));
     expect(screen.getAllByText("新对话 4")).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "删除当前" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
     expect(confirmSpy).toHaveBeenCalled();
     expect(screen.queryByText("新对话 4")).not.toBeInTheDocument();
 
@@ -251,10 +252,10 @@ describe("App", () => {
       target: { value: "归档删除测试" },
     });
     fireEvent.click(screen.getByLabelText("保存标题"));
-    fireEvent.click(screen.getByText("归档当前"));
-    fireEvent.click(screen.getByText(/归档对话/));
+    fireEvent.click(screen.getByText("归档"));
+    fireEvent.click(screen.getByText(/已归档/));
     expect(screen.getAllByText("归档删除测试").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "删除当前" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
     expect(screen.queryByText("归档删除测试")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText("设置"));
@@ -278,6 +279,7 @@ describe("App", () => {
   });
 
   it("retries assistant replies and deletes messages", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<App />);
     configureApiProfile();
 
@@ -304,6 +306,7 @@ describe("App", () => {
     expect(deleteButtons.length).toBeGreaterThanOrEqual(2);
     fireEvent.click(deleteButtons[1]);
 
+    expect(confirmSpy).toHaveBeenCalledWith("删除这条消息？");
     expect(screen.queryByText(/请先在设置页.*API key/)).not.toBeInTheDocument();
   });
 });

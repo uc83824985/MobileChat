@@ -178,6 +178,7 @@ const buildChatCompletionsRequestBody = ({
 }: Pick<ResponsesChatRequest, "assistant" | "model" | "messages" | "stream">) =>
   JSON.stringify({
     model: model.id,
+    web_search_options: model.webSearchEnabled ? {} : undefined,
     messages: [
       ...(assistant.prompt
         ? [{ role: "system", content: assistant.prompt }]
@@ -487,14 +488,6 @@ export const requestResponsesChat = async ({
   }
   if (!apiKey) {
     throw new Error(`请先在设置页为「${apiProfile.name}」填写 API key。`);
-  }
-  if (
-    apiProfile.protocol === "openai-chat-completions" &&
-    model.webSearchEnabled
-  ) {
-    throw new Error(
-      `Profile「${apiProfile.name}」当前使用 Chat Completions 协议，首版尚未定义该协议的联网工具格式。请先关闭模型「${model.name}」的联网工具后重试。`,
-    );
   }
 
   const requestBody =

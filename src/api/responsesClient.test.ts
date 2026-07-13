@@ -284,21 +284,37 @@ describe("responsesClient", () => {
     });
   });
 
-  it("rejects web search on Chat Completions until a protocol-specific tool format exists", async () => {
-    await expect(
-      requestResponsesChat({
-        apiProfile: {
-          ...apiProfile,
-          protocol: "openai-chat-completions",
-        },
-        assistant,
-        conversation,
-        model: { ...model, webSearchEnabled: true },
-        messages,
-        signal: new AbortController().signal,
-        stream: false,
-      }),
-    ).rejects.toThrow(/尚未定义该协议的联网工具格式/);
+  it("uses web_search_options for Chat Completions web search routes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "chatcmpl_search",
+          choices: [{ message: { content: "searched" } }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestResponsesChat({
+      apiProfile: {
+        ...apiProfile,
+        protocol: "openai-chat-completions",
+      },
+      assistant,
+      conversation,
+      model: { ...model, webSearchEnabled: true },
+      messages,
+      signal: new AbortController().signal,
+      stream: false,
+    });
+
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)),
+    ).toMatchObject({
+      model: "test-model",
+      web_search_options: {},
+    });
   });
 
   it("includes route context when a provider returns an opaque error", async () => {

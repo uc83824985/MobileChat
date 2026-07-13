@@ -65,6 +65,7 @@ run.bat
 - 聊天页支持切换当前助手和该助手允许使用的模型。
 - 仓库不内置具体中转站、API key 或模型 slug；首次使用时通过设置页或本机数据库配置连接与模型。
 - 已接入 OpenAI-compatible Responses 与 Chat Completions 两种协议：Responses 走 `POST {baseUrl}/responses`、`store:false`；Chat Completions 走 `POST {baseUrl}/chat/completions`。两者都由本地消息构建单对话上下文。
+- 模型级联网工具会按协议序列化：Responses 使用 `web_search` tool，Chat Completions 使用 `web_search_options`。
 - 设置页可切换流式输出；开启后使用 Responses SSE 的 `response.output_text.delta` 增量更新消息。若中转站对 `stream:true` 仍返回普通 JSON，前端会回退为一次性解析。
 - 对话标题可在聊天头部直接编辑，历史搜索仍只匹配标题和摘要；归档对话有独立入口，可搜索、浏览和恢复，恢复前默认只读。
 - 消息支持删除；助手回复支持重试。重试会保留该回复之前的上下文，移除该回复及其后的后续消息，再用当前助手/模型重新生成。

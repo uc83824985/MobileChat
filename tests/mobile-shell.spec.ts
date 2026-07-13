@@ -115,8 +115,8 @@ test("supports archived conversation browsing and restore", async ({
   if (await page.getByLabel("打开对话列表").isVisible()) {
     await page.getByLabel("打开对话列表").click();
   }
-  await page.getByRole("button", { name: "归档当前", exact: true }).click();
-  await page.getByRole("button", { name: /归档对话/ }).click();
+  await page.getByRole("button", { name: "归档", exact: true }).click();
+  await page.getByRole("button", { name: /已归档/ }).click();
 
   await expect(
     page.getByRole("navigation", { name: "归档对话列表" }),

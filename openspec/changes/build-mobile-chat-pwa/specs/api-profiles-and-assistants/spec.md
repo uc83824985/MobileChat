@@ -79,6 +79,10 @@ The system SHALL treat web search and other hosted provider tools as explicit mo
 - **WHEN** a user enables web access for a model binding whose adapter supports hosted search
 - **THEN** the request includes the adapter-specific tool configuration, such as a Responses `tools` entry for `web_search`, and stores any returned search/citation diagnostics without making them part of local memory
 
+#### Scenario: Enable web search for a Chat Completions search route
+- **WHEN** a user enables web access for a model binding whose API profile uses Chat Completions
+- **THEN** the request includes Chat Completions `web_search_options` rather than a Responses `tools` entry
+
 #### Scenario: Web search unsupported by the selected route
 - **WHEN** a user sends a request that requires web access through a profile, model, or protocol that does not declare search support
 - **THEN** the system reports the unsupported capability before or during send instead of silently relying on the model to browse
