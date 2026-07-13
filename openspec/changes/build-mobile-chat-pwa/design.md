@@ -37,25 +37,29 @@ Use React with TypeScript and Vite to build a fully static single-page applicati
 
 This provides a small, conventional frontend toolchain with compile-time data model checks and no server runtime. A single hand-authored HTML file was considered, but rejected because the required IndexedDB migrations, multiple settings surfaces, streaming lifecycle, and testable state transitions would become difficult to maintain.
 
-### 2. IndexedDB repository layer with explicit migrations
+### 2. `MobileChatDB` IndexedDB repository layer with explicit migrations
 
-Use IndexedDB behind a typed repository boundary. A small IndexedDB helper library may manage transactions and schema upgrades, but domain code must not expose library-specific record types. UI preferences that are safe to lose may use `localStorage`; domain records do not.
+Use a single IndexedDB database named `MobileChatDB` behind a typed repository boundary. A small IndexedDB helper library may manage transactions and schema upgrades, but domain code must not expose library-specific record types. UI preferences that are safe to lose may use `localStorage`; domain records do not.
 
 Primary stores:
 
 ```text
+meta
+settings
 apiProfiles
 assistants
 conversations
 messages
-blobs
 drafts
 contextCheckpoints
-appSettings
-migrationMetadata
+blobs
 ```
 
 Every record uses a stable application-generated ID, ISO timestamp fields, and an explicit record version. Database upgrades run ordered migrations inside transactions where the browser permits them. Exported backups carry an independent export schema version.
+
+Writes are optimistic from the UI point of view: React state updates first, then a repository write commits the changed dirty record asynchronously. Selects, checkboxes, add/delete actions, message creation, checkpoint switching, import replacement, and archive/delete operations commit immediately, using transactions when consistency spans records. Text fields debounce commits for 300–500ms and flush on blur, settings close, send, and page visibility changes. The implementation must not serialize the whole database for every keystroke, block render on IndexedDB, or use synchronous `localStorage` for domain records. If real-device testing shows prompt editing jank on low-end phones, individual large text fields may switch to blur/manual save, but the default is non-blocking autosave.
+
+After first meaningful configuration, request persistent storage with `navigator.storage.persist()` when available and show storage mode plus `navigator.storage.estimate()` usage/quota in settings or debug diagnostics. Persistent storage reduces eviction risk but does not replace `.mobilechat` backups because users can still clear site data, uninstall browsers, change origins, or lose devices.
 
 ### 3. API profiles aggregate models
 
@@ -242,6 +246,8 @@ checksums.json      per-entry integrity hashes
 Complete migration mode includes API credentials after an explicit confirmation so another personal device can operate immediately; a credential-free export mode omits secret values while preserving profile and model metadata. Persistent browser file handles are never exported. Large exports report estimated size and attachment inclusion before creation.
 
 Import reads the archive into an isolated representation, checks ZIP entry safety, checksums, export version, record schema, references, and blob metadata, then shows an import summary. Only after confirmation does it perform transactional replacement or ID-based merge. Merge preserves imported IDs when they do not conflict; unequal conflicts receive new IDs and all imported internal references, including checkpoint boundaries and source references, are remapped together. Replace clears domain stores only after validation succeeds.
+
+Persistence and import/export use the same versioned record DTOs and migration path. Export reads a committed `MobileChatDB` snapshot, converts records into archive DTOs, and records export options such as credential inclusion, attachment inclusion, estimated size, app version, and schema version. Import parses into isolated DTOs first, migrates them if necessary, validates references, then writes to `MobileChatDB` in a single replace or merge transaction. The last successful export timestamp is stored in `settings` and displayed in backup settings.
 
 Cross-device access is a manual export-transfer-import workflow through the phone or desktop file system, cloud drive, or another user-chosen transport. It does not imply account synchronization or a MobileChat server. A plain JSON diagnostic export may be offered separately, but `.mobilechat` is the normative complete-backup format.
 

@@ -35,8 +35,15 @@ Current verification covers this with a Pixel-class Playwright viewport. Real-de
 
 ## Remaining limitations
 
-- No IndexedDB persistence yet; refresh loses runtime edits.
+- No IndexedDB persistence yet; refresh loses runtime edits. The accepted next persistence target is a unified IndexedDB database named `MobileChatDB`.
 - No real API profile/model CRUD yet.
 - No credential handling or endpoint validation yet.
 - Chat assistant vs. utility assistant enforcement is not complete in the prototype UI.
 - Assistant snapshots are not yet copied onto persisted messages because persistence is not implemented.
+
+## Persistence decision
+
+- Configuration persistence, conversations, messages, checkpoints, drafts, and future blobs will use one versioned IndexedDB database: `MobileChatDB`.
+- UI edits should update in-memory state immediately and persist asynchronously in the background.
+- Text fields should debounce saves and flush on blur, settings close, send, and page visibility changes.
+- Import/export must be designed together with persistence: `.mobilechat` archives export and import the same versioned record DTOs used by `MobileChatDB`, rather than copying browser database files.

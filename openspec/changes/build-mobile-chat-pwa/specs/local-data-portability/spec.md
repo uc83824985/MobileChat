@@ -1,11 +1,52 @@
 ## ADDED Requirements
 
+### Requirement: Unified MobileChatDB database
+The system SHALL use one versioned IndexedDB database named `MobileChatDB` as the source of truth for local domain records, including metadata, settings, API profiles, assistants, conversations, messages, drafts, context checkpoints, and blobs.
+
+#### Scenario: Open the app on phone after prior configuration
+- **WHEN** the user relaunches the application on the same browser origin after configuring assistants or API profiles
+- **THEN** the application restores those records from `MobileChatDB` without requiring a backend or development computer
+
+#### Scenario: Upgrade local schema
+- **WHEN** application code requires a newer supported schema version
+- **THEN** it runs ordered migrations for `MobileChatDB` before exposing records to the UI
+
 ### Requirement: Indexed local persistence
 The system SHALL persist API profiles, model definitions, assistants, conversations, messages, context checkpoints, display summaries, drafts, blobs, and application settings in browser-managed local storage using a versioned IndexedDB schema for structured records.
 
 #### Scenario: Reload after local changes
 - **WHEN** a user reloads or relaunches the application after saving data
 - **THEN** the latest committed local records are restored without contacting an application backend
+
+### Requirement: Non-blocking autosave
+The system SHALL apply UI edits to in-memory state immediately and SHALL persist changed records to `MobileChatDB` asynchronously without blocking typing, scrolling, or selection interactions.
+
+#### Scenario: Edit assistant prompt on a phone
+- **WHEN** the user types into a large assistant prompt field
+- **THEN** the text input remains responsive while the application debounces and commits only the changed assistant record
+
+#### Scenario: Flush pending edits
+- **WHEN** a user blurs a field, closes settings, sends a message, or the page becomes hidden
+- **THEN** any pending dirty records are flushed to `MobileChatDB` before the state is considered saved
+
+#### Scenario: Save status is visible
+- **WHEN** a background save is pending, committed, or fails
+- **THEN** the UI exposes a local save status such as unsaved, saving, saved, or failed without leaking credentials
+
+### Requirement: Persistent storage request and quota observability
+The system SHALL request persistent storage when available after meaningful local configuration exists and SHALL expose storage mode and estimated usage/quota in settings or debug diagnostics.
+
+#### Scenario: Browser grants persistent storage
+- **WHEN** `navigator.storage.persist()` resolves to true
+- **THEN** the application records that storage is persistent and informs the user that browser-managed eviction risk is reduced but manual export is still recommended
+
+#### Scenario: Browser denies or lacks persistent storage
+- **WHEN** persistent storage is unavailable or denied
+- **THEN** the application continues to function with best-effort storage and makes backup/export status visible
+
+#### Scenario: Quota information is available
+- **WHEN** `navigator.storage.estimate()` returns usage and quota
+- **THEN** the application displays the values as estimates and handles quota exceeded write failures as recoverable local storage errors
 
 ### Requirement: Assistant-independent stored records
 Conversation and message records SHALL remain readable and exportable without resolving a live assistant, API profile, model definition, or credential.
@@ -24,6 +65,10 @@ The system SHALL assign a schema version to persisted and exported data and SHAL
 ### Requirement: Portable compressed backup archive
 The system SHALL export a ZIP-compatible `.mobilechat` archive containing a versioned manifest, structured records, optional binary blob entries, and integrity checks required to restore the selected application state on another supported browser or device.
 
+#### Scenario: Export committed local records
+- **WHEN** a user starts an export
+- **THEN** the archive is produced from committed `MobileChatDB` records using the same versioned record DTOs as local persistence, not from transient React state alone
+
 #### Scenario: Export a complete migration backup
 - **WHEN** a user confirms a complete export including credentials and attachments
 - **THEN** the browser produces one `.mobilechat` file containing the required records, API credentials, attachment entries, and checksums without requiring a server
@@ -41,6 +86,10 @@ The system SHALL NOT use a raw IndexedDB directory, browser-profile file, or imp
 
 ### Requirement: Validated backup import
 The system SHALL validate archive entry paths, checksums, export version, record schemas, references, and declared blobs before mutation and SHALL allow the user to merge the archive with or replace current local data after presenting an import summary.
+
+#### Scenario: Import before local mutation
+- **WHEN** a user selects a `.mobilechat` archive
+- **THEN** the application parses, migrates, and validates the archive in isolation before opening a write transaction against `MobileChatDB`
 
 #### Scenario: Reject an invalid backup
 - **WHEN** a selected file has unsupported schema metadata or invalid required records

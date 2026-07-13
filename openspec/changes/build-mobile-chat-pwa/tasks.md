@@ -9,11 +9,12 @@
 ## 2. Domain model and local persistence
 
 - [ ] 2.1 Define versioned TypeScript domain types for API profiles, models, model pricing metadata, chat/utility assistants, bindings, conversations, messages, content parts, blobs, drafts, context checkpoints, display summaries, context budget reports, pre-send cache estimates, normalized usage stats, and settings
-- [ ] 2.2 Create the IndexedDB database schema, including immutable context-checkpoint storage, typed repository interfaces, transactions, and store indexes
+- [ ] 2.2 Create the `MobileChatDB` IndexedDB database schema, including immutable context-checkpoint storage, typed repository interfaces, transactions, and store indexes
 - [ ] 2.3 Implement schema-version metadata and an ordered migration runner with rollback-safe failure handling
 - [ ] 2.4 Implement ID, timestamp, validation, and reference-resolution utilities shared by repositories and imports
 - [ ] 2.5 Implement conversation and message source-snapshot creation that excludes credentials and remains readable without live configuration
 - [ ] 2.6 Add repository tests for persistence, cascading conversation deletion, unresolved references, and migration failure recovery
+- [ ] 2.7 Implement non-blocking autosave with dirty-record writes, save-status reporting, debounced text flushes, storage persistence requests, and quota/status diagnostics
 
 ## 3. API profiles and assistant configuration
 
