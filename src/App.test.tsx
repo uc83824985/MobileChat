@@ -145,10 +145,16 @@ describe("App", () => {
     });
     expect(document.documentElement.dataset.theme).toBe("light");
 
-    expect(screen.getByLabelText("电脑端布局")).not.toBeChecked();
-    fireEvent.click(screen.getByLabelText("电脑端布局"));
-    expect(screen.getByLabelText("电脑端布局")).toBeChecked();
+    expect(screen.getByLabelText("布局模式")).toHaveValue("auto");
+    fireEvent.change(screen.getByLabelText("布局模式"), {
+      target: { value: "desktop" },
+    });
     expect(screen.getByRole("main")).toHaveClass("desktop-layout");
+    fireEvent.change(screen.getByLabelText("布局模式"), {
+      target: { value: "mobile" },
+    });
+    expect(screen.getByRole("main")).not.toHaveClass("desktop-layout");
+    expect(screen.getByRole("main")).toHaveClass("mobile-layout");
 
     expect(screen.getByLabelText("流式输出")).toBeChecked();
     fireEvent.click(screen.getByLabelText("流式输出"));

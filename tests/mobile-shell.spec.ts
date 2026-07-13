@@ -144,9 +144,12 @@ test("keeps settings rows compact on mobile", async ({ page }, testInfo) => {
     expect(rowBox?.height).toBeLessThan(90);
   }
 
-  await expect(page.locator(".app-shell")).not.toHaveClass(/desktop-layout/);
-  await page.getByLabel("电脑端布局").check({ force: true });
+  await expect(page.getByLabel("布局模式")).toHaveValue("auto");
+  await page.getByLabel("布局模式").selectOption("desktop");
   await expect(page.locator(".app-shell")).toHaveClass(/desktop-layout/);
+  await page.getByLabel("布局模式").selectOption("mobile");
+  await expect(page.locator(".app-shell")).not.toHaveClass(/desktop-layout/);
+  await expect(page.locator(".app-shell")).toHaveClass(/mobile-layout/);
 });
 
 test("verifies persistence and .mobilechat import/export on desktop", async ({

@@ -38,6 +38,7 @@ export type Message = {
 
 export type AssistantKind = "chat" | "utility";
 export type ThemeMode = "system" | "light" | "dark";
+export type LayoutMode = "auto" | "mobile" | "desktop";
 export type ApiProtocol = "openai-responses" | "openai-chat-completions";
 
 export type ModelDefinition = {
@@ -111,7 +112,7 @@ export type AppSettings = {
   activeModelRef: ModelRef;
   editingAssistantId: string;
   themeMode: ThemeMode;
-  desktopLayoutEnabled: boolean;
+  layoutMode: LayoutMode;
   streamingEnabled: boolean;
   debugEnabled: boolean;
   lastSuccessfulExportAt?: string;
@@ -137,7 +138,7 @@ export type LocalDataSnapshot = {
 
 export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 
-export const DATABASE_SCHEMA_VERSION = 6;
+export const DATABASE_SCHEMA_VERSION = 7;
 
 export const DEFAULT_PROFILE_ID = "default-profile";
 export const DEFAULT_MODEL_ID = "default-model";
@@ -335,7 +336,7 @@ export const createInitialSettings = (
   activeModelRef: DEFAULT_MODEL_REF,
   editingAssistantId: defaultAssistant.id,
   themeMode: "system",
-  desktopLayoutEnabled: false,
+  layoutMode: "auto",
   streamingEnabled: true,
   debugEnabled: true,
   storagePersisted: null,

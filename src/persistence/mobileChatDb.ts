@@ -41,6 +41,7 @@ type LegacyMessage = Omit<Message, "createdAt"> & {
 type LegacySettings = Partial<AppSettings> & {
   activeModelRef?: ModelRef;
   themeMode?: AppSettings["themeMode"];
+  desktopLayoutEnabled?: boolean;
   streamingEnabled?: boolean;
 };
 type SnapshotInput = Omit<
@@ -284,9 +285,13 @@ export const normalizeSnapshot = (
         firstAssistant?.id ??
         initialSnapshot.settings.editingAssistantId,
       themeMode: settings.themeMode ?? "system",
-      desktopLayoutEnabled:
-        settings.desktopLayoutEnabled ??
-        initialSnapshot.settings.desktopLayoutEnabled,
+      layoutMode:
+        settings.layoutMode ??
+        (typeof settings.desktopLayoutEnabled === "boolean"
+          ? settings.desktopLayoutEnabled
+            ? "desktop"
+            : "mobile"
+          : initialSnapshot.settings.layoutMode),
       streamingEnabled:
         settings.streamingEnabled ?? initialSnapshot.settings.streamingEnabled,
       debugEnabled:

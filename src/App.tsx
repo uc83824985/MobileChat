@@ -45,6 +45,7 @@ import {
   DEFAULT_MODEL_REF,
   defaultAssistant,
   type LocalDataSnapshot,
+  type LayoutMode,
   type Message,
   type ModelDefinition,
   type ModelRef,
@@ -123,6 +124,12 @@ const themeLabels: Record<ThemeMode, string> = {
   system: "跟随系统",
   light: "亮色",
   dark: "暗色",
+};
+
+const layoutLabels: Record<LayoutMode, string> = {
+  auto: "跟随屏幕",
+  mobile: "手机端",
+  desktop: "电脑端",
 };
 
 const saveStatusLabels: Record<SaveStatus, string> = {
@@ -335,8 +342,8 @@ function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(
     bootSnapshot.settings.themeMode,
   );
-  const [desktopLayoutEnabled, setDesktopLayoutEnabled] = useState(
-    bootSnapshot.settings.desktopLayoutEnabled,
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>(
+    bootSnapshot.settings.layoutMode,
   );
   const [streamingEnabled, setStreamingEnabled] = useState(
     bootSnapshot.settings.streamingEnabled,
@@ -487,7 +494,7 @@ function App() {
       activeModelRef,
       editingAssistantId,
       themeMode,
-      desktopLayoutEnabled,
+      layoutMode,
       streamingEnabled,
       debugEnabled,
       lastSuccessfulExportAt,
@@ -500,8 +507,8 @@ function App() {
       activeConversationId,
       activeModelRef,
       debugEnabled,
-      desktopLayoutEnabled,
       editingAssistantId,
+      layoutMode,
       lastSuccessfulExportAt,
       streamingEnabled,
       storageInfo.persisted,
@@ -537,7 +544,7 @@ function App() {
       snapshot.apiProfiles[0]?.models[0]?.id ?? DEFAULT_MODEL_REF.modelId,
     );
     setThemeMode(snapshot.settings.themeMode);
-    setDesktopLayoutEnabled(snapshot.settings.desktopLayoutEnabled);
+    setLayoutMode(snapshot.settings.layoutMode);
     setStreamingEnabled(snapshot.settings.streamingEnabled);
     setDebugEnabled(snapshot.settings.debugEnabled);
     setLastSuccessfulExportAt(snapshot.settings.lastSuccessfulExportAt);
@@ -1890,7 +1897,13 @@ function App() {
 
   return (
     <main
-      className={`app-shell ${desktopLayoutEnabled ? "desktop-layout" : ""}`}
+      className={`app-shell ${
+        layoutMode === "desktop"
+          ? "desktop-layout"
+          : layoutMode === "mobile"
+            ? "mobile-layout"
+            : ""
+      }`}
     >
       {pwaNotice ? (
         <aside className="pwa-banner" role="status">
@@ -2315,20 +2328,22 @@ function App() {
                   <span />
                 </label>
               </div>
-              <div className="settings-row compact">
-                <span>电脑端布局</span>
-                <label className="switch">
-                  <input
-                    aria-label="电脑端布局"
-                    checked={desktopLayoutEnabled}
-                    onChange={(event) =>
-                      setDesktopLayoutEnabled(event.target.checked)
-                    }
-                    type="checkbox"
-                  />
-                  <span />
-                </label>
-              </div>
+              <label className="settings-row compact theme-select">
+                <span>布局模式</span>
+                <select
+                  aria-label="布局模式"
+                  value={layoutMode}
+                  onChange={(event) =>
+                    setLayoutMode(event.target.value as LayoutMode)
+                  }
+                >
+                  {Object.entries(layoutLabels).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <div className="settings-row compact">
                 <span>API Profiles</span>
                 <strong>{apiProfiles.length}</strong>
