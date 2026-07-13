@@ -94,7 +94,7 @@ MobileChatDB
 - `settings`：当前助手、当前模型引用、当前对话、主题模式、流式输出开关、调试模式、存储持久化状态、最后成功导出时间等应用设置。
 - `apiProfiles`：API base URL、协议、凭据、模型列表和价格/上下文窗口元数据。模型是独立记录，不应只作为助手字段存在。
 - `assistants`：聊天助手和功能助手配置，包括 prompt、初始消息和模型绑定。助手引用已有 API Profile + model，并保存关键显示字段快照，避免模型或助手删除后消息来源完全丢失。
-- `conversations`：标题、显示摘要、归档状态、活动助手/模型引用、活动检查点引用。
+- `conversations`：标题、显示摘要、归档状态、活动助手/模型引用、活动检查点引用。归档不是移动到另一张表，而是通过 `archived=true` 在同一数据集中切换到只读浏览/搜索/恢复视图。
 - `messages`：规范消息、创建时间、content parts、分支关系、助手/模型来源快照、usage/debug 观测。渲染顺序必须基于 `createdAt` 或显式序号，不能依赖 IndexedDB `getAll()` 的主键顺序，因为 `assistant-*` / `message-*` 前缀会破坏真实对话顺序。
 - `drafts`：每个对话的未发送草稿。
 - `contextCheckpoints`：不可变压缩检查点。
@@ -172,13 +172,15 @@ reasoningTokens
 cacheReadHitRate = cachedInputTokens / inputTokens
 ```
 
-UI 展示必须避免把 cache 命中分子/分母误写成总 usage。首版显示格式为：
+UI 展示必须避免把 cache 命中分子/分母误写成总 usage。当前首版调试面板只显示最容易误读的一项：
 
 ```text
-in <inputTokens> / out <outputTokens> / total <totalTokens> · cache <cachedInputTokens>/<inputTokens>
+cache <cachedInputTokens>/<inputTokens>
 ```
 
 其中 `cache 0/95` 只表示本次 95 个输入 token 中 provider 报告 0 个 cached input tokens，不代表总 token 为 95，也不代表输出 token 为 0。
+
+完整 `inputTokens`、`outputTokens`、`totalTokens`、`cachedInputTokens` 仍保存在消息记录上，后续成本面板或高级调试面板可以恢复展示。
 
 对话滚动 cache 读命中率（仅当分母大于 0 时计算）：
 

@@ -5,9 +5,9 @@ Date: 2026-07-13
 ## Current verified state
 
 - The mobile/desktop shell is usable with persisted local state.
-- Conversation creation, conversation selection, title edit, title/summary search, archive action, draft input, send, stop, debug panel toggle, settings open/close, theme switch, streaming switch, assistant switch, and model switch are covered by Playwright.
+- Conversation creation, conversation selection, title edit, title/summary search, archive action, archived conversation view, draft input, send, stop, debug panel toggle, settings open/close, theme switch, streaming switch, assistant switch, and model switch are covered by automated tests.
 - Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, backup, theme, and streaming controls.
-- The app has a minimal OpenAI-compatible Responses request loop. Without an API key it shows a local configuration error; with an API key it sends `POST {baseUrl}/responses` using `store:false`. Streaming mode uses SSE text deltas; non-streaming mode still works as a fallback.
+- The app has a minimal OpenAI-compatible Responses request loop. Without an API key it shows a local configuration error; with an API key it sends `POST {baseUrl}/responses` using `store:false`. Streaming mode uses SSE text deltas when the gateway truly streams; if a `stream:true` request is buffered into JSON, the client falls back to one-shot JSON parsing.
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
 
 ## Implemented response to mobile feedback
@@ -17,6 +17,8 @@ Date: 2026-07-13
 - The settings panel is full-screen on small screens and a wide details panel on desktop.
 - The conversation drawer keeps the bottom archive/settings actions visible while the conversation list scrolls.
 - The chat header provides a direct title edit entry. Press Enter or the check button to save; Esc or the close button cancels.
+- Archived conversations now have a sidebar entry. The archived view searches only title and summary, allows browsing and restoring, and keeps the composer read-only until restore.
+- Assistant messages expose a retry action; retry removes the selected assistant reply and later messages before regenerating with the current assistant/model. Messages also expose a local delete action.
 - Dark mode styles native select options and applies `color-scheme: dark` to avoid white dropdown backgrounds with pale text.
 - The assistant details panel is schema-rendered from `assistantFields`, so newly added assistants use the same reflected editor instead of a special hard-coded page.
 
@@ -35,6 +37,7 @@ Date: 2026-07-13
   - description;
   - optional context window;
   - enabled flag.
+- The API Profile editor shows the full model list as selectable model cards, so every model visible in assistant model access can be traced back to a model-side configuration record.
 - Assistants no longer own raw `apiProfileName` / `model` fields as the active configuration path. They own model bindings that reference existing API Profile + model records, with snapshots of key display fields for provenance.
 - Legacy assistant records containing `apiProfileName` / `model` are migrated into model bindings on load/import.
 
@@ -61,12 +64,9 @@ Date: 2026-07-13
 ## Diagnostics and usage display
 
 - The pre-send token count is still a local estimate based on text length, not a tokenizer-accurate billable number.
-- The post-send usage display uses explicit labels:
-  - `in`: provider-reported input tokens;
-  - `out`: provider-reported output tokens;
-  - `total`: provider-reported total tokens, or `in + out` fallback;
-  - `cache cached/input`: cached input tokens divided by input tokens.
-- A display such as `cache 0/95` means no cached input tokens were reported for 95 input tokens. It is not the total usage.
+- The post-send usage display is intentionally compact: `cache cached/input`.
+- A display such as `cache 0/95` means no cached input tokens were reported for 95 provider-reported input tokens. It is not total usage, output usage, or cost.
+- Full provider usage is still stored on the assistant message record for future cost and budget panels.
 
 ## Verification
 

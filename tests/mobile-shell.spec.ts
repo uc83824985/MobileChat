@@ -83,12 +83,53 @@ test("supports basic mobile interactions, title editing, and model switching", a
 
   await page.getByLabel("助手名称").fill("手机研究助手");
   await page.getByLabel("初始 Prompt").fill("手机端可编辑当前助手 prompt。");
-  await page.getByLabel("模型名称").fill("MNAPI Mini");
   await expect(page.getByLabel("助手名称")).toHaveValue("手机研究助手");
   await expect(page.getByLabel("初始 Prompt")).toHaveValue(
     "手机端可编辑当前助手 prompt。",
   );
+
+  await expect(
+    page.getByRole("button", { name: "编辑模型 gpt-5.4-mini" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "编辑模型 gpt-5.4-mini" }).click();
+  await expect(page.getByLabel("模型名称")).toHaveValue("gpt-5.4-mini");
+  await page.getByLabel("模型名称").fill("MNAPI Mini");
   await expect(page.getByLabel("模型名称")).toHaveValue("MNAPI Mini");
+});
+
+test("supports archived conversation browsing and restore", async ({
+  page,
+}) => {
+  if (await page.getByLabel("打开对话列表").isVisible()) {
+    await page.getByLabel("打开对话列表").click();
+  }
+  await page.getByLabel("新建对话").click();
+  await page.getByLabel("编辑标题").click();
+  await page.getByLabel("对话标题").fill("归档浏览测试");
+  await page.getByLabel("保存标题").click();
+
+  if (await page.getByLabel("打开对话列表").isVisible()) {
+    await page.getByLabel("打开对话列表").click();
+  }
+  await page.getByRole("button", { name: "归档当前", exact: true }).click();
+  await page.getByRole("button", { name: /归档对话/ }).click();
+
+  await expect(
+    page.getByRole("navigation", { name: "归档对话列表" }),
+  ).toBeVisible();
+  await expect(page.getByText("归档浏览测试")).toHaveCount(2);
+  await expect(
+    page.getByPlaceholder("归档对话仅浏览，恢复后可继续"),
+  ).toBeDisabled();
+
+  await page.getByPlaceholder("搜索归档标题或摘要").fill("归档浏览");
+  await expect(page.getByText("归档浏览测试")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "恢复当前", exact: true }).click();
+  await expect(
+    page.getByRole("navigation", { name: "对话列表" }),
+  ).toBeVisible();
+  await expect(page.getByPlaceholder("输入消息")).toBeEnabled();
 });
 
 test("keeps settings rows compact on mobile", async ({ page }, testInfo) => {

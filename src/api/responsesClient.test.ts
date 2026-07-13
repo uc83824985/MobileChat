@@ -110,6 +110,48 @@ describe("responsesClient", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).stream).toBe(
       true,
     );
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      Accept: "text/event-stream, application/json",
+    });
+  });
+
+  it("falls back to JSON parsing when a stream request is buffered by the provider", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "resp_json_stream",
+          output_text: "buffered response",
+          usage: {
+            input_tokens: 9,
+            output_tokens: 2,
+            total_tokens: 11,
+            input_tokens_details: { cached_tokens: 0 },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const deltas: string[] = [];
+
+    const result = await requestResponsesChat({
+      apiProfile,
+      assistant,
+      conversation,
+      model,
+      messages,
+      signal: new AbortController().signal,
+      stream: true,
+      onTextDelta: (_delta, fullText) => deltas.push(fullText),
+    });
+
+    expect(result.text).toBe("buffered response");
+    expect(result.providerResponseId).toBe("resp_json_stream");
+    expect(result.usage?.cachedInputTokens).toBe(0);
+    expect(deltas).toEqual([]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).stream).toBe(
+      true,
+    );
   });
 
   it("sends non-streaming requests when streaming is disabled", async () => {

@@ -210,6 +210,7 @@ const fetchResponses = async ({
     signal,
     headers: {
       Authorization: `Bearer ${apiKey}`,
+      Accept: "text/event-stream, application/json",
       "Content-Type": "application/json",
     },
     body,
@@ -343,13 +344,22 @@ const readResponsesStream = async (
       onTextDelta?.(delta, text);
     }
 
-    if (
-      isRecord(payload) &&
-      (payload.type === "response.completed" ||
+    if (isRecord(payload)) {
+      if (
+        payload.type === "response.completed" ||
         payload.type === "response.failed" ||
-        payload.type === "response.incomplete")
-    ) {
-      finalPayload = responsePayload;
+        payload.type === "response.incomplete"
+      ) {
+        finalPayload = responsePayload;
+      }
+      if (
+        !readString(payload.type) &&
+        (readString(payload.output_text) ||
+          Array.isArray(payload.output) ||
+          Array.isArray(payload.choices))
+      ) {
+        finalPayload = payload;
+      }
     }
   };
 
@@ -438,6 +448,18 @@ export const requestResponsesChat = async ({
   }
 
   if (stream) {
+    const contentType = response.headers.get("content-type")?.toLowerCase();
+    if (contentType?.includes("application/json")) {
+      const payload = (await response.json()) as unknown;
+      return {
+        text: extractResponseText(payload),
+        providerResponseId: isRecord(payload)
+          ? readString(payload.id)
+          : undefined,
+        usage: extractUsage(payload),
+      };
+    }
+
     return readResponsesStream(response, onTextDelta);
   }
 

@@ -227,6 +227,11 @@ button:disabled {
   padding: 10px 12px;
 }
 
+.rail-footer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .chat-surface {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
@@ -379,6 +384,35 @@ button:disabled {
   margin: 4px 0 0;
 }
 
+.message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.message-actions button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 5px;
+  padding: 5px 8px;
+}
+
+.message-actions button:hover {
+  color: var(--text-strong);
+}
+
+.message-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .diagnostics-panel {
   background: var(--diagnostics);
   border-top: 1px solid var(--line);
@@ -436,6 +470,11 @@ button:disabled {
   outline: 0;
   padding: 11px 12px;
   resize: none;
+}
+
+.composer textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .send-button {
@@ -754,6 +793,39 @@ button:disabled {
 }
 
 .assistant-card small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-card-list {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.model-card {
+  align-items: start;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  padding: 10px;
+  text-align: left;
+}
+
+.model-card.selected {
+  background: var(--selected);
+  color: var(--text-strong);
+}
+
+.model-card span {
+  font-weight: 800;
+}
+
+.model-card small {
   color: var(--text-muted);
   font-size: 12px;
 }

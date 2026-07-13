@@ -10,12 +10,14 @@ import {
   PanelLeft,
   Pencil,
   Plus,
+  RotateCcw,
   Search,
   Send,
   Server,
   Settings,
   SlidersHorizontal,
   StopCircle,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -193,15 +195,10 @@ const formatObservedUsage = (usage?: ResponseUsage) => {
     return "unknown";
   }
 
-  const output = usage.outputTokens ?? 0;
-  const total = usage.totalTokens ?? usage.inputTokens + output;
-  const cached = usage.cachedInputTokens;
-  const cacheLabel =
-    typeof cached === "number"
-      ? `cache ${cached}/${usage.inputTokens}`
-      : "cache unknown";
+  const cached =
+    typeof usage.cachedInputTokens === "number" ? usage.cachedInputTokens : "?";
 
-  return `in ${usage.inputTokens} / out ${output} / total ${total} · ${cacheLabel}`;
+  return `cache ${cached}/${usage.inputTokens}`;
 };
 
 const formatStorageUsage = (storageInfo: StorageInfo) => {
@@ -298,6 +295,7 @@ function App() {
   );
   const [draft, setDraft] = useState("");
   const [conversationSearch, setConversationSearch] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const [editingTitleConversationId, setEditingTitleConversationId] = useState<
     string | null
   >(null);
@@ -376,13 +374,19 @@ function App() {
     () => listAllModels(apiProfiles),
     [apiProfiles],
   );
+  const activeConversations = useMemo(
+    () => conversations.filter((conversation) => !conversation.archived),
+    [conversations],
+  );
+  const archivedConversations = useMemo(
+    () => conversations.filter((conversation) => conversation.archived),
+    [conversations],
+  );
   const visibleConversations = useMemo(() => {
     const keyword = conversationSearch.trim().toLocaleLowerCase();
+    const source = showArchived ? archivedConversations : activeConversations;
 
-    return conversations.filter((conversation) => {
-      if (conversation.archived) {
-        return false;
-      }
+    return source.filter((conversation) => {
       if (!keyword) {
         return true;
       }
@@ -391,7 +395,14 @@ function App() {
         .toLocaleLowerCase()
         .includes(keyword);
     });
-  }, [conversationSearch, conversations]);
+  }, [
+    activeConversations,
+    archivedConversations,
+    conversationSearch,
+    showArchived,
+  ]);
+  const activeConversationReadOnly =
+    showArchived || Boolean(activeConversation?.archived);
 
   const chatAssistantCount = assistants.filter(
     (assistant) => assistant.kind === "chat",
@@ -676,7 +687,9 @@ function App() {
                 ...message,
                 status: "stopped",
                 text:
-                  message.text && message.text !== "正在请求模型…"
+                  message.text &&
+                  message.text !== "正在请求模型…" &&
+                  message.text !== "正在等待流式输出…"
                     ? message.text
                     : replacementText,
               }
@@ -711,6 +724,7 @@ function App() {
     setConversations((current) => [newConversation, ...current]);
     setActiveConversationId(newConversation.id);
     setConversationSearch("");
+    setShowArchived(false);
     setDrawerOpen(false);
     setDraft("");
     setEditingTitleConversationId(null);
@@ -725,6 +739,26 @@ function App() {
     setEditingTitleConversationId(null);
     setTitleDraft("");
     stopResponse("已停止上一条未完成回复。");
+  };
+
+  const openArchivedConversations = () => {
+    setShowArchived(true);
+    setConversationSearch("");
+    const firstArchived = archivedConversations[0];
+    if (firstArchived) {
+      setActiveConversationId(firstArchived.id);
+    }
+  };
+
+  const openActiveConversations = () => {
+    setShowArchived(false);
+    setConversationSearch("");
+    if (!activeConversation || activeConversation.archived) {
+      const firstActive = activeConversations[0];
+      if (firstActive) {
+        setActiveConversationId(firstActive.id);
+      }
+    }
   };
 
   const startTitleEdit = () => {
@@ -761,13 +795,12 @@ function App() {
   };
 
   const archiveActiveConversation = () => {
-    if (!activeConversation) {
+    if (!activeConversation || activeConversation.archived) {
       return;
     }
 
-    const nextActive = conversations.find(
-      (conversation) =>
-        conversation.id !== activeConversation.id && !conversation.archived,
+    const nextActive = activeConversations.find(
+      (conversation) => conversation.id !== activeConversation.id,
     );
 
     setConversations((current) =>
@@ -777,6 +810,7 @@ function App() {
           : conversation,
       ),
     );
+    setShowArchived(false);
 
     if (nextActive) {
       setActiveConversationId(nextActive.id);
@@ -791,6 +825,23 @@ function App() {
     };
     setConversations((current) => [fallbackConversation, ...current]);
     setActiveConversationId(fallbackConversation.id);
+  };
+
+  const restoreActiveConversation = () => {
+    if (!activeConversation || !activeConversation.archived) {
+      return;
+    }
+
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === activeConversation.id
+          ? { ...conversation, archived: false }
+          : conversation,
+      ),
+    );
+    setShowArchived(false);
+    setConversationSearch("");
+    setActiveConversationId(activeConversation.id);
   };
 
   const openSettings = () => {
@@ -1124,11 +1175,176 @@ function App() {
     }
   };
 
+  const deleteMessage = (messageId: string) => {
+    if (pendingMessageId === messageId) {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      setPendingMessageId(null);
+    }
+
+    setMessages((current) =>
+      current.filter((message) => message.id !== messageId),
+    );
+  };
+
+  const retryAssistantMessage = async (messageId: string) => {
+    if (!activeConversation || activeConversationReadOnly || pendingMessageId) {
+      return;
+    }
+
+    const messageIndex = activeMessages.findIndex(
+      (message) => message.id === messageId,
+    );
+    const targetMessage = activeMessages[messageIndex];
+    if (!targetMessage || targetMessage.role !== "assistant") {
+      return;
+    }
+
+    const requestMessages = activeMessages.slice(0, messageIndex);
+    const lastUserMessage = requestMessages
+      .toReversed()
+      .find((message) => message.role === "user");
+    if (!lastUserMessage) {
+      return;
+    }
+
+    const idsToRemove = new Set(
+      activeMessages.slice(messageIndex).map((message) => message.id),
+    );
+    const resolvedModel = activeResolvedModel;
+
+    if (!resolvedModel) {
+      const errorMessage: Message = {
+        id: createId("assistant"),
+        conversationId: activeConversation.id,
+        role: "assistant",
+        label: activeAssistant.name,
+        text: "当前助手没有可用模型。请先在设置页为助手绑定启用的模型。",
+        createdAt: new Date().toISOString(),
+        status: "error",
+      };
+      setMessages((current) => [
+        ...current.filter((message) => !idsToRemove.has(message.id)),
+        errorMessage,
+      ]);
+      return;
+    }
+
+    const source = createSourceSnapshot(activeAssistant, resolvedModel);
+    const assistantMessage: Message = {
+      id: createId("assistant"),
+      conversationId: activeConversation.id,
+      role: "assistant",
+      label: `${activeAssistant.name} · ${resolvedModel.model.name}`,
+      text: streamingEnabled ? "正在等待流式输出…" : "正在请求模型…",
+      createdAt: new Date().toISOString(),
+      status: "streaming",
+      source,
+    };
+    const controller = new AbortController();
+    let streamedText = "";
+
+    abortControllerRef.current = controller;
+    setLastObservedUsage(undefined);
+    setMessages((current) => [
+      ...current.filter((message) => !idsToRemove.has(message.id)),
+      assistantMessage,
+    ]);
+    setPendingMessageId(assistantMessage.id);
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === activeConversation.id
+          ? {
+              ...conversation,
+              summary: `最近重试：${lastUserMessage.text.slice(0, 28)}`,
+            }
+          : conversation,
+      ),
+    );
+
+    try {
+      const result = await requestResponsesChat({
+        apiProfile: resolvedModel.apiProfile,
+        assistant: activeAssistant,
+        conversation: activeConversation,
+        model: resolvedModel.model,
+        messages: requestMessages,
+        signal: controller.signal,
+        stream: streamingEnabled,
+        onTextDelta: streamingEnabled
+          ? (_delta, fullText) => {
+              streamedText = fullText;
+              setMessages((current) =>
+                current.map((message) =>
+                  message.id === assistantMessage.id
+                    ? {
+                        ...message,
+                        text:
+                          fullText ||
+                          (streamingEnabled
+                            ? "正在等待流式输出…"
+                            : "正在请求模型…"),
+                      }
+                    : message,
+                ),
+              );
+            }
+          : undefined,
+      });
+
+      setLastObservedUsage(result.usage);
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantMessage.id
+            ? {
+                ...message,
+                status: "complete",
+                text: result.text || streamedText || "模型未返回文本内容。",
+                providerResponseId: result.providerResponseId,
+                usage: result.usage,
+              }
+            : message,
+        ),
+      );
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantMessage.id
+            ? {
+                ...message,
+                status: "error",
+                text:
+                  error instanceof Error
+                    ? error.message
+                    : "请求模型失败，请检查 API Profile、模型和网络。",
+              }
+            : message,
+        ),
+      );
+    } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+      if (!controller.signal.aborted) {
+        setPendingMessageId(null);
+      }
+    }
+  };
+
   const sendMessage = async () => {
     const text = draft.trim();
     const resolvedModel = activeResolvedModel;
 
-    if (!text || !activeConversation || pendingMessageId) {
+    if (
+      !text ||
+      !activeConversation ||
+      activeConversationReadOnly ||
+      pendingMessageId
+    ) {
       return;
     }
 
@@ -1164,7 +1380,7 @@ function App() {
       conversationId: activeConversation.id,
       role: "assistant",
       label: `${activeAssistant.name} · ${resolvedModel.model.name}`,
-      text: "正在请求模型…",
+      text: streamingEnabled ? "正在等待流式输出…" : "正在请求模型…",
       createdAt: assistantCreatedAt,
       status: "streaming",
       source,
@@ -1174,6 +1390,7 @@ function App() {
 
     abortControllerRef.current = controller;
     setDraft("");
+    setLastObservedUsage(undefined);
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setPendingMessageId(assistantMessage.id);
     setConversations((current) =>
@@ -1202,7 +1419,14 @@ function App() {
               setMessages((current) =>
                 current.map((message) =>
                   message.id === assistantMessage.id
-                    ? { ...message, text: fullText || "正在请求模型…" }
+                    ? {
+                        ...message,
+                        text:
+                          fullText ||
+                          (streamingEnabled
+                            ? "正在等待流式输出…"
+                            : "正在请求模型…"),
+                      }
                     : message,
                 ),
               );
@@ -1299,7 +1523,7 @@ function App() {
         <header className="rail-header">
           <div>
             <p className="eyebrow">MobileChat</p>
-            <h1>对话</h1>
+            <h1>{showArchived ? "归档" : "对话"}</h1>
           </div>
           <button
             className="icon-button"
@@ -1314,13 +1538,16 @@ function App() {
         <label className="search-box">
           <Search size={18} />
           <input
-            placeholder="搜索标题或摘要"
+            placeholder={showArchived ? "搜索归档标题或摘要" : "搜索标题或摘要"}
             value={conversationSearch}
             onChange={(event) => setConversationSearch(event.target.value)}
           />
         </label>
 
-        <nav className="conversation-list" aria-label="对话列表">
+        <nav
+          className="conversation-list"
+          aria-label={showArchived ? "归档对话列表" : "对话列表"}
+        >
           {visibleConversations.map((conversation) => (
             <button
               className={`conversation-item ${
@@ -1335,14 +1562,39 @@ function App() {
             </button>
           ))}
           {visibleConversations.length === 0 ? (
-            <p className="empty-list">没有匹配的对话</p>
+            <p className="empty-list">
+              {showArchived ? "没有匹配的归档对话" : "没有匹配的对话"}
+            </p>
           ) : null}
         </nav>
 
         <footer className="rail-footer">
-          <button type="button" onClick={archiveActiveConversation}>
+          <button
+            type="button"
+            onClick={
+              showArchived ? openActiveConversations : openArchivedConversations
+            }
+          >
             <Archive size={18} />
-            归档当前
+            {showArchived
+              ? "返回对话"
+              : `归档对话${archivedConversations.length ? ` (${archivedConversations.length})` : ""}`}
+          </button>
+          <button
+            type="button"
+            disabled={!activeConversation}
+            onClick={
+              activeConversation?.archived
+                ? restoreActiveConversation
+                : archiveActiveConversation
+            }
+          >
+            {activeConversation?.archived ? (
+              <RotateCcw size={18} />
+            ) : (
+              <Archive size={18} />
+            )}
+            {activeConversation?.archived ? "恢复当前" : "归档当前"}
           </button>
           <button type="button" onClick={openSettings}>
             <Settings size={18} />
@@ -1466,6 +1718,29 @@ function App() {
                   {message.status === "error" ? " · 错误" : ""}
                 </div>
                 <p>{message.text}</p>
+                <div className="message-actions">
+                  {message.role === "assistant" ? (
+                    <button
+                      type="button"
+                      aria-label="重试回复"
+                      disabled={
+                        activeConversationReadOnly || Boolean(pendingMessageId)
+                      }
+                      onClick={() => void retryAssistantMessage(message.id)}
+                    >
+                      <RotateCcw size={14} />
+                      重试
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    aria-label="删除消息"
+                    onClick={() => deleteMessage(message.id)}
+                  >
+                    <Trash2 size={14} />
+                    删除
+                  </button>
+                </div>
               </article>
             ))
           ) : (
@@ -1508,7 +1783,12 @@ function App() {
           </button>
           <textarea
             rows={1}
-            placeholder="输入消息"
+            placeholder={
+              activeConversationReadOnly
+                ? "归档对话仅浏览，恢复后可继续"
+                : "输入消息"
+            }
+            disabled={activeConversationReadOnly}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={sendOnEnter}
@@ -1517,7 +1797,11 @@ function App() {
             className="send-button"
             type="button"
             aria-label="发送"
-            disabled={!draft.trim() || Boolean(pendingMessageId)}
+            disabled={
+              !draft.trim() ||
+              activeConversationReadOnly ||
+              Boolean(pendingMessageId)
+            }
             onClick={() => void sendMessage()}
           >
             <Send size={18} />
@@ -1867,6 +2151,24 @@ function App() {
                         ))}
                       </select>
                     </label>
+
+                    <div className="model-card-list" aria-label="模型配置列表">
+                      {editingApiProfile.models.map((model) => (
+                        <button
+                          className={`model-card ${
+                            model.id === editingModel?.id ? "selected" : ""
+                          }`}
+                          key={model.id}
+                          type="button"
+                          aria-label={`编辑模型 ${model.name}`}
+                          onClick={() => setEditingModelId(model.id)}
+                        >
+                          <span>{model.name}</span>
+                          <small>{model.id}</small>
+                          <small>{model.enabled ? "已启用" : "已停用"}</small>
+                        </button>
+                      ))}
+                    </div>
 
                     {editingModel ? (
                       <div className="reflected-fields">

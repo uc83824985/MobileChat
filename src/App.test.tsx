@@ -53,6 +53,45 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows only cache usage after a buffered streaming response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: "resp_cache",
+            output_text: "usage ok",
+            usage: {
+              input_tokens: 5,
+              output_tokens: 2,
+              total_tokens: 7,
+              input_tokens_details: { cached_tokens: 0 },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    render(<App />);
+
+    fireEvent.click(screen.getByText("设置"));
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "test-key" },
+    });
+    fireEvent.click(screen.getByLabelText("关闭设置"));
+
+    fireEvent.click(screen.getByLabelText("新建对话"));
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "usage test" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    expect(screen.getByText("正在等待流式输出…")).toBeInTheDocument();
+    expect(await screen.findByText("usage ok")).toBeInTheDocument();
+    expect(screen.getByText("cache 0/5")).toBeInTheDocument();
+    expect(screen.queryByText(/in 5 \/ out/)).not.toBeInTheDocument();
+  });
+
   it("can stop a pending model request after API key is configured", async () => {
     vi.stubGlobal(
       "fetch",
@@ -77,7 +116,7 @@ describe("App", () => {
     });
     fireEvent.click(screen.getByLabelText("发送"));
 
-    expect(screen.getByText("正在请求模型…")).toBeInTheDocument();
+    expect(screen.getByText("正在等待流式输出…")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("停止"));
 
     await waitFor(() =>
@@ -113,6 +152,10 @@ describe("App", () => {
 
     fireEvent.click(screen.getByText("设置"));
 
+    expect(
+      screen.getByRole("button", { name: "编辑模型 gpt-5.4-mini" }),
+    ).toBeInTheDocument();
+
     fireEvent.change(screen.getByLabelText("Base URL"), {
       target: { value: "https://api.mnapi.com/v1" },
     });
@@ -120,6 +163,11 @@ describe("App", () => {
       target: { value: "MNAPI High" },
     });
     expect(screen.getByLabelText("模型名称")).toHaveValue("MNAPI High");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "编辑模型 gpt-5.4-mini" }),
+    );
+    expect(screen.getByLabelText("模型名称")).toHaveValue("gpt-5.4-mini");
 
     fireEvent.change(screen.getByLabelText("设置中选择助手"), {
       target: { value: "research" },
@@ -142,5 +190,61 @@ describe("App", () => {
     expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
       "新助手 4",
     );
+  });
+
+  it("archives, searches, browses, and restores conversations", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByLabelText("新建对话"));
+    fireEvent.click(screen.getByLabelText("编辑标题"));
+    fireEvent.change(screen.getByLabelText("对话标题"), {
+      target: { value: "归档测试" },
+    });
+    fireEvent.click(screen.getByLabelText("保存标题"));
+    fireEvent.click(screen.getByText("归档当前"));
+
+    fireEvent.click(screen.getByText(/归档对话/));
+    expect(
+      screen.getByRole("navigation", { name: "归档对话列表" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("归档测试").length).toBeGreaterThan(0);
+    expect(
+      screen.getByPlaceholderText("归档对话仅浏览，恢复后可继续"),
+    ).toBeDisabled();
+
+    fireEvent.change(screen.getByPlaceholderText("搜索归档标题或摘要"), {
+      target: { value: "归档测试" },
+    });
+    expect(screen.getAllByText("归档测试").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByText("恢复当前"));
+    expect(
+      screen.getByRole("navigation", { name: "对话列表" }),
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("输入消息")).toBeEnabled();
+  });
+
+  it("retries assistant replies and deletes messages", async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByLabelText("新建对话"));
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "测试重试" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+    expect(
+      await screen.findByText(/请先在设置页.*API key/),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试回复" }));
+    expect(
+      await screen.findByText(/请先在设置页.*API key/),
+    ).toBeInTheDocument();
+
+    const deleteButtons = screen.getAllByRole("button", { name: "删除消息" });
+    expect(deleteButtons.length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(deleteButtons[1]);
+
+    expect(screen.queryByText(/请先在设置页.*API key/)).not.toBeInTheDocument();
   });
 });
