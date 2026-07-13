@@ -57,12 +57,16 @@ The system SHALL provide an explicit connection test for an API profile and sele
 - **WHEN** a user tests an API profile whose endpoint cannot complete the configured protocol request
 - **THEN** the settings surface displays an actionable failure and leaves existing profiles, assistants, and conversations unchanged
 
-### Requirement: Initial Responses API protocol
-The first release SHALL implement a minimal OpenAI-compatible Responses API adapter using `store: false` and a locally constructed context projection, and SHALL store the protocol identifier so additional adapters can be added without migrating conversation records.
+### Requirement: Initial OpenAI-compatible protocol adapters
+The first release SHALL implement minimal OpenAI-compatible Responses and Chat Completions adapters using a locally constructed context projection, and SHALL store the protocol identifier so additional adapters can be added without migrating conversation records.
 
 #### Scenario: Send using the supported adapter
-- **WHEN** an enabled assistant model binding references an API profile configured for the initial Responses protocol
+- **WHEN** an enabled assistant model binding references an API profile configured for the Responses protocol
 - **THEN** the system sends the conversation through that adapter and streams supported response events
+
+#### Scenario: Send using Chat Completions
+- **WHEN** an enabled assistant model binding references an API profile configured for the Chat Completions protocol
+- **THEN** the system sends the assistant prompt as a system message, sends conversation records as chat messages, and streams supported choice deltas
 
 #### Scenario: Relay buffers a streaming request
 - **WHEN** the user enables streaming but a compatible relay returns a completed JSON response instead of server-sent events

@@ -24,7 +24,7 @@ The initial endpoint already known to work exposes an OpenAI-compatible Response
 - User accounts, cloud synchronization, collaborative sharing, or a remote application database.
 - Cross-conversation user memory, assistant memory, preference extraction, or retrieval from other conversations.
 - A general-purpose proxy or protection of API keys from the local device user.
-- Native Anthropic, Gemini, Chat Completions, or other protocol adapters in the first release.
+- Native Anthropic, Gemini, or other non-OpenAI-compatible protocol adapters in the first release.
 - Reliable background jobs while the PWA is closed.
 - Guaranteed editing or write-back of phone files.
 - Full-text search across messages in historical conversations.
@@ -71,7 +71,7 @@ type ApiProfile = {
   name: string;
   baseUrl: string;
   apiKey: string;
-  protocol: "openai-responses";
+  protocol: "openai-responses" | "openai-chat-completions";
   enabled: boolean;
   models: ModelDefinition[];
 };
@@ -171,7 +171,7 @@ interface ChatProtocolAdapter {
 }
 ```
 
-Implement only `openai-responses` initially. It sends the local context projection, the current assistant instructions, `stream: true`, and `store: false`, then normalizes output-text deltas, completion, refusal, error events, and usage events when present. Provider-specific events not understood by the adapter are ignored only when they do not contain user-visible output, terminal errors, or usage data.
+Implement `openai-responses` and `openai-chat-completions` initially. Responses sends the local context projection, the current assistant instructions, `stream`, and `store: false`, then normalizes output-text deltas, completion, refusal, error events, and usage events when present. Chat Completions maps the assistant prompt to a `system` message and sends the local conversation as `messages` to `POST /chat/completions`. Provider-specific events not understood by the adapter are ignored only when they do not contain user-visible output, terminal errors, or usage data.
 
 Hosted provider tools are not inferred from prompt text. Web access is represented as an explicit model-level route capability and request option. For an OpenAI-compatible Responses route this means adding an adapter-owned tool entry such as `tools: [{ type: "web_search" }]` when enabled on the selected model route. If the gateway exposes a different flag, the API Profile or model definition must describe that provider-specific request shape. Returned search calls, opened-page diagnostics, and citations are display/debug data; they do not replace local conversation memory.
 

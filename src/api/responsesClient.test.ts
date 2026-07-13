@@ -227,6 +227,80 @@ describe("responsesClient", () => {
     );
   });
 
+  it("supports OpenAI-compatible Chat Completions profiles", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "chatcmpl_1",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "chat response",
+              },
+            },
+          ],
+          usage: {
+            prompt_tokens: 6,
+            completion_tokens: 2,
+            total_tokens: 8,
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await requestResponsesChat({
+      apiProfile: {
+        ...apiProfile,
+        protocol: "openai-chat-completions",
+      },
+      assistant,
+      conversation,
+      model,
+      messages,
+      signal: new AbortController().signal,
+      stream: false,
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/v1/chat/completions",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      model: "test-model",
+      messages: [
+        { role: "system", content: "test prompt" },
+        { role: "user", content: "hello" },
+      ],
+      stream: false,
+    });
+    expect(result.text).toBe("chat response");
+    expect(result.usage).toEqual({
+      inputTokens: 6,
+      outputTokens: 2,
+      totalTokens: 8,
+      cachedInputTokens: undefined,
+    });
+  });
+
+  it("rejects web search on Chat Completions until a protocol-specific tool format exists", async () => {
+    await expect(
+      requestResponsesChat({
+        apiProfile: {
+          ...apiProfile,
+          protocol: "openai-chat-completions",
+        },
+        assistant,
+        conversation,
+        model: { ...model, webSearchEnabled: true },
+        messages,
+        signal: new AbortController().signal,
+        stream: false,
+      }),
+    ).rejects.toThrow(/尚未定义该协议的联网工具格式/);
+  });
+
   it("includes route context when a provider returns an opaque error", async () => {
     vi.stubGlobal(
       "fetch",
@@ -256,7 +330,7 @@ describe("responsesClient", () => {
         stream: true,
       }),
     ).rejects.toThrow(
-      /POST https:\/\/api\.example\.test\/v1\/responses.*模型：test-model.*联网工具：on.*\/v1/,
+      /POST https:\/\/api\.example\.test\/v1\/responses.*协议：openai-responses.*模型：test-model.*联网工具：on.*\/v1/,
     );
   });
 });

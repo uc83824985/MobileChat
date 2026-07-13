@@ -12,6 +12,7 @@
 - 2026-07-13: Follow-up UI/API hardening added visible model-side cards for every configured model, archived-conversation browsing/search/restore, message retry/delete actions, cache-only post-send usage display, and JSON fallback when a `stream:true` relay returns a buffered non-SSE response.
 - 2026-07-13: Added model-level `webSearchEnabled` and Responses `web_search` tool emission for models that enable web access. Concrete relay URLs, API keys, and model slugs remain user-owned configuration and are not seeded by the repository.
 - 2026-07-13: Completed first-pass delete flows for API Profiles, assistants, active conversations, and archived conversations. Provider errors now include non-secret route diagnostics: request URL, model ID, and web-search switch state.
+- 2026-07-13: Added an `openai-chat-completions` protocol option for relays/models that expose `/chat/completions` but not `/responses`; route diagnostics now include the selected protocol.
 - The full task checklist remains open where the spec still requires dirty-record repositories, endpoint validation, pricing metadata, utility roles, checkpoint execution, merge import, complete context projection, provider-specific hosted tool variants, multimodal content sending, and full streaming event/error coverage beyond the current text-delta path.
 
 ## 2. Domain model and local persistence

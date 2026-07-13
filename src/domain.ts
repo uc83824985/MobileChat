@@ -38,7 +38,7 @@ export type Message = {
 
 export type AssistantKind = "chat" | "utility";
 export type ThemeMode = "system" | "light" | "dark";
-export type ApiProtocol = "openai-responses";
+export type ApiProtocol = "openai-responses" | "openai-chat-completions";
 
 export type ModelDefinition = {
   id: string;

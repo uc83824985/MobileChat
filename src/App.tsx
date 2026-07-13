@@ -34,6 +34,7 @@ import { requestResponsesChat } from "./api/responsesClient";
 import "./App.css";
 import {
   type ApiProfile,
+  type ApiProtocol,
   type Assistant,
   type AssistantFieldKey,
   type AssistantModelBinding,
@@ -1100,9 +1101,9 @@ function App() {
     profileId: string,
     key: keyof Pick<
       ApiProfile,
-      "name" | "description" | "baseUrl" | "apiKey" | "enabled"
+      "name" | "description" | "baseUrl" | "apiKey" | "protocol" | "enabled"
     >,
-    value: string | boolean,
+    value: string | boolean | ApiProtocol,
   ) => {
     setApiProfiles((current) =>
       current.map((profile) =>
@@ -2305,10 +2306,19 @@ function App() {
                         <select
                           aria-label="协议"
                           value={editingApiProfile.protocol}
-                          disabled
+                          onChange={(event) =>
+                            updateApiProfileField(
+                              editingApiProfile.id,
+                              "protocol",
+                              event.target.value as ApiProtocol,
+                            )
+                          }
                         >
                           <option value="openai-responses">
                             OpenAI-compatible Responses
+                          </option>
+                          <option value="openai-chat-completions">
+                            OpenAI-compatible Chat Completions
                           </option>
                         </select>
                       </label>

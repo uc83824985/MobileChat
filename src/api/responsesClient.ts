@@ -141,13 +141,13 @@ export const extractUsage = (payload: unknown): ResponseUsage | undefined => {
   };
 };
 
-const createInputItems = (messages: Message[]) =>
+const createTextItems = (messages: Message[]) =>
   messages.map((message) => ({
     role: message.role,
     content: message.text,
   }));
 
-const buildRequestBody = ({
+const buildResponsesRequestBody = ({
   assistant,
   conversation,
   model,
@@ -160,7 +160,7 @@ const buildRequestBody = ({
   JSON.stringify({
     model: model.id,
     instructions: assistant.prompt || undefined,
-    input: createInputItems(messages),
+    input: createTextItems(messages),
     tools: model.webSearchEnabled ? [{ type: "web_search" }] : undefined,
     store: false,
     stream,
@@ -170,13 +170,37 @@ const buildRequestBody = ({
     },
   });
 
+const buildChatCompletionsRequestBody = ({
+  assistant,
+  model,
+  messages,
+  stream,
+}: Pick<ResponsesChatRequest, "assistant" | "model" | "messages" | "stream">) =>
+  JSON.stringify({
+    model: model.id,
+    messages: [
+      ...(assistant.prompt
+        ? [{ role: "system", content: assistant.prompt }]
+        : []),
+      ...createTextItems(messages),
+    ],
+    stream,
+  });
+
+const getProtocolEndpoint = (apiProfile: ApiProfile) =>
+  apiProfile.protocol === "openai-chat-completions"
+    ? "/chat/completions"
+    : "/responses";
+
 const buildRequestContextText = ({
   apiProfile,
   model,
 }: Pick<ResponsesChatRequest, "apiProfile" | "model">) =>
-  `请求目标：POST ${normalizeBaseUrl(apiProfile.baseUrl)}/responses；模型：${
-    model.id
-  }；联网工具：${model.webSearchEnabled ? "on" : "off"}。`;
+  `请求目标：POST ${normalizeBaseUrl(apiProfile.baseUrl)}${getProtocolEndpoint(
+    apiProfile,
+  )}；协议：${apiProfile.protocol}；模型：${model.id}；联网工具：${
+    model.webSearchEnabled ? "on" : "off"
+  }。`;
 
 const buildErrorMessage = async (
   response: Response,
@@ -226,7 +250,7 @@ const buildErrorMessage = async (
   )}。${contextText}${routeHint}`;
 };
 
-const fetchResponses = async ({
+const fetchProtocolEndpoint = async ({
   apiProfile,
   apiKey,
   body,
@@ -237,16 +261,19 @@ const fetchResponses = async ({
   body: string;
   signal: AbortSignal;
 }) =>
-  fetch(`${normalizeBaseUrl(apiProfile.baseUrl)}/responses`, {
-    method: "POST",
-    signal,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: "text/event-stream, application/json",
-      "Content-Type": "application/json",
+  fetch(
+    `${normalizeBaseUrl(apiProfile.baseUrl)}${getProtocolEndpoint(apiProfile)}`,
+    {
+      method: "POST",
+      signal,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "text/event-stream, application/json",
+        "Content-Type": "application/json",
+      },
+      body,
     },
-    body,
-  }).catch((error: unknown) => {
+  ).catch((error: unknown) => {
     if (error instanceof DOMException && error.name === "AbortError") {
       throw error;
     }
@@ -461,18 +488,36 @@ export const requestResponsesChat = async ({
   if (!apiKey) {
     throw new Error(`请先在设置页为「${apiProfile.name}」填写 API key。`);
   }
+  if (
+    apiProfile.protocol === "openai-chat-completions" &&
+    model.webSearchEnabled
+  ) {
+    throw new Error(
+      `Profile「${apiProfile.name}」当前使用 Chat Completions 协议，首版尚未定义该协议的联网工具格式。请先关闭模型「${model.name}」的联网工具后重试。`,
+    );
+  }
 
-  const response = await fetchResponses({
+  const requestBody =
+    apiProfile.protocol === "openai-chat-completions"
+      ? buildChatCompletionsRequestBody({
+          assistant,
+          model,
+          messages,
+          stream,
+        })
+      : buildResponsesRequestBody({
+          assistant,
+          conversation,
+          model,
+          messages,
+          stream,
+        });
+
+  const response = await fetchProtocolEndpoint({
     apiProfile,
     apiKey,
     signal,
-    body: buildRequestBody({
-      assistant,
-      conversation,
-      model,
-      messages,
-      stream,
-    }),
+    body: requestBody,
   });
 
   if (!response.ok) {

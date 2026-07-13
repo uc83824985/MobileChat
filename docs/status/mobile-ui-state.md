@@ -7,7 +7,7 @@ Date: 2026-07-13
 - The mobile/desktop shell is usable with persisted local state.
 - Conversation creation, conversation selection, title edit, title/summary search, archive action, archived conversation view, draft input, send, stop, debug panel toggle, settings open/close, theme switch, streaming switch, assistant switch, and model switch are covered by automated tests.
 - Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, backup, theme, and streaming controls.
-- The app has a minimal OpenAI-compatible Responses request loop. Without an API key it shows a local configuration error; with an API key it sends `POST {baseUrl}/responses` using `store:false`. Streaming mode uses SSE text deltas when the gateway truly streams; if a `stream:true` request is buffered into JSON, the client falls back to one-shot JSON parsing.
+- The app has OpenAI-compatible Responses and Chat Completions request loops. Responses sends `POST {baseUrl}/responses` using `store:false`; Chat Completions sends `POST {baseUrl}/chat/completions`. Without an API key it shows a local configuration error. Streaming mode uses SSE text deltas when the gateway truly streams; if a `stream:true` request is buffered into JSON, the client falls back to one-shot JSON parsing.
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
 - Web access is now wired as a model-level request option. Multimodal input is still not wired into the MobileChat request builder and must be implemented as explicit adapter/profile/model capabilities rather than prompt-only expectations.
 
@@ -30,7 +30,7 @@ Date: 2026-07-13
   - display name and description;
   - `baseUrl`;
   - local `apiKey`;
-  - protocol, currently `openai-responses`;
+  - protocol, currently `openai-responses` or `openai-chat-completions`;
   - editable model definitions.
 - Each model owns:
   - model ID / slug;
