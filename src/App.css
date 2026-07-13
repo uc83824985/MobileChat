@@ -83,6 +83,11 @@ button {
   gap: 8px;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .icon-button {
   background: var(--button);
   border-radius: 8px;
@@ -123,6 +128,7 @@ button {
 
 .conversation-list {
   display: grid;
+  align-content: start;
   gap: 8px;
   overflow: auto;
 }
@@ -150,10 +156,16 @@ button {
 
 .conversation-item small,
 .chat-title span,
-.message-label {
+.empty-list,
+.message-label,
+.empty-thread p {
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.empty-list {
+  margin: 8px 4px;
 }
 
 .rail-footer {
@@ -173,7 +185,8 @@ button {
 
 .chat-surface {
   display: grid;
-  grid-template-rows: auto 1fr auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  min-height: 100svh;
   min-width: 0;
   position: relative;
 }
@@ -217,6 +230,25 @@ button {
   border-radius: 8px;
   max-width: min(760px, 92%);
   padding: 12px 14px;
+}
+
+.empty-thread {
+  align-self: center;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  justify-self: center;
+  max-width: 360px;
+  padding: 24px;
+  text-align: center;
+}
+
+.empty-thread h2 {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.empty-thread p {
+  margin: 0;
 }
 
 .message.user {
@@ -305,20 +337,28 @@ button {
 .modal-backdrop {
   background: rgba(22, 24, 29, 0.35);
   inset: 0;
+  overflow: auto;
   position: fixed;
   z-index: 4;
 }
 
 .settings-panel {
+  align-content: start;
   background: var(--panel);
   border-left: 1px solid var(--line);
   box-shadow: var(--shadow);
   display: grid;
-  gap: 10px;
+  gap: 18px;
   margin-left: auto;
-  min-height: 100%;
-  padding: 18px;
-  width: min(420px, 100%);
+  min-height: 100svh;
+  overflow: auto;
+  padding: 18px 18px max(18px, env(safe-area-inset-bottom));
+  width: min(460px, 100%);
+}
+
+.settings-list {
+  display: grid;
+  gap: 10px;
 }
 
 .settings-row {
@@ -327,6 +367,7 @@ button {
   border-radius: 8px;
   display: flex;
   justify-content: space-between;
+  min-height: 56px;
   padding: 12px;
 }
 
@@ -391,6 +432,13 @@ button {
     z-index: 3;
   }
 
+  .drawer-scrim {
+    background: rgba(10, 12, 16, 0.35);
+    inset: 0;
+    position: fixed;
+    z-index: 2;
+  }
+
   .conversation-rail.open {
     transform: translateX(0);
   }
@@ -416,5 +464,60 @@ button {
 
   .diagnostic-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .composer {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .settings-panel {
+    border-left: 0;
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .chat-header {
+    align-items: start;
+    min-height: 58px;
+    padding: 10px 12px;
+  }
+
+  .assistant-switch {
+    font-size: 0;
+    gap: 4px;
+    max-width: none;
+    padding-inline: 10px;
+  }
+
+  .assistant-switch svg {
+    flex: 0 0 auto;
+  }
+
+  .message-thread {
+    gap: 10px;
+    padding: 14px 12px;
+  }
+
+  .message {
+    max-width: 100%;
+  }
+
+  .diagnostics-panel {
+    padding: 10px 12px;
+  }
+
+  .diagnostic-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .composer {
+    gap: 8px;
+    padding-inline: 12px;
+  }
+
+  .pwa-banner {
+    align-items: flex-start;
+    border-radius: 14px;
   }
 }
