@@ -39,6 +39,24 @@ npm run test:browser
 npm run build
 ```
 
+PC 独立窗口开发：
+
+```powershell
+.\run.ps1
+```
+
+或双击/运行：
+
+```cmd
+run.bat
+```
+
+该脚本会启动 Vite 开发服务器，并用独立 Chrome/Edge app 窗口打开 `http://127.0.0.1:5173/MobileChat/`。停止脚本管理的窗口和开发服务器：
+
+```powershell
+.\run.ps1 -Stop
+```
+
 ## 计划中的首个协议
 
 首版计划实现一个最小可运行的 OpenAI-compatible Responses API 适配器，并为后续协议保留扩展接口。请求以 `store: false` 的本地状态模式为可靠基线；首版不使用服务端 Response 链、`previous_response_id` 或 provider conversation 作为对话上下文机制。

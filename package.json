@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser": "playwright test",
+    "desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File ./run.ps1",
     "preview": "vite preview"
   },
   "dependencies": {
