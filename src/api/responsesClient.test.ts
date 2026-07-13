@@ -226,4 +226,37 @@ describe("responsesClient", () => {
       false,
     );
   });
+
+  it("includes route context when a provider returns an opaque error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "",
+              type: "rix_api_error",
+              param: "",
+              code: "bad_response_status_code",
+            },
+          }),
+          { status: 404, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      requestResponsesChat({
+        apiProfile,
+        assistant,
+        conversation,
+        model: { ...model, webSearchEnabled: true },
+        messages,
+        signal: new AbortController().signal,
+        stream: true,
+      }),
+    ).rejects.toThrow(
+      /POST https:\/\/api\.example\.test\/v1\/responses.*模型：test-model.*联网工具：on.*\/v1/,
+    );
+  });
 });

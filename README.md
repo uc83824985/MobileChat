@@ -61,6 +61,7 @@ run.bat
 
 - 已实现本地 `MobileChatDB` 持久化、credential-free `.mobilechat` 导入/导出、亮色/暗色/跟随系统主题切换。
 - 设置页支持独立编辑 API Profile 与模型列表；模型配置区会展示当前 Profile 的完整模型清单。助手只引用已有模型，并配置允许模型列表与默认模型。
+- API Profile、模型、助手、普通对话和归档对话都提供本地 CRUD 操作；删除最后一个运行必需对象时会创建空占位，避免页面进入不可用状态。
 - 聊天页支持切换当前助手和该助手允许使用的模型。
 - 仓库不内置具体中转站、API key 或模型 slug；首次使用时通过设置页或本机数据库配置连接与模型。
 - 已接入最小 OpenAI-compatible Responses API 请求循环：`POST {baseUrl}/responses`、`store:false`、由本地消息构建上下文。

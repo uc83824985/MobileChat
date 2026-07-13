@@ -170,29 +170,60 @@ const buildRequestBody = ({
     },
   });
 
-const buildErrorMessage = async (response: Response) => {
+const buildRequestContextText = ({
+  apiProfile,
+  model,
+}: Pick<ResponsesChatRequest, "apiProfile" | "model">) =>
+  `请求目标：POST ${normalizeBaseUrl(apiProfile.baseUrl)}/responses；模型：${
+    model.id
+  }；联网工具：${model.webSearchEnabled ? "on" : "off"}。`;
+
+const buildErrorMessage = async (
+  response: Response,
+  context: Pick<ResponsesChatRequest, "apiProfile" | "model">,
+) => {
   const rawBody = await response.text().catch(() => "");
+  const contextText = buildRequestContextText(context);
+  const statusText = response.statusText ? ` ${response.statusText}` : "";
+  const routeHint =
+    response.status === 404
+      ? " 如果网页端同模型可用，优先确认 Base URL 是否包含 /v1、模型 ID 是否完全一致，并临时关闭联网工具重试。"
+      : "";
 
   if (!rawBody) {
-    return `请求失败：HTTP ${response.status} ${response.statusText}`;
+    return `请求失败：HTTP ${response.status}${statusText}。${contextText}${routeHint}`;
   }
 
   try {
     const parsed = JSON.parse(rawBody) as unknown;
     if (isRecord(parsed) && isRecord(parsed.error)) {
       const message = readString(parsed.error.message);
+      const type = readString(parsed.error.type);
+      const code = readString(parsed.error.code);
+      const param = readString(parsed.error.param);
+      const details = [
+        message ? `message=${message}` : undefined,
+        type ? `type=${type}` : undefined,
+        code ? `code=${code}` : undefined,
+        param ? `param=${param}` : undefined,
+      ].filter(Boolean);
       if (message) {
-        return `请求失败：${message}`;
+        return `请求失败：${message}。${contextText}${routeHint}`;
+      }
+      if (details.length > 0) {
+        return `请求失败：HTTP ${response.status}${statusText}；${details.join(
+          "；",
+        )}。${contextText}${routeHint}`;
       }
     }
   } catch {
     // fall through to bounded text below
   }
 
-  return `请求失败：HTTP ${response.status} ${response.statusText}；${rawBody.slice(
+  return `请求失败：HTTP ${response.status}${statusText}；${rawBody.slice(
     0,
     400,
-  )}`;
+  )}。${contextText}${routeHint}`;
 };
 
 const fetchResponses = async ({
@@ -445,7 +476,7 @@ export const requestResponsesChat = async ({
   });
 
   if (!response.ok) {
-    throw new Error(await buildErrorMessage(response));
+    throw new Error(await buildErrorMessage(response, { apiProfile, model }));
   }
 
   if (stream) {

@@ -47,6 +47,7 @@ Date: 2026-07-13
 - The repo no longer seeds a concrete relay URL, API key, or model slug. First-run data contains a generic editable API Profile and model placeholder.
 - User-specific routes, provider-specific model slugs, and web-search-enabled models should be created through the settings UI, import flow, or a local-only MobileChatDB update.
 - API keys remain in the browser's IndexedDB unless the user exports with credentials in a future explicit flow.
+- CRUD status: API Profiles, model definitions, assistants, active conversations, and archived conversations all expose create/read/update/delete flows in the UI. Deleting the last required runtime object creates a blank local fallback so the app remains operable.
 
 ## Persistence and import/export
 

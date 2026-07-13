@@ -79,6 +79,45 @@ type ResolvedModel = {
 const bootSnapshot = createInitialSnapshot();
 const AUTOSAVE_DELAY_MS = 400;
 
+const createEmptyApiProfile = (index: number): ApiProfile => ({
+  id: createId("api-profile"),
+  name: `API Profile ${index}`,
+  description: "OpenAI-compatible Responses API 配置",
+  baseUrl: "",
+  apiKey: "",
+  protocol: "openai-responses",
+  enabled: true,
+  models: [
+    {
+      id: "new-model",
+      name: "新模型",
+      description: "新建模型预设",
+      contextWindow: 128000,
+      enabled: true,
+      webSearchEnabled: false,
+    },
+  ],
+});
+
+const createEmptyAssistant = (
+  index: number,
+  baseModel?: ResolvedModel,
+): Assistant => ({
+  id: createId("assistant"),
+  name: `新助手 ${index}`,
+  description: "可在右侧细节面板编辑。",
+  kind: "chat",
+  modelBindings: baseModel
+    ? [createBinding(baseModel.apiProfile, baseModel.model, true)]
+    : [],
+  prompt: "",
+  initialMessage: "",
+  enabled: true,
+});
+
+const confirmDestructiveAction = (message: string) =>
+  typeof window === "undefined" || window.confirm(message);
+
 const themeLabels: Record<ThemeMode, string> = {
   system: "跟随系统",
   light: "亮色",
@@ -144,6 +183,16 @@ const createBinding = (
   modelNameSnapshot: model.name,
   modelDescriptionSnapshot: model.description,
 });
+
+const normalizeDefaultBinding = (
+  bindings: AssistantModelBinding[],
+): AssistantModelBinding[] => {
+  const hasDefault = bindings.some((binding) => binding.isDefault);
+  return bindings.map((binding, index) => ({
+    ...binding,
+    isDefault: hasDefault ? binding.isDefault : index === 0,
+  }));
+};
 
 const listAssistantModels = (
   assistant: Assistant,
@@ -844,6 +893,65 @@ function App() {
     setActiveConversationId(activeConversation.id);
   };
 
+  const deleteActiveConversation = () => {
+    if (!activeConversation) {
+      return;
+    }
+
+    if (
+      !confirmDestructiveAction(
+        `永久删除对话「${activeConversation.title}」及其消息？`,
+      )
+    ) {
+      return;
+    }
+
+    const deletedConversation = activeConversation;
+    stopResponse("已停止当前对话的未完成回复。");
+
+    const remainingConversations = conversations.filter(
+      (conversation) => conversation.id !== deletedConversation.id,
+    );
+    const remainingActive = remainingConversations.filter(
+      (conversation) => !conversation.archived,
+    );
+    const remainingArchived = remainingConversations.filter(
+      (conversation) => conversation.archived,
+    );
+    const fallbackConversation =
+      remainingActive.length === 0
+        ? {
+            id: createId("conversation"),
+            title: "新对话",
+            summary: "删除后创建的空对话",
+            archived: false,
+          }
+        : undefined;
+    const nextConversations = fallbackConversation
+      ? [fallbackConversation, ...remainingConversations]
+      : remainingConversations;
+    const nextConversation =
+      deletedConversation.archived && remainingArchived.length > 0
+        ? remainingArchived[0]
+        : (fallbackConversation ?? remainingActive[0] ?? nextConversations[0]);
+
+    setConversations(nextConversations);
+    setMessages((current) =>
+      current.filter(
+        (message) => message.conversationId !== deletedConversation.id,
+      ),
+    );
+    setActiveConversationId(nextConversation?.id ?? "");
+    setShowArchived(
+      deletedConversation.archived && remainingArchived.length > 0,
+    );
+    setConversationSearch("");
+    setDrawerOpen(false);
+    setDraft("");
+    setEditingTitleConversationId(null);
+    setTitleDraft("");
+  };
+
   const openSettings = () => {
     setEditingAssistantId(activeAssistant.id);
     setDrawerOpen(false);
@@ -913,18 +1021,7 @@ function App() {
 
   const createAssistant = () => {
     const baseModel = activeResolvedModel ?? allModelOptions[0];
-    const newAssistant: Assistant = {
-      id: createId("assistant"),
-      name: `新助手 ${assistants.length + 1}`,
-      description: "通过详情面板编辑这个助手。",
-      kind: "chat",
-      modelBindings: baseModel
-        ? [createBinding(baseModel.apiProfile, baseModel.model, true)]
-        : [],
-      prompt: "",
-      initialMessage: "",
-      enabled: true,
-    };
+    const newAssistant = createEmptyAssistant(assistants.length + 1, baseModel);
 
     setAssistants((current) => [...current, newAssistant]);
     setActiveAssistantId(newAssistant.id);
@@ -948,26 +1045,51 @@ function App() {
     );
   };
 
+  const deleteAssistant = (assistantId: string) => {
+    const targetAssistant = assistants.find(
+      (assistant) => assistant.id === assistantId,
+    );
+    if (!targetAssistant) {
+      return;
+    }
+
+    if (
+      !confirmDestructiveAction(
+        `删除助手「${targetAssistant.name}」？历史消息会保留当时的助手快照。`,
+      )
+    ) {
+      return;
+    }
+
+    const remainingAssistants = assistants.filter(
+      (assistant) => assistant.id !== assistantId,
+    );
+    const fallbackAssistant =
+      remainingAssistants.length === 0
+        ? createEmptyAssistant(1, activeResolvedModel ?? allModelOptions[0])
+        : undefined;
+    const nextAssistants = fallbackAssistant
+      ? [fallbackAssistant]
+      : remainingAssistants;
+    const nextAssistant =
+      nextAssistants.find((assistant) => assistant.id !== assistantId) ??
+      nextAssistants[0];
+    if (!nextAssistant) {
+      return;
+    }
+
+    setAssistants(nextAssistants);
+    setActiveAssistantId((current) =>
+      current === assistantId ? nextAssistant.id : current,
+    );
+    setEditingAssistantId(nextAssistant.id);
+    setActiveModelRef(
+      chooseModelForAssistant(nextAssistant, activeModelRef, apiProfiles),
+    );
+  };
+
   const createApiProfile = () => {
-    const newProfile: ApiProfile = {
-      id: createId("api-profile"),
-      name: `API Profile ${apiProfiles.length + 1}`,
-      description: "OpenAI-compatible Responses API 配置",
-      baseUrl: "",
-      apiKey: "",
-      protocol: "openai-responses",
-      enabled: true,
-      models: [
-        {
-          id: "new-model",
-          name: "新模型",
-          description: "新建模型预设",
-          contextWindow: 128000,
-          enabled: true,
-          webSearchEnabled: false,
-        },
-      ],
-    };
+    const newProfile = createEmptyApiProfile(apiProfiles.length + 1);
 
     setApiProfiles((current) => [...current, newProfile]);
     setEditingApiProfileId(newProfile.id);
@@ -999,6 +1121,64 @@ function App() {
           ),
         })),
       );
+    }
+  };
+
+  const deleteApiProfile = (profileId: string) => {
+    const targetProfile = apiProfiles.find(
+      (profile) => profile.id === profileId,
+    );
+    if (!targetProfile) {
+      return;
+    }
+
+    if (
+      !confirmDestructiveAction(
+        `删除连接「${targetProfile.name}」及其模型配置？相关助手绑定会同步移除。`,
+      )
+    ) {
+      return;
+    }
+
+    const remainingProfiles = apiProfiles.filter(
+      (profile) => profile.id !== profileId,
+    );
+    const fallbackProfile =
+      remainingProfiles.length === 0 ? createEmptyApiProfile(1) : undefined;
+    const nextProfiles = fallbackProfile
+      ? [fallbackProfile]
+      : remainingProfiles;
+    const fallbackModel = listAllModels(nextProfiles)[0];
+
+    setApiProfiles(nextProfiles);
+    setAssistants((current) =>
+      current.map((assistant) => {
+        const filteredBindings = assistant.modelBindings.filter(
+          (binding) => binding.apiProfileId !== profileId,
+        );
+        const nextBindings =
+          filteredBindings.length > 0
+            ? filteredBindings
+            : fallbackModel
+              ? [
+                  createBinding(
+                    fallbackModel.apiProfile,
+                    fallbackModel.model,
+                    true,
+                  ),
+                ]
+              : [];
+
+        return {
+          ...assistant,
+          modelBindings: normalizeDefaultBinding(nextBindings),
+        };
+      }),
+    );
+    setEditingApiProfileId(nextProfiles[0]?.id ?? "");
+    setEditingModelId(nextProfiles[0]?.models[0]?.id ?? "");
+    if (activeModelRef.apiProfileId === profileId) {
+      setActiveModelRef(fallbackModel?.ref ?? DEFAULT_MODEL_REF);
     }
   };
 
@@ -1070,10 +1250,14 @@ function App() {
 
         return {
           ...assistant,
-          modelBindings: filteredBindings.map((binding, index) => ({
-            ...binding,
-            isDefault: hasDefault ? binding.isDefault : index === 0,
-          })),
+          modelBindings: normalizeDefaultBinding(
+            hasDefault
+              ? filteredBindings
+              : filteredBindings.map((binding, index) => ({
+                  ...binding,
+                  isDefault: index === 0,
+                })),
+          ),
         };
       }),
     );
@@ -1658,6 +1842,15 @@ function App() {
             )}
             {activeConversation?.archived ? "恢复当前" : "归档当前"}
           </button>
+          <button
+            className="danger-button"
+            type="button"
+            disabled={!activeConversation}
+            onClick={deleteActiveConversation}
+          >
+            <Trash2 size={18} />
+            删除当前
+          </button>
           <button type="button" onClick={openSettings}>
             <Settings size={18} />
             设置
@@ -2181,6 +2374,20 @@ function App() {
                           }
                         />
                       </label>
+                      <div className="detail-field danger-zone">
+                        <span>Profile 操作</span>
+                        <button
+                          className="danger-button"
+                          type="button"
+                          onClick={() => deleteApiProfile(editingApiProfile.id)}
+                        >
+                          <Trash2 size={16} />
+                          删除当前 Profile
+                        </button>
+                        <small>
+                          会删除该连接下的模型配置，并移除引用这些模型的助手绑定；历史消息保留原始快照。
+                        </small>
+                      </div>
                     </div>
 
                     <div className="model-editor-header">
@@ -2420,12 +2627,22 @@ function App() {
                     <p className="eyebrow">Details</p>
                     <h3>{editingAssistant.name}</h3>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => activateAssistant(editingAssistant.id)}
-                  >
-                    设为当前
-                  </button>
+                  <div className="header-actions">
+                    <button
+                      type="button"
+                      onClick={() => activateAssistant(editingAssistant.id)}
+                    >
+                      设为当前
+                    </button>
+                    <button
+                      className="danger-button"
+                      type="button"
+                      onClick={() => deleteAssistant(editingAssistant.id)}
+                    >
+                      <Trash2 size={16} />
+                      删除助手
+                    </button>
+                  </div>
                 </header>
 
                 <div className="reflected-fields">

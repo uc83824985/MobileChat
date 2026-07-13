@@ -711,6 +711,13 @@ button:disabled {
   justify-content: space-between;
 }
 
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .directory-header h3,
 .assistant-detail h3 {
   font-size: 18px;
@@ -723,6 +730,30 @@ button:disabled {
   color: var(--text-strong);
   flex: 0 0 auto;
   padding: 8px 10px;
+}
+
+.danger-button {
+  color: #fca5a5 !important;
+}
+
+.danger-button:hover {
+  background: rgba(239, 68, 68, 0.14) !important;
+}
+
+.danger-zone {
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 8px;
+  grid-column: 1 / -1;
+  padding: 10px;
+}
+
+.danger-zone .danger-button {
+  background: var(--button);
+  border-radius: 8px;
+  color: #fca5a5;
+  justify-content: center;
+  padding: 10px 12px;
+  width: 100%;
 }
 
 .assistant-config-select,

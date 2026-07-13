@@ -235,6 +235,48 @@ describe("App", () => {
     expect(screen.getByPlaceholderText("输入消息")).toBeEnabled();
   });
 
+  it("deletes conversations, API profiles, and assistants with safe fallbacks", () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<App />);
+
+    fireEvent.click(screen.getByLabelText("新建对话"));
+    expect(screen.getAllByText("新对话 4")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "删除当前" }));
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(screen.queryByText("新对话 4")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("新建对话"));
+    fireEvent.click(screen.getByLabelText("编辑标题"));
+    fireEvent.change(screen.getByLabelText("对话标题"), {
+      target: { value: "归档删除测试" },
+    });
+    fireEvent.click(screen.getByLabelText("保存标题"));
+    fireEvent.click(screen.getByText("归档当前"));
+    fireEvent.click(screen.getByText(/归档对话/));
+    expect(screen.getAllByText("归档删除测试").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "删除当前" }));
+    expect(screen.queryByText("归档删除测试")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("设置"));
+    fireEvent.click(screen.getByText("新增 Profile"));
+    expect(screen.getByLabelText("选择 API Profile")).toHaveDisplayValue(
+      "API Profile 2",
+    );
+    fireEvent.click(screen.getByText("删除当前 Profile"));
+    expect(screen.getByLabelText("选择 API Profile")).toHaveDisplayValue(
+      "默认连接",
+    );
+
+    fireEvent.click(screen.getByText("新增"));
+    expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
+      "新助手 4",
+    );
+    fireEvent.click(screen.getByText("删除助手"));
+    expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
+      "架构助手",
+    );
+  });
+
   it("retries assistant replies and deletes messages", async () => {
     render(<App />);
     configureApiProfile();
