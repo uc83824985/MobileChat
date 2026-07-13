@@ -1,10 +1,10 @@
 ## 1. Project and PWA foundation
 
-- [ ] 1.1 Scaffold a React, TypeScript, and Vite application with production and development scripts
-- [ ] 1.2 Configure formatting, linting, type checking, unit tests, component tests, and browser-test commands
-- [ ] 1.3 Add the mobile viewport shell, global styles, accessible theme tokens, and responsive navigation layout
-- [ ] 1.4 Add the web manifest, icons, service-worker generation, offline shell caching, and update notification behavior
-- [ ] 1.5 Configure repository-relative routing and a GitHub Actions workflow that builds and deploys to GitHub Pages
+- [x] 1.1 Scaffold a React, TypeScript, and Vite application with production and development scripts
+- [x] 1.2 Configure formatting, linting, type checking, unit tests, component tests, and browser-test commands
+- [x] 1.3 Add the mobile viewport shell, global styles, accessible theme tokens, and responsive navigation layout
+- [x] 1.4 Add the web manifest, icons, service-worker generation, offline shell caching, and update notification behavior
+- [x] 1.5 Configure repository-relative routing and a GitHub Actions workflow that builds and deploys to GitHub Pages
 
 ## 2. Domain model and local persistence
 
