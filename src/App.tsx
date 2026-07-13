@@ -1582,6 +1582,147 @@ function App() {
     }
   };
 
+  const regenerateFromUserMessage = async (messageId: string) => {
+    if (!activeConversation || activeConversationReadOnly || pendingMessageId) {
+      return;
+    }
+
+    const messageIndex = activeMessages.findIndex(
+      (message) => message.id === messageId,
+    );
+    const targetMessage = activeMessages[messageIndex];
+    if (!targetMessage || targetMessage.role !== "user") {
+      return;
+    }
+
+    const requestMessages = activeMessages.slice(0, messageIndex + 1);
+    const idsToRemove = new Set(
+      activeMessages.slice(messageIndex + 1).map((message) => message.id),
+    );
+    const resolvedModel = activeResolvedModel;
+
+    if (!resolvedModel) {
+      const errorMessage: Message = {
+        id: createId("assistant"),
+        conversationId: activeConversation.id,
+        role: "assistant",
+        label: activeAssistant.name,
+        text: "当前助手没有可用模型。请先在设置页为助手绑定启用的模型。",
+        createdAt: new Date().toISOString(),
+        status: "error",
+      };
+      setMessages((current) => [
+        ...current.filter((message) => !idsToRemove.has(message.id)),
+        errorMessage,
+      ]);
+      return;
+    }
+
+    const source = createSourceSnapshot(activeAssistant, resolvedModel);
+    const assistantMessage: Message = {
+      id: createId("assistant"),
+      conversationId: activeConversation.id,
+      role: "assistant",
+      label: `${activeAssistant.name} · ${resolvedModel.model.name}`,
+      text: streamingEnabled ? "正在等待流式输出…" : "正在请求模型…",
+      createdAt: new Date().toISOString(),
+      status: "streaming",
+      source,
+    };
+    const controller = new AbortController();
+    let streamedText = "";
+
+    abortControllerRef.current = controller;
+    setLastObservedUsage(undefined);
+    setMessages((current) => [
+      ...current.filter((message) => !idsToRemove.has(message.id)),
+      assistantMessage,
+    ]);
+    setPendingMessageId(assistantMessage.id);
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === activeConversation.id
+          ? {
+              ...conversation,
+              summary: `最近重答：${targetMessage.text.slice(0, 28)}`,
+            }
+          : conversation,
+      ),
+    );
+
+    try {
+      const result = await requestResponsesChat({
+        apiProfile: resolvedModel.apiProfile,
+        assistant: activeAssistant,
+        conversation: activeConversation,
+        model: resolvedModel.model,
+        messages: requestMessages,
+        signal: controller.signal,
+        stream: streamingEnabled,
+        onTextDelta: streamingEnabled
+          ? (_delta, fullText) => {
+              streamedText = fullText;
+              setMessages((current) =>
+                current.map((message) =>
+                  message.id === assistantMessage.id
+                    ? {
+                        ...message,
+                        text:
+                          fullText ||
+                          (streamingEnabled
+                            ? "正在等待流式输出…"
+                            : "正在请求模型…"),
+                      }
+                    : message,
+                ),
+              );
+            }
+          : undefined,
+      });
+
+      setLastObservedUsage(result.usage);
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantMessage.id
+            ? {
+                ...message,
+                status: "complete",
+                text: result.text || streamedText || "模型未返回文本内容。",
+                providerResponseId: result.providerResponseId,
+                usage: result.usage,
+              }
+            : message,
+        ),
+      );
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantMessage.id
+            ? {
+                ...message,
+                status: "error",
+                text:
+                  error instanceof Error
+                    ? error.message
+                    : "请求模型失败，请检查 API Profile、模型和网络。",
+              }
+            : message,
+        ),
+      );
+    } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+      if (!controller.signal.aborted) {
+        setPendingMessageId(null);
+      }
+    }
+  };
+
   const sendMessage = async () => {
     const text = draft.trim();
     const resolvedModel = activeResolvedModel;
@@ -1986,6 +2127,19 @@ function App() {
                     >
                       <RotateCcw size={14} />
                       重试
+                    </button>
+                  ) : null}
+                  {message.role === "user" ? (
+                    <button
+                      type="button"
+                      aria-label="重答消息"
+                      disabled={
+                        activeConversationReadOnly || Boolean(pendingMessageId)
+                      }
+                      onClick={() => void regenerateFromUserMessage(message.id)}
+                    >
+                      <RotateCcw size={14} />
+                      重答
                     </button>
                   ) : null}
                   <button

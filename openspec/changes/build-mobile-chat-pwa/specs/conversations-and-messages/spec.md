@@ -15,6 +15,10 @@ The system SHALL allow users to create, open, continue, rename, archive, unarchi
 - **WHEN** a user confirms permanent deletion
 - **THEN** the conversation and its owned messages are removed from local storage and no longer appear in active, archived, or search results
 
+#### Scenario: Confirm before deleting a conversation
+- **WHEN** a user requests permanent deletion of an active or archived conversation
+- **THEN** the system asks for confirmation before removing the conversation and its owned messages
+
 ### Requirement: User-defined conversation title
 The system SHALL allow a user to enter and edit the title of every conversation and SHALL NOT require automatic title generation.
 
@@ -119,6 +123,10 @@ The system SHALL support copying message text, retrying a failed or interrupted 
 #### Scenario: Retry an assistant response
 - **WHEN** a user retries an assistant response
 - **THEN** the system keeps the messages before that response, removes that response and later messages from the active path, and regenerates using the current assistant and model selection
+
+#### Scenario: Regenerate from a user message
+- **WHEN** a user chooses the "重答" action on a user message
+- **THEN** the system keeps that user message and prior context, removes later messages from the active path, and regenerates an assistant response using the current assistant and model selection
 
 #### Scenario: Delete a single message
 - **WHEN** a user deletes a message

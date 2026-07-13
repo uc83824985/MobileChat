@@ -8,6 +8,7 @@ Date: 2026-07-13
 - Conversation creation, conversation selection, title edit, title/summary search, archive action, archived conversation view, draft input, send, stop, debug panel toggle, settings open/close, theme switch, streaming switch, assistant switch, and model switch are covered by automated tests.
 - Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, backup, theme, and streaming controls.
 - The app has OpenAI-compatible Responses and Chat Completions request loops. Responses sends `POST {baseUrl}/responses` using `store:false`; Chat Completions sends `POST {baseUrl}/chat/completions`. Without an API key it shows a local configuration error. Streaming mode uses SSE text deltas when the gateway truly streams; if a `stream:true` request is buffered into JSON, the client falls back to one-shot JSON parsing.
+- Route compatibility is protocol-specific. A user-configured Grok route was observed to fail with 404 on Responses while succeeding on Chat Completions, so each API Profile must preserve the selected protocol instead of assuming one relay-wide default.
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
 - Web access is now wired as a model-level request option. Multimodal input is still not wired into the MobileChat request builder and must be implemented as explicit adapter/profile/model capabilities rather than prompt-only expectations.
 
@@ -48,6 +49,7 @@ Date: 2026-07-13
 - User-specific routes, provider-specific model slugs, and web-search-enabled models should be created through the settings UI, import flow, or a local-only MobileChatDB update.
 - API keys remain in the browser's IndexedDB unless the user exports with credentials in a future explicit flow.
 - CRUD status: API Profiles, model definitions, assistants, active conversations, and archived conversations all expose create/read/update/delete flows in the UI. Deleting the last required runtime object creates a blank local fallback so the app remains operable.
+- Conversation deletion uses a confirmation prompt before permanently removing the conversation and its owned messages.
 
 ## Persistence and import/export
 

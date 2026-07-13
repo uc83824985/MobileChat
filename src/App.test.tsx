@@ -295,6 +295,11 @@ describe("App", () => {
       await screen.findByText(/请先在设置页.*API key/),
     ).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "重答消息" }));
+    expect(
+      await screen.findByText(/请先在设置页.*API key/),
+    ).toBeInTheDocument();
+
     const deleteButtons = screen.getAllByRole("button", { name: "删除消息" });
     expect(deleteButtons.length).toBeGreaterThanOrEqual(2);
     fireEvent.click(deleteButtons[1]);
