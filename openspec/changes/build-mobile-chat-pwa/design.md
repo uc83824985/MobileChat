@@ -4,6 +4,8 @@ MobileChat starts from an empty repository and targets personal use on modern mo
 
 The initial endpoint already known to work exposes an OpenAI-compatible Responses API with browser CORS support, but the data model and protocol boundary must not assume that one endpoint forever. Mobile file write permissions are inconsistent across browsers, so content preview is required while source-file editing remains capability-gated and experimental.
 
+The default layout is responsive and mobile-first at narrow viewport widths: the conversation list becomes a drawer and settings/detail grids collapse without changing application logic. A persisted `desktopLayoutEnabled` display flag may force the desktop layout structure on narrow screens for users who prefer PC-style navigation in mobile browsers. This flag is visual only; it must not affect local data shape, active conversation selection, context construction, or provider request payloads.
+
 ## Goals / Non-Goals
 
 **Goals:**

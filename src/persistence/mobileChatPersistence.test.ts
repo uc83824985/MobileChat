@@ -22,6 +22,7 @@ describe("MobileChat persistence", () => {
 
     expect(snapshot.settings.activeAssistantId).toBe("architect");
     expect(snapshot.settings.themeMode).toBe("system");
+    expect(snapshot.settings.desktopLayoutEnabled).toBe(false);
     expect(snapshot.settings.streamingEnabled).toBe(true);
     expect(snapshot.settings.activeModelRef.modelId).toBe("default-model");
     expect(snapshot.apiProfiles).toHaveLength(1);
@@ -40,6 +41,7 @@ describe("MobileChat persistence", () => {
         activeAssistantId: "research",
         editingAssistantId: "research",
         themeMode: "light",
+        desktopLayoutEnabled: true,
         streamingEnabled: false,
         activeModelRef: {
           apiProfileId: "default-profile",
@@ -75,6 +77,7 @@ describe("MobileChat persistence", () => {
 
     expect(restored.settings.activeAssistantId).toBe("research");
     expect(restored.settings.themeMode).toBe("light");
+    expect(restored.settings.desktopLayoutEnabled).toBe(true);
     expect(restored.settings.streamingEnabled).toBe(false);
     expect(restored.settings.activeModelRef.modelId).toBe("default-model");
     expect(restored.apiProfiles[0]?.apiKey).toBe("local-only-key");

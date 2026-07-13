@@ -132,7 +132,7 @@ describe("App", () => {
     );
   });
 
-  it("opens settings and toggles theme and streaming mode", () => {
+  it("opens settings and toggles theme, layout, and streaming mode", () => {
     render(<App />);
 
     fireEvent.click(screen.getByText("设置"));
@@ -144,6 +144,11 @@ describe("App", () => {
       target: { value: "light" },
     });
     expect(document.documentElement.dataset.theme).toBe("light");
+
+    expect(screen.getByLabelText("电脑端布局")).not.toBeChecked();
+    fireEvent.click(screen.getByLabelText("电脑端布局"));
+    expect(screen.getByLabelText("电脑端布局")).toBeChecked();
+    expect(screen.getByRole("main")).toHaveClass("desktop-layout");
 
     expect(screen.getByLabelText("流式输出")).toBeChecked();
     fireEvent.click(screen.getByLabelText("流式输出"));

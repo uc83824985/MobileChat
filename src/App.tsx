@@ -335,6 +335,9 @@ function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(
     bootSnapshot.settings.themeMode,
   );
+  const [desktopLayoutEnabled, setDesktopLayoutEnabled] = useState(
+    bootSnapshot.settings.desktopLayoutEnabled,
+  );
   const [streamingEnabled, setStreamingEnabled] = useState(
     bootSnapshot.settings.streamingEnabled,
   );
@@ -484,6 +487,7 @@ function App() {
       activeModelRef,
       editingAssistantId,
       themeMode,
+      desktopLayoutEnabled,
       streamingEnabled,
       debugEnabled,
       lastSuccessfulExportAt,
@@ -496,6 +500,7 @@ function App() {
       activeConversationId,
       activeModelRef,
       debugEnabled,
+      desktopLayoutEnabled,
       editingAssistantId,
       lastSuccessfulExportAt,
       streamingEnabled,
@@ -532,6 +537,7 @@ function App() {
       snapshot.apiProfiles[0]?.models[0]?.id ?? DEFAULT_MODEL_REF.modelId,
     );
     setThemeMode(snapshot.settings.themeMode);
+    setDesktopLayoutEnabled(snapshot.settings.desktopLayoutEnabled);
     setStreamingEnabled(snapshot.settings.streamingEnabled);
     setDebugEnabled(snapshot.settings.debugEnabled);
     setLastSuccessfulExportAt(snapshot.settings.lastSuccessfulExportAt);
@@ -1883,7 +1889,9 @@ function App() {
   };
 
   return (
-    <main className="app-shell">
+    <main
+      className={`app-shell ${desktopLayoutEnabled ? "desktop-layout" : ""}`}
+    >
       {pwaNotice ? (
         <aside className="pwa-banner" role="status">
           <span>
@@ -2301,6 +2309,20 @@ function App() {
                     checked={streamingEnabled}
                     onChange={(event) =>
                       setStreamingEnabled(event.target.checked)
+                    }
+                    type="checkbox"
+                  />
+                  <span />
+                </label>
+              </div>
+              <div className="settings-row compact">
+                <span>电脑端布局</span>
+                <label className="switch">
+                  <input
+                    aria-label="电脑端布局"
+                    checked={desktopLayoutEnabled}
+                    onChange={(event) =>
+                      setDesktopLayoutEnabled(event.target.checked)
                     }
                     type="checkbox"
                   />

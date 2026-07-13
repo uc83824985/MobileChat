@@ -284,6 +284,9 @@ export const normalizeSnapshot = (
         firstAssistant?.id ??
         initialSnapshot.settings.editingAssistantId,
       themeMode: settings.themeMode ?? "system",
+      desktopLayoutEnabled:
+        settings.desktopLayoutEnabled ??
+        initialSnapshot.settings.desktopLayoutEnabled,
       streamingEnabled:
         settings.streamingEnabled ?? initialSnapshot.settings.streamingEnabled,
       debugEnabled:

@@ -105,12 +105,13 @@ export type AssistantField = {
 
 export type AppSettings = {
   id: "app";
-  schemaVersion: 5;
+  schemaVersion: typeof DATABASE_SCHEMA_VERSION;
   activeConversationId: string;
   activeAssistantId: string;
   activeModelRef: ModelRef;
   editingAssistantId: string;
   themeMode: ThemeMode;
+  desktopLayoutEnabled: boolean;
   streamingEnabled: boolean;
   debugEnabled: boolean;
   lastSuccessfulExportAt?: string;
@@ -136,7 +137,7 @@ export type LocalDataSnapshot = {
 
 export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 
-export const DATABASE_SCHEMA_VERSION = 5;
+export const DATABASE_SCHEMA_VERSION = 6;
 
 export const DEFAULT_PROFILE_ID = "default-profile";
 export const DEFAULT_MODEL_ID = "default-model";
@@ -334,6 +335,7 @@ export const createInitialSettings = (
   activeModelRef: DEFAULT_MODEL_REF,
   editingAssistantId: defaultAssistant.id,
   themeMode: "system",
+  desktopLayoutEnabled: false,
   streamingEnabled: true,
   debugEnabled: true,
   storagePersisted: null,
