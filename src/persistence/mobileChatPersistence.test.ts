@@ -84,6 +84,39 @@ describe("MobileChat persistence", () => {
     ).toBe("持久化研究助手");
   });
 
+  it("migrates legacy messages with timestamp-like ids into createdAt order", async () => {
+    const snapshot = createInitialSnapshot();
+    const legacySnapshot = {
+      ...snapshot,
+      messages: [
+        {
+          id: "assistant-lvf9adyk-abcde",
+          conversationId: "local-context",
+          role: "assistant",
+          label: "助手",
+          text: "old assistant",
+        },
+        {
+          id: "message-lvf9adxw-abcde",
+          conversationId: "local-context",
+          role: "user",
+          label: "用户",
+          text: "old user",
+        },
+      ],
+    } as unknown as LocalDataSnapshot;
+
+    await replaceSnapshot(legacySnapshot);
+    const restored = await loadSnapshot();
+    const restoredMessages = restored.messages.toSorted((left, right) =>
+      left.createdAt.localeCompare(right.createdAt),
+    );
+
+    expect(restoredMessages[0]?.text).toBe("old user");
+    expect(restoredMessages[1]?.text).toBe("old assistant");
+    expect(restoredMessages.every((message) => message.createdAt)).toBe(true);
+  });
+
   it("round-trips a credential-free .mobilechat archive and replaces local data", async () => {
     const snapshot = createInitialSnapshot();
     const exportedSnapshot: LocalDataSnapshot = {

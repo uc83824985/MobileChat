@@ -34,6 +34,9 @@ type LegacyAssistant = Assistant & {
   apiProfileName?: string;
   model?: string;
 };
+type LegacyMessage = Omit<Message, "createdAt"> & {
+  createdAt?: string;
+};
 type LegacySettings = Partial<AppSettings> & {
   activeModelRef?: ModelRef;
   themeMode?: AppSettings["themeMode"];
@@ -41,10 +44,11 @@ type LegacySettings = Partial<AppSettings> & {
 };
 type SnapshotInput = Omit<
   Partial<LocalDataSnapshot>,
-  "settings" | "assistants"
+  "settings" | "assistants" | "messages"
 > & {
   settings?: LegacySettings;
   assistants?: LegacyAssistant[];
+  messages?: LegacyMessage[];
 };
 
 const requestToPromise = <T>(request: IDBRequest<T>): Promise<T> =>
@@ -200,6 +204,27 @@ const migrateAssistant = (
   };
 };
 
+const parseCreatedAtFromMessageId = (
+  messageId: string,
+  fallbackIndex: number,
+): string => {
+  const timestampPart = messageId.split("-")[1];
+  const timestamp = timestampPart ? Number.parseInt(timestampPart, 36) : NaN;
+
+  if (Number.isFinite(timestamp) && timestamp > 0) {
+    return new Date(timestamp).toISOString();
+  }
+
+  return new Date(Date.UTC(2026, 6, 13, 0, 0, 0, fallbackIndex)).toISOString();
+};
+
+const migrateMessages = (messages: LegacyMessage[]): Message[] =>
+  messages.map((message, index) => ({
+    ...message,
+    createdAt:
+      message.createdAt ?? parseCreatedAtFromMessageId(message.id, index),
+  }));
+
 export const normalizeSnapshot = (
   snapshot: SnapshotInput,
 ): LocalDataSnapshot => {
@@ -219,7 +244,9 @@ export const normalizeSnapshot = (
     snapshot.conversations && snapshot.conversations.length > 0
       ? snapshot.conversations
       : initialSnapshot.conversations;
-  const messages = snapshot.messages ?? initialSnapshot.messages;
+  const messages = snapshot.messages
+    ? migrateMessages(snapshot.messages)
+    : initialSnapshot.messages;
   const firstConversation = conversations.find(
     (conversation) => !conversation.archived,
   );
@@ -332,7 +359,7 @@ export const loadSnapshot = async (): Promise<LocalDataSnapshot> => {
       requestToPromise<ApiProfile[]>(apiProfilesRequest),
       requestToPromise<LegacyAssistant[]>(assistantsRequest),
       requestToPromise<Conversation[]>(conversationsRequest),
-      requestToPromise<Message[]>(messagesRequest),
+      requestToPromise<LegacyMessage[]>(messagesRequest),
     ]);
   await transactionDone(transaction);
   db.close();

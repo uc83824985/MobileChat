@@ -29,6 +29,7 @@ export type Message = {
   role: "user" | "assistant";
   label: string;
   text: string;
+  createdAt: string;
   status?: "streaming" | "stopped" | "complete" | "error";
   source?: MessageSourceSnapshot;
   providerResponseId?: string;
@@ -103,7 +104,7 @@ export type AssistantField = {
 
 export type AppSettings = {
   id: "app";
-  schemaVersion: 3;
+  schemaVersion: 4;
   activeConversationId: string;
   activeAssistantId: string;
   activeModelRef: ModelRef;
@@ -134,7 +135,7 @@ export type LocalDataSnapshot = {
 
 export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 
-export const DATABASE_SCHEMA_VERSION = 3;
+export const DATABASE_SCHEMA_VERSION = 4;
 
 export const MNAPI_PROFILE_ID = "mnapi";
 export const DEFAULT_MODEL_REF: ModelRef = {
@@ -260,6 +261,7 @@ export const initialMessages: Message[] = [
     role: "user",
     label: "用户",
     text: "放弃 store 方案，首版只使用本地上下文构建。",
+    createdAt: "2026-07-13T00:00:00.000Z",
   },
   {
     id: "m2",
@@ -267,6 +269,7 @@ export const initialMessages: Message[] = [
     role: "assistant",
     label: "架构助手 · gpt-5.4-codex-high",
     text: "已切换为 store:false 基线。每次请求由本地 ContextProjection 构建，provider 返回的 ID 只保留为诊断字段。",
+    createdAt: "2026-07-13T00:00:01.000Z",
   },
   {
     id: "m3",
@@ -274,6 +277,7 @@ export const initialMessages: Message[] = [
     role: "user",
     label: "用户",
     text: "调试模式需要显示发送前 cache 估算和发送后 usage。",
+    createdAt: "2026-07-13T00:00:02.000Z",
   },
   {
     id: "m4",
@@ -281,6 +285,7 @@ export const initialMessages: Message[] = [
     role: "assistant",
     label: "架构助手 · gpt-5.4-codex-high",
     text: "调试面板区分 estimate 和 observed：发送前显示 potentialCacheableRate，发送后显示 cachedInputTokens / inputTokens。",
+    createdAt: "2026-07-13T00:00:03.000Z",
   },
 ];
 

@@ -233,6 +233,29 @@ const createSourceSnapshot = (
   modelDescription: resolvedModel.model.description,
 });
 
+const compareMessagesByCreatedAt = (left: Message, right: Message) => {
+  const parsedLeftTime = Date.parse(left.createdAt);
+  const parsedRightTime = Date.parse(right.createdAt);
+  const leftTime = Number.isFinite(parsedLeftTime) ? parsedLeftTime : 0;
+  const rightTime = Number.isFinite(parsedRightTime) ? parsedRightTime : 0;
+
+  if (leftTime !== rightTime) {
+    return leftTime - rightTime;
+  }
+  if (left.role !== right.role) {
+    return left.role === "user" ? -1 : 1;
+  }
+  return left.id.localeCompare(right.id);
+};
+
+const createTurnTimestamps = () => {
+  const now = Date.now();
+  return {
+    userCreatedAt: new Date(now).toISOString(),
+    assistantCreatedAt: new Date(now + 1).toISOString(),
+  };
+};
+
 function App() {
   const [apiProfiles, setApiProfiles] = useState<ApiProfile[]>(
     bootSnapshot.apiProfiles,
@@ -336,9 +359,9 @@ function App() {
   );
   const activeMessages = useMemo(
     () =>
-      messages.filter(
-        (message) => message.conversationId === activeConversation?.id,
-      ),
+      messages
+        .filter((message) => message.conversationId === activeConversation?.id)
+        .toSorted(compareMessagesByCreatedAt),
     [activeConversation?.id, messages],
   );
   const activeResolvedModel = useMemo(
@@ -1116,6 +1139,7 @@ function App() {
         role: "assistant",
         label: activeAssistant.name,
         text: "当前助手没有可用模型。请先在设置页为助手绑定启用的模型。",
+        createdAt: new Date().toISOString(),
         status: "error",
       };
       setDraft("");
@@ -1124,12 +1148,14 @@ function App() {
     }
 
     const source = createSourceSnapshot(activeAssistant, resolvedModel);
+    const { userCreatedAt, assistantCreatedAt } = createTurnTimestamps();
     const userMessage: Message = {
       id: createId("message"),
       conversationId: activeConversation.id,
       role: "user",
       label: "用户",
       text,
+      createdAt: userCreatedAt,
       status: "complete",
       source,
     };
@@ -1139,6 +1165,7 @@ function App() {
       role: "assistant",
       label: `${activeAssistant.name} · ${resolvedModel.model.name}`,
       text: "正在请求模型…",
+      createdAt: assistantCreatedAt,
       status: "streaming",
       source,
     };

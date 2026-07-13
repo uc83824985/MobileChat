@@ -150,7 +150,7 @@ export const readMobileChatArchive = async (
   if (
     manifest.format !== ARCHIVE_FORMAT ||
     manifest.archiveVersion !== ARCHIVE_VERSION ||
-    manifest.schemaVersion !== DATABASE_SCHEMA_VERSION
+    manifest.schemaVersion > DATABASE_SCHEMA_VERSION
   ) {
     throw new Error("Unsupported .mobilechat archive version.");
   }

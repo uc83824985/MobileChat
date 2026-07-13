@@ -50,6 +50,7 @@ Date: 2026-07-13
 ## Persistence and import/export
 
 - `MobileChatDB` stores settings, API profiles, assistants, conversations, messages, and reserved stores for drafts/checkpoints/blobs.
+- Messages now store `createdAt` and are rendered chronologically. Legacy generated message IDs are migrated into timestamps where possible, preventing IndexedDB key ordering from grouping `assistant-*` records before `message-*` records after reload.
 - UI edits update memory immediately and are autosaved after a short debounce. Settings close and page visibility changes flush the latest snapshot.
 - Settings persist the selected theme and whether Responses streaming is enabled.
 - The current implementation persists normalized full snapshots. This is acceptable for the current small prototype; future large histories should move to dirty-record writes as specified in the architecture document.

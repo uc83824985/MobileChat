@@ -21,18 +21,18 @@ const apiProfile: ApiProfile = {
 
 const assistant: Assistant = {
   id: "architect",
-  name: "架构助手",
+  name: "Assistant",
   description: "",
   kind: "chat",
   modelBindings: [],
-  prompt: "测试 prompt",
+  prompt: "test prompt",
   initialMessage: "",
   enabled: true,
 };
 
 const conversation: Conversation = {
   id: "conversation",
-  title: "测试",
+  title: "Test",
   summary: "",
   archived: false,
 };
@@ -49,8 +49,9 @@ const messages: Message[] = [
     id: "m1",
     conversationId: "conversation",
     role: "user",
-    label: "用户",
-    text: "你好",
+    label: "User",
+    text: "hello",
+    createdAt: "2026-07-13T00:00:00.000Z",
   },
 ];
 
@@ -78,8 +79,8 @@ describe("responsesClient", () => {
       .fn()
       .mockResolvedValue(
         createStreamResponse([
-          'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"你"}\n\n',
-          'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"好"}\n\n',
+          'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hel"}\n\n',
+          'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"lo"}\n\n',
           'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":12,"output_tokens":2,"total_tokens":14,"input_tokens_details":{"cached_tokens":4}}}}\n\n',
         ]),
       );
@@ -97,7 +98,7 @@ describe("responsesClient", () => {
       onTextDelta: (_delta, fullText) => deltas.push(fullText),
     });
 
-    expect(result.text).toBe("你好");
+    expect(result.text).toBe("hello");
     expect(result.providerResponseId).toBe("resp_1");
     expect(result.usage).toEqual({
       inputTokens: 12,
@@ -105,7 +106,7 @@ describe("responsesClient", () => {
       totalTokens: 14,
       cachedInputTokens: 4,
     });
-    expect(deltas).toEqual(["你", "你好"]);
+    expect(deltas).toEqual(["hel", "hello"]);
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).stream).toBe(
       true,
     );
@@ -116,7 +117,7 @@ describe("responsesClient", () => {
       new Response(
         JSON.stringify({
           id: "resp_2",
-          output_text: "一次性返回",
+          output_text: "single response",
           usage: {
             input_tokens: 5,
             output_tokens: 3,
@@ -138,7 +139,7 @@ describe("responsesClient", () => {
       stream: false,
     });
 
-    expect(result.text).toBe("一次性返回");
+    expect(result.text).toBe("single response");
     expect(result.usage?.inputTokens).toBe(5);
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).stream).toBe(
       false,
