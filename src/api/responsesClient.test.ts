@@ -229,6 +229,31 @@ describe("responsesClient", () => {
     );
   });
 
+  it("combines assistant prompt and context profile instructions", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ output_text: "context ok" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestResponsesChat({
+      apiProfile,
+      assistant,
+      conversation,
+      model,
+      contextInstruction: "profile instruction",
+      messages,
+      signal: new AbortController().signal,
+      stream: false,
+    });
+
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).instructions,
+    ).toBe("test prompt\n\nprofile instruction");
+  });
+
   it("supports OpenAI-compatible Chat Completions profiles", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

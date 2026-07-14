@@ -12,6 +12,7 @@ export type ResponsesChatRequest = {
   assistant: Assistant;
   conversation: Conversation;
   model: ModelDefinition;
+  contextInstruction?: string;
   messages: Message[];
   signal: AbortSignal;
   stream: boolean;
@@ -148,19 +149,34 @@ const createTextItems = (messages: Message[]) =>
     content: message.text,
   }));
 
+const combineInstructions = (
+  assistantPrompt?: string,
+  contextInstruction?: string,
+) =>
+  [assistantPrompt?.trim(), contextInstruction?.trim()]
+    .filter(Boolean)
+    .join("\n\n");
+
 const buildResponsesRequestBody = ({
   assistant,
+  contextInstruction,
   model,
   messages,
   stream,
   webSearchEnabled,
 }: Pick<
   ResponsesChatRequest,
-  "assistant" | "model" | "messages" | "stream" | "webSearchEnabled"
+  | "assistant"
+  | "contextInstruction"
+  | "model"
+  | "messages"
+  | "stream"
+  | "webSearchEnabled"
 >) =>
   JSON.stringify({
     model: model.id,
-    instructions: assistant.prompt || undefined,
+    instructions:
+      combineInstructions(assistant.prompt, contextInstruction) || undefined,
     input: createTextItems(messages),
     tools: webSearchEnabled ? [{ type: "web_search" }] : undefined,
     store: false,
@@ -169,20 +185,34 @@ const buildResponsesRequestBody = ({
 
 const buildChatCompletionsRequestBody = ({
   assistant,
+  contextInstruction,
   model,
   messages,
   stream,
   webSearchEnabled,
 }: Pick<
   ResponsesChatRequest,
-  "assistant" | "model" | "messages" | "stream" | "webSearchEnabled"
+  | "assistant"
+  | "contextInstruction"
+  | "model"
+  | "messages"
+  | "stream"
+  | "webSearchEnabled"
 >) =>
   JSON.stringify({
     model: model.id,
     web_search_options: webSearchEnabled ? {} : undefined,
     messages: [
-      ...(assistant.prompt
-        ? [{ role: "system", content: assistant.prompt }]
+      ...(combineInstructions(assistant.prompt, contextInstruction)
+        ? [
+            {
+              role: "system",
+              content: combineInstructions(
+                assistant.prompt,
+                contextInstruction,
+              ),
+            },
+          ]
         : []),
       ...createTextItems(messages),
     ],
@@ -472,6 +502,7 @@ const readResponsesStream = async (
 export const requestResponsesChat = async ({
   apiProfile,
   assistant,
+  contextInstruction,
   model,
   messages,
   signal,
@@ -499,6 +530,7 @@ export const requestResponsesChat = async ({
     apiProfile.protocol === "openai-chat-completions"
       ? buildChatCompletionsRequestBody({
           assistant,
+          contextInstruction,
           model,
           messages,
           stream,
@@ -506,6 +538,7 @@ export const requestResponsesChat = async ({
         })
       : buildResponsesRequestBody({
           assistant,
+          contextInstruction,
           model,
           messages,
           stream,

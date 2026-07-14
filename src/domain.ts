@@ -26,6 +26,19 @@ export type ContextSummaryFramework = {
   sections: ContextSummaryFrameworkSection[];
 };
 
+export type ContextProfileDimensionOverride = {
+  dimensionId: string;
+  titleOverride?: string;
+  instruction: string;
+};
+
+export type ContextProfile = {
+  id: string;
+  name: string;
+  description: string;
+  dimensionOverrides: ContextProfileDimensionOverride[];
+};
+
 export type ContextSummaryRecord = {
   id: string;
   kind: ContextSummaryKind;
@@ -42,6 +55,9 @@ export type ContextSummaryRecord = {
   frameworkId: string;
   frameworkNameSnapshot: string;
   frameworkSectionsSnapshot: ContextSummaryFrameworkSection[];
+  contextProfileId?: string;
+  contextProfileNameSnapshot?: string;
+  contextProfileDimensionOverridesSnapshot?: ContextProfileDimensionOverride[];
 };
 
 export type ResponseUsage = {
@@ -125,6 +141,7 @@ export type Assistant = {
   description: string;
   kind: AssistantKind;
   modelBindings: AssistantModelBinding[];
+  contextProfileId?: string;
   prompt: string;
   initialMessage: string;
   enabled: boolean;
@@ -155,6 +172,8 @@ export type AppSettings = {
   debugEnabled: boolean;
   utilityAssistantRefs: UtilityAssistantFeatureRefs;
   contextSummaryFramework: ContextSummaryFramework;
+  contextProfiles: ContextProfile[];
+  editingContextProfileId: string;
   lastSuccessfulExportAt?: string;
   storagePersisted?: boolean | null;
   storageUsage?: number;
@@ -178,13 +197,14 @@ export type LocalDataSnapshot = {
 
 export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 
-export const DATABASE_SCHEMA_VERSION = 9;
+export const DATABASE_SCHEMA_VERSION = 10;
 
 export const DEFAULT_PROFILE_ID = "default-profile";
 export const DEFAULT_MODEL_ID = "default-model";
 export const CONTEXT_SUMMARY_ASSISTANT_ID = "context-summary-gpt54";
 export const CONTEXT_COMPRESSION_ASSISTANT_ID = "compact";
 export const DEFAULT_CONTEXT_SUMMARY_FRAMEWORK_ID = "default-context-summary";
+export const DEFAULT_CONTEXT_PROFILE_ID = "general-context";
 export const DEFAULT_MODEL_REF: ModelRef = {
   apiProfileId: DEFAULT_PROFILE_ID,
   modelId: DEFAULT_MODEL_ID,
@@ -220,24 +240,31 @@ export const defaultContextSummaryFramework: ContextSummaryFramework = {
       id: "fuzzy_memory",
       title: "模糊记忆",
       instruction:
-        "记录尚未完全确定但有助于理解方向的偏好、倾向、猜测和需要后续验证的背景。",
+        "记录尚未完全确定但有助于理解方向的偏好、倾向、猜测、关系温度、情绪趋势和需要后续验证的背景。",
       required: false,
     },
     {
       id: "exploration_log",
       title: "探索记录",
       instruction:
-        "记录已尝试的方法、观察到的结果、失败原因和排除项，避免重复探索。",
+        "记录已尝试的方法、观察到的结果、失败原因、排除项、随机事件、灵感分支和未固化素材，避免重复探索。",
       required: true,
     },
     {
       id: "current_state",
       title: "当前状态",
       instruction:
-        "记录已经完成的事项、当前阻塞点、下一步计划和待用户确认的问题。",
+        "记录已经完成的事项、当前场景、即时心情、正在进行的事件、当前阻塞点、下一步计划和待用户确认的问题。",
       required: true,
     },
   ],
+};
+
+export const defaultContextProfile: ContextProfile = {
+  id: DEFAULT_CONTEXT_PROFILE_ID,
+  name: "通用上下文",
+  description: "默认上下文设定。保留系统五维度含义，不添加特定业务重载。",
+  dimensionOverrides: [],
 };
 
 export const modelRefKey = (ref: ModelRef) =>
@@ -288,6 +315,7 @@ export const defaultAssistant: Assistant = {
   description: "",
   kind: "chat",
   modelBindings: [defaultBinding(true)],
+  contextProfileId: DEFAULT_CONTEXT_PROFILE_ID,
   prompt: "",
   initialMessage: "",
   enabled: true,
@@ -300,6 +328,7 @@ export const contextSummaryAssistant: Assistant = {
     "内置功能助手预设：为单个对话生成可继续使用的上下文总结，不参与普通聊天。",
   kind: "utility",
   modelBindings: [defaultBinding(true)],
+  contextProfileId: DEFAULT_CONTEXT_PROFILE_ID,
   prompt:
     "你是 MobileChat 的上下文总结助手。你的任务是把一个单独对话的旧消息整理成后续请求可使用的上下文总结。只保留对继续对话有用的信息：目标、已确认决策、约束、待办、术语定义、重要代码/配置发现、未解决问题。不要新增事实，不要评价，不要输出寒暄。输出中文 Markdown，结构清晰但尽量紧凑。",
   initialMessage: "",
@@ -325,6 +354,7 @@ export const initialAssistants: Assistant[] = [
     description: "功能助手，用于后续 /compact 风格上下文压缩。",
     kind: "utility",
     modelBindings: [defaultBinding(true)],
+    contextProfileId: DEFAULT_CONTEXT_PROFILE_ID,
     prompt: "你只输出结构化压缩结果，不参与普通聊天。",
     initialMessage: "",
     enabled: true,
@@ -392,6 +422,8 @@ export const createInitialSettings = (
   debugEnabled: true,
   utilityAssistantRefs: defaultUtilityAssistantRefs,
   contextSummaryFramework: defaultContextSummaryFramework,
+  contextProfiles: [defaultContextProfile],
+  editingContextProfileId: defaultContextProfile.id,
   storagePersisted: null,
   updatedAt: now,
 });

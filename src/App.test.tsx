@@ -349,6 +349,37 @@ describe("App", () => {
       "记录可精确引用的事实、字段、路径、版本、模型、配置、数值、角色属性和世界规则。禁止保存 API key 原文。",
     );
 
+    expect(screen.getByLabelText("选择上下文 Profile")).toHaveDisplayValue(
+      "通用上下文",
+    );
+    expect(screen.getByLabelText("助手上下文 Profile")).toHaveDisplayValue(
+      "通用上下文",
+    );
+    fireEvent.click(screen.getByText("新增上下文 Profile"));
+    expect(screen.getByLabelText("选择上下文 Profile")).toHaveDisplayValue(
+      "上下文 Profile 2",
+    );
+    fireEvent.change(screen.getByLabelText("上下文 Profile 名称"), {
+      target: { value: "角色扮演上下文" },
+    });
+    fireEvent.change(screen.getByLabelText("模糊记忆上下文重载说明"), {
+      target: { value: "记录关系温度、心情变化和共同经历。" },
+    });
+    expect(screen.getByLabelText("模糊记忆上下文重载说明")).toHaveValue(
+      "记录关系温度、心情变化和共同经历。",
+    );
+    const createdContextProfileId = (
+      screen.getByLabelText("选择上下文 Profile") as HTMLSelectElement
+    ).value;
+    fireEvent.change(screen.getByLabelText("助手上下文 Profile"), {
+      target: { value: createdContextProfileId },
+    });
+    expect(screen.getByLabelText("助手上下文 Profile")).toHaveDisplayValue(
+      "角色扮演上下文",
+    );
+    fireEvent.click(screen.getByText("还原当前 Profile 重载"));
+    expect(screen.getByLabelText("模糊记忆上下文重载说明")).toHaveValue("");
+
     expect(screen.getByLabelText("API Key")).toHaveAttribute(
       "type",
       "password",

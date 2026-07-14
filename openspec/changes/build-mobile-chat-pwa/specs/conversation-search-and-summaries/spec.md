@@ -23,7 +23,7 @@ The system SHALL support lightweight per-conversation `ContextSummary` records t
 
 #### Scenario: Generate a debug context summary
 - **WHEN** debug mode is enabled and the user invokes the manual context-summary action
-- **THEN** the system calls the utility assistant referenced by the context-summary feature setting in the foreground, stores the resulting active rolling summary in `contextSummaries[]` with boundary, count, timestamp, framework snapshot, and source snapshot metadata, and does not append a visible chat message
+- **THEN** the system calls the global utility assistant referenced by the context-summary feature setting in the foreground, applies the active chat assistant's Context Profile, stores the resulting active rolling summary in `contextSummaries[]` with boundary, count, timestamp, framework snapshot, Context Profile snapshot, and source snapshot metadata, and does not append a visible chat message
 
 #### Scenario: Configure summary framework sections
 - **WHEN** the system calls a context-summary utility assistant
@@ -38,6 +38,11 @@ The system SHALL support lightweight per-conversation `ContextSummary` records t
 #### Scenario: Configure feature assistant reference
 - **WHEN** the user changes the built-in context-summary assistant setting
 - **THEN** future manual summaries use that referenced enabled utility assistant instead of inferring behavior from utility kind alone
+
+#### Scenario: Configure chat assistant context profile
+- **WHEN** the user edits a Context Profile in Settings and assigns it to a chat assistant
+- **THEN** regular chat requests and future context-summary requests include that Profile's per-dimension guidance while preserving the fixed five-section framework
+- **AND** the system does not require a separate summary utility assistant for each chat assistant
 
 #### Scenario: Preview the current summary
 - **WHEN** a valid `ContextSummary` exists and debug mode is enabled

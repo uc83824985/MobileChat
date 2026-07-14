@@ -42,11 +42,14 @@ import {
   type AssistantModelBinding,
   assistantFields,
   type Conversation,
+  type ContextProfile,
+  type ContextProfileDimensionOverride,
   type ContextSummaryFramework,
   type ContextSummaryRecord,
   CONTEXT_SUMMARY_ASSISTANT_ID,
   createId,
   createInitialSnapshot,
+  defaultContextProfile,
   defaultContextSummaryFramework,
   DEFAULT_MODEL_REF,
   defaultAssistant,
@@ -151,6 +154,7 @@ const createEmptyApiProfile = (index: number): ApiProfile => ({
 const createEmptyAssistant = (
   index: number,
   baseModel?: ResolvedModel,
+  contextProfileId = defaultContextProfile.id,
 ): Assistant => ({
   id: createId("assistant"),
   name: `新助手 ${index}`,
@@ -159,9 +163,17 @@ const createEmptyAssistant = (
   modelBindings: baseModel
     ? [createBinding(baseModel.apiProfile, baseModel.model, true)]
     : [],
+  contextProfileId,
   prompt: "",
   initialMessage: "",
   enabled: true,
+});
+
+const createEmptyContextProfile = (index: number): ContextProfile => ({
+  id: createId("context-profile"),
+  name: `上下文 Profile ${index}`,
+  description: "",
+  dimensionOverrides: [],
 });
 
 const confirmDestructiveAction = (message: string) =>
@@ -368,16 +380,80 @@ const formatContextSummaryFramework = (framework: ContextSummaryFramework) =>
     )
     .join("\n\n");
 
+const resolveContextProfile = (
+  profiles: ContextProfile[],
+  profileId?: string,
+): ContextProfile =>
+  profiles.find((profile) => profile.id === profileId) ??
+  profiles[0] ??
+  defaultContextProfile;
+
+const getContextProfileOverride = (
+  profile: ContextProfile,
+  dimensionId: string,
+): ContextProfileDimensionOverride | undefined =>
+  profile.dimensionOverrides.find(
+    (override) => override.dimensionId === dimensionId,
+  );
+
+const formatContextProfile = (
+  framework: ContextSummaryFramework,
+  profile: ContextProfile,
+) =>
+  framework.sections
+    .map((section) => {
+      const override = getContextProfileOverride(profile, section.id);
+      const title = override?.titleOverride?.trim() || section.title;
+      const instruction = override?.instruction.trim();
+
+      return [
+        `## ${title}`,
+        `- dimensionId: ${section.id}`,
+        `- base: ${section.instruction}`,
+        `- profile: ${instruction || "无额外重载，按基础维度理解。"}`,
+      ].join("\n");
+    })
+    .join("\n\n");
+
+const buildContextProfileInstruction = (
+  framework: ContextSummaryFramework,
+  profile: ContextProfile,
+) => `MobileChat 当前聊天助手绑定的上下文 Profile：
+名称：${profile.name}
+说明：${profile.description || "无"}
+
+这些设定用于理解当前对话中应优先保留和遵守的上下文，不是用户的新消息。请按各维度理解长期规则、事实、模糊状态、探索记录和当前现场：
+
+${formatContextProfile(framework, profile)}`;
+
+const createEffectiveContextSummarySections = (
+  framework: ContextSummaryFramework,
+  profile: ContextProfile,
+) =>
+  framework.sections.map((section) => {
+    const override = getContextProfileOverride(profile, section.id);
+    const overrideInstruction = override?.instruction.trim();
+    return {
+      ...section,
+      title: override?.titleOverride?.trim() || section.title,
+      instruction: overrideInstruction
+        ? `${section.instruction}\n\n上下文 Profile 重载：${overrideInstruction}`
+        : section.instruction,
+    };
+  });
+
 const buildContextSummaryPrompt = ({
   conversation,
   previousSummary,
   messages,
   framework,
+  contextProfile,
 }: {
   conversation: Conversation;
   previousSummary?: string;
   messages: Message[];
   framework: ContextSummaryFramework;
+  contextProfile: ContextProfile;
 }) => `请为 MobileChat 当前单个对话生成新的“上下文总结”。
 
 要求：
@@ -392,6 +468,12 @@ const buildContextSummaryPrompt = ({
 ${framework.description}
 
 ${formatContextSummaryFramework(framework)}
+
+当前聊天助手的上下文 Profile：${contextProfile.name}
+${contextProfile.description || "无说明"}
+
+Profile 维度重载：
+${formatContextProfile(framework, contextProfile)}
 
 对话标题：${conversation.title}
 列表摘要：${conversation.summary || "无"}
@@ -616,6 +698,12 @@ function App() {
   const [contextSummaryFramework, setContextSummaryFramework] = useState(
     bootSnapshot.settings.contextSummaryFramework,
   );
+  const [contextProfiles, setContextProfiles] = useState<ContextProfile[]>(
+    bootSnapshot.settings.contextProfiles,
+  );
+  const [editingContextProfileId, setEditingContextProfileId] = useState(
+    bootSnapshot.settings.editingContextProfileId,
+  );
   const [nextTurnWebSearchEnabled, setNextTurnWebSearchEnabled] =
     useState(false);
   const [nextTurnMultimodalEnabled, setNextTurnMultimodalEnabled] =
@@ -709,6 +797,23 @@ function App() {
       assistants.find((assistant) => assistant.id === editingAssistantId) ??
       activeAssistant,
     [activeAssistant, editingAssistantId, assistants],
+  );
+  const activeContextProfile = useMemo(
+    () =>
+      resolveContextProfile(contextProfiles, activeAssistant.contextProfileId),
+    [activeAssistant.contextProfileId, contextProfiles],
+  );
+  const editingContextProfile = useMemo(
+    () => resolveContextProfile(contextProfiles, editingContextProfileId),
+    [contextProfiles, editingContextProfileId],
+  );
+  const activeContextInstruction = useMemo(
+    () =>
+      buildContextProfileInstruction(
+        contextSummaryFramework,
+        activeContextProfile,
+      ),
+    [activeContextProfile, contextSummaryFramework],
   );
   const editingApiProfile = useMemo(
     () =>
@@ -827,7 +932,10 @@ function App() {
     () => [
       [
         "输入估算",
-        `${estimateTokenCount(activeProjectedMessages, draft)} tokens`,
+        `${estimateTokenCount(
+          activeProjectedMessages,
+          `${activeContextInstruction}\n${draft}`,
+        )} tokens`,
       ],
       [
         "可缓存前缀估算",
@@ -847,6 +955,7 @@ function App() {
     ],
     [
       activeProjectedMessages,
+      activeContextInstruction,
       activeResolvedModel?.model.name,
       draft,
       lastObservedUsage,
@@ -867,6 +976,8 @@ function App() {
       debugEnabled,
       utilityAssistantRefs,
       contextSummaryFramework,
+      contextProfiles,
+      editingContextProfileId,
       lastSuccessfulExportAt,
       storagePersisted: storageInfo.persisted,
       storageUsage: storageInfo.usage,
@@ -877,8 +988,10 @@ function App() {
       activeConversationId,
       activeModelRef,
       contextSummaryFramework,
+      contextProfiles,
       debugEnabled,
       editingAssistantId,
+      editingContextProfileId,
       layoutMode,
       lastSuccessfulExportAt,
       streamingEnabled,
@@ -921,6 +1034,8 @@ function App() {
     setDebugEnabled(snapshot.settings.debugEnabled);
     setUtilityAssistantRefs(snapshot.settings.utilityAssistantRefs);
     setContextSummaryFramework(snapshot.settings.contextSummaryFramework);
+    setContextProfiles(snapshot.settings.contextProfiles);
+    setEditingContextProfileId(snapshot.settings.editingContextProfileId);
     setLastSuccessfulExportAt(snapshot.settings.lastSuccessfulExportAt);
     setStorageInfo({
       persisted: snapshot.settings.storagePersisted ?? null,
@@ -1436,7 +1551,11 @@ function App() {
 
   const createAssistant = () => {
     const baseModel = activeResolvedModel ?? allModelOptions[0];
-    const newAssistant = createEmptyAssistant(assistants.length + 1, baseModel);
+    const newAssistant = createEmptyAssistant(
+      assistants.length + 1,
+      baseModel,
+      activeContextProfile.id,
+    );
 
     setAssistants((current) => [...current, newAssistant]);
     setActiveAssistantId(newAssistant.id);
@@ -1455,6 +1574,19 @@ function App() {
       current.map((assistant) =>
         assistant.id === assistantId
           ? { ...assistant, [key]: value }
+          : assistant,
+      ),
+    );
+  };
+
+  const updateAssistantContextProfile = (
+    assistantId: string,
+    contextProfileId: string,
+  ) => {
+    setAssistants((current) =>
+      current.map((assistant) =>
+        assistant.id === assistantId
+          ? { ...assistant, contextProfileId }
           : assistant,
       ),
     );
@@ -1481,7 +1613,11 @@ function App() {
     );
     const fallbackAssistant =
       remainingAssistants.length === 0
-        ? createEmptyAssistant(1, activeResolvedModel ?? allModelOptions[0])
+        ? createEmptyAssistant(
+            1,
+            activeResolvedModel ?? allModelOptions[0],
+            activeContextProfile.id,
+          )
         : undefined;
     const nextAssistants = fallbackAssistant
       ? [fallbackAssistant]
@@ -1860,6 +1996,111 @@ function App() {
     setContextSummaryFramework(defaultContextSummaryFramework);
   };
 
+  const createContextProfile = () => {
+    const newProfile = createEmptyContextProfile(contextProfiles.length + 1);
+    setContextProfiles((current) => [...current, newProfile]);
+    setEditingContextProfileId(newProfile.id);
+  };
+
+  const updateContextProfileField = (
+    profileId: string,
+    key: keyof Pick<ContextProfile, "name" | "description">,
+    value: string,
+  ) => {
+    setContextProfiles((current) =>
+      current.map((profile) =>
+        profile.id === profileId ? { ...profile, [key]: value } : profile,
+      ),
+    );
+  };
+
+  const updateContextProfileOverride = (
+    profileId: string,
+    dimensionId: string,
+    instruction: string,
+  ) => {
+    setContextProfiles((current) =>
+      current.map((profile) => {
+        if (profile.id !== profileId) {
+          return profile;
+        }
+
+        const trimmedInstruction = instruction.trim();
+        const existingOverrides = profile.dimensionOverrides.filter(
+          (override) => override.dimensionId !== dimensionId,
+        );
+        const nextOverrides = trimmedInstruction
+          ? [
+              ...existingOverrides,
+              {
+                dimensionId,
+                instruction,
+              },
+            ]
+          : existingOverrides;
+
+        return {
+          ...profile,
+          dimensionOverrides: nextOverrides,
+        };
+      }),
+    );
+  };
+
+  const clearContextProfileOverride = (
+    profileId: string,
+    dimensionId: string,
+  ) => {
+    updateContextProfileOverride(profileId, dimensionId, "");
+  };
+
+  const resetContextProfile = (profileId: string) => {
+    setContextProfiles((current) =>
+      current.map((profile) =>
+        profile.id === profileId
+          ? { ...profile, dimensionOverrides: [] }
+          : profile,
+      ),
+    );
+  };
+
+  const deleteContextProfile = (profileId: string) => {
+    const targetProfile = contextProfiles.find(
+      (profile) => profile.id === profileId,
+    );
+    if (!targetProfile) {
+      return;
+    }
+
+    if (
+      !confirmDestructiveAction(
+        `删除上下文 Profile「${targetProfile.name}」？引用它的助手会切换到可用 Profile。`,
+      )
+    ) {
+      return;
+    }
+
+    const remainingProfiles = contextProfiles.filter(
+      (profile) => profile.id !== profileId,
+    );
+    const fallbackProfile = remainingProfiles[0] ?? {
+      ...defaultContextProfile,
+      id: createId("context-profile"),
+    };
+    const nextProfiles =
+      remainingProfiles.length > 0 ? remainingProfiles : [fallbackProfile];
+
+    setContextProfiles(nextProfiles);
+    setEditingContextProfileId(fallbackProfile.id);
+    setAssistants((current) =>
+      current.map((assistant) =>
+        assistant.contextProfileId === profileId
+          ? { ...assistant, contextProfileId: fallbackProfile.id }
+          : assistant,
+      ),
+    );
+  };
+
   const deleteMessage = (messageId: string) => {
     const targetMessage = messages.find((message) => message.id === messageId);
     if (!targetMessage) {
@@ -1975,6 +2216,7 @@ function App() {
           : undefined,
         messages: messagesToSummarize,
         framework: contextSummaryFramework,
+        contextProfile: activeContextProfile,
       }),
       createdAt: now,
       status: "complete",
@@ -2026,7 +2268,14 @@ function App() {
         source,
         frameworkId: contextSummaryFramework.id,
         frameworkNameSnapshot: contextSummaryFramework.name,
-        frameworkSectionsSnapshot: contextSummaryFramework.sections,
+        frameworkSectionsSnapshot: createEffectiveContextSummarySections(
+          contextSummaryFramework,
+          activeContextProfile,
+        ),
+        contextProfileId: activeContextProfile.id,
+        contextProfileNameSnapshot: activeContextProfile.name,
+        contextProfileDimensionOverridesSnapshot:
+          activeContextProfile.dimensionOverrides,
       };
 
       setConversations((current) =>
@@ -2141,6 +2390,7 @@ function App() {
         assistant: activeAssistant,
         conversation: activeConversation,
         model: resolvedModel.model,
+        contextInstruction: activeContextInstruction,
         messages: projectMessagesForRequest(
           activeConversation,
           requestMessages,
@@ -2294,6 +2544,7 @@ function App() {
         assistant: activeAssistant,
         conversation: activeConversation,
         model: resolvedModel.model,
+        contextInstruction: activeContextInstruction,
         messages: projectMessagesForRequest(
           activeConversation,
           requestMessages,
@@ -2448,6 +2699,7 @@ function App() {
         assistant: activeAssistant,
         conversation: activeConversation,
         model: resolvedModel.model,
+        contextInstruction: activeContextInstruction,
         messages: projectMessagesForRequest(activeConversation, [
           ...activeMessages,
           userMessage,
@@ -3133,6 +3385,10 @@ function App() {
                 <span>功能助手</span>
                 <strong>{utilityAssistantCount}</strong>
               </div>
+              <div className="settings-row compact">
+                <span>上下文 Profile</span>
+                <strong>{contextProfiles.length}</strong>
+              </div>
               <label className="settings-row compact theme-select">
                 <span>上下文总结助手</span>
                 <select
@@ -3238,6 +3494,176 @@ function App() {
                     </article>
                   );
                 })}
+              </div>
+            </section>
+
+            <section
+              className="summary-framework-panel"
+              aria-label="上下文 Profile"
+            >
+              <header>
+                <div>
+                  <p className="eyebrow">Context profile</p>
+                  <h3>上下文 Profile</h3>
+                </div>
+                <div className="header-actions">
+                  <button type="button" onClick={createContextProfile}>
+                    <Plus size={16} />
+                    新增上下文 Profile
+                  </button>
+                  <button
+                    className="danger-button"
+                    type="button"
+                    onClick={() =>
+                      deleteContextProfile(editingContextProfile.id)
+                    }
+                  >
+                    <Trash2 size={16} />
+                    删除 Profile
+                  </button>
+                </div>
+              </header>
+              <p className="summary-framework-note">
+                聊天助手引用这里的 Profile；全局总结助手会按当前聊天助手绑定的
+                Profile 执行总结，不需要为每个聊天助手单独配置总结助手。
+              </p>
+              <div className="profile-layout">
+                <aside className="profile-directory">
+                  <label className="assistant-config-select">
+                    <span>当前 Profile</span>
+                    <select
+                      aria-label="选择上下文 Profile"
+                      value={editingContextProfile.id}
+                      onChange={(event) =>
+                        setEditingContextProfileId(event.target.value)
+                      }
+                    >
+                      {contextProfiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="assistant-card-list">
+                    {contextProfiles.map((profile) => (
+                      <button
+                        className={`assistant-card ${
+                          profile.id === editingContextProfile.id
+                            ? "selected"
+                            : ""
+                        }`}
+                        key={profile.id}
+                        type="button"
+                        onClick={() => setEditingContextProfileId(profile.id)}
+                      >
+                        <span>{profile.name}</span>
+                        <small>
+                          {profile.dimensionOverrides.length} 个维度重载
+                        </small>
+                      </button>
+                    ))}
+                  </div>
+                </aside>
+
+                <section className="profile-detail">
+                  <div className="reflected-fields">
+                    <label className="detail-field">
+                      <span>Profile 名称</span>
+                      <input
+                        aria-label="上下文 Profile 名称"
+                        value={editingContextProfile.name}
+                        onChange={(event) =>
+                          updateContextProfileField(
+                            editingContextProfile.id,
+                            "name",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </label>
+                    <label className="detail-field">
+                      <span>Profile 描述</span>
+                      <input
+                        aria-label="上下文 Profile 描述"
+                        value={editingContextProfile.description}
+                        onChange={(event) =>
+                          updateContextProfileField(
+                            editingContextProfile.id,
+                            "description",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </label>
+                  </div>
+
+                  <div className="summary-framework-grid">
+                    {contextSummaryFramework.sections.map((section) => {
+                      const override = getContextProfileOverride(
+                        editingContextProfile,
+                        section.id,
+                      );
+                      const value = override?.instruction ?? "";
+
+                      return (
+                        <article
+                          className="summary-framework-card"
+                          key={section.id}
+                        >
+                          <div className="summary-framework-card-header">
+                            <div>
+                              <h4>{section.title}</h4>
+                              <span>{section.id}</span>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={!value.trim()}
+                              onClick={() =>
+                                clearContextProfileOverride(
+                                  editingContextProfile.id,
+                                  section.id,
+                                )
+                              }
+                            >
+                              清空重载
+                            </button>
+                          </div>
+                          <p className="summary-framework-note">
+                            默认：{section.instruction}
+                          </p>
+                          <label>
+                            <span>Profile 重载说明</span>
+                            <textarea
+                              aria-label={`${section.title}上下文重载说明`}
+                              rows={3}
+                              placeholder="留空则完全使用系统描述；填写时只补充该业务/玩法/角色场景的额外分类规则。"
+                              value={value}
+                              onChange={(event) =>
+                                updateContextProfileOverride(
+                                  editingContextProfile.id,
+                                  section.id,
+                                  event.target.value,
+                                )
+                              }
+                            />
+                          </label>
+                        </article>
+                      );
+                    })}
+                  </div>
+
+                  <div className="header-actions">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        resetContextProfile(editingContextProfile.id)
+                      }
+                    >
+                      还原当前 Profile 重载
+                    </button>
+                  </div>
+                </section>
               </div>
             </section>
 
@@ -3824,6 +4250,48 @@ function App() {
                     );
                   })}
                 </div>
+
+                {editingAssistant.kind === "chat" ? (
+                  <section
+                    className="model-bindings"
+                    aria-label="助手上下文 Profile 设置"
+                  >
+                    <header>
+                      <div>
+                        <p className="eyebrow">Context profile</p>
+                        <h3>助手上下文 Profile</h3>
+                      </div>
+                    </header>
+                    <label className="assistant-config-select">
+                      <span>当前助手使用的 Profile</span>
+                      <select
+                        aria-label="助手上下文 Profile"
+                        value={
+                          resolveContextProfile(
+                            contextProfiles,
+                            editingAssistant.contextProfileId,
+                          ).id
+                        }
+                        onChange={(event) =>
+                          updateAssistantContextProfile(
+                            editingAssistant.id,
+                            event.target.value,
+                          )
+                        }
+                      >
+                        {contextProfiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.name}
+                          </option>
+                        ))}
+                      </select>
+                      <small>
+                        普通聊天会注入该
+                        Profile；主动总结时，全局总结助手也会按它执行分类。
+                      </small>
+                    </label>
+                  </section>
+                ) : null}
 
                 <section className="model-bindings" aria-label="助手允许模型">
                   <header>

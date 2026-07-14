@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CONTEXT_SUMMARY_ASSISTANT_ID,
   createInitialSnapshot,
+  defaultContextProfile,
   defaultContextSummaryFramework,
   defaultUtilityAssistantRefs,
   type LocalDataSnapshot,
@@ -41,6 +42,10 @@ describe("MobileChat persistence", () => {
         (section) => section.title,
       ),
     ).toEqual(["严格记忆", "精确事实", "模糊记忆", "探索记录", "当前状态"]);
+    expect(snapshot.settings.contextProfiles).toEqual([defaultContextProfile]);
+    expect(snapshot.settings.editingContextProfileId).toBe(
+      defaultContextProfile.id,
+    );
     expect(snapshot.settings.activeModelRef.modelId).toBe("default-model");
     expect(snapshot.apiProfiles).toHaveLength(1);
     expect(snapshot.apiProfiles[0]?.baseUrl).toBe("");
@@ -49,6 +54,10 @@ describe("MobileChat persistence", () => {
     expect(snapshot.assistants.map((assistant) => assistant.id)).toContain(
       CONTEXT_SUMMARY_ASSISTANT_ID,
     );
+    expect(
+      snapshot.assistants.find((assistant) => assistant.id === "architect")
+        ?.contextProfileId,
+    ).toBe(defaultContextProfile.id);
     expect(snapshot.conversations[0]?.title).toBe("新对话 1");
     expect(snapshot.messages).toEqual([]);
   });
@@ -150,6 +159,44 @@ describe("MobileChat persistence", () => {
     expect(sections.some((section) => section.id === "persona_and_world")).toBe(
       false,
     );
+  });
+
+  it("persists context profiles and assistant references", async () => {
+    const snapshot = createInitialSnapshot();
+    const profile = {
+      id: "roleplay-context",
+      name: "角色扮演上下文",
+      description: "用于角色扮演分类。",
+      dimensionOverrides: [
+        {
+          dimensionId: "fuzzy_memory",
+          instruction: "记录关系温度、心情变化和共同经历。",
+        },
+      ],
+    };
+    const editedSnapshot: LocalDataSnapshot = {
+      ...snapshot,
+      settings: {
+        ...snapshot.settings,
+        contextProfiles: [defaultContextProfile, profile],
+        editingContextProfileId: profile.id,
+      },
+      assistants: snapshot.assistants.map((assistant) =>
+        assistant.id === "architect"
+          ? { ...assistant, contextProfileId: profile.id }
+          : assistant,
+      ),
+    };
+
+    await saveSnapshot(editedSnapshot);
+    const restored = await loadSnapshot();
+
+    expect(restored.settings.editingContextProfileId).toBe(profile.id);
+    expect(restored.settings.contextProfiles).toContainEqual(profile);
+    expect(
+      restored.assistants.find((assistant) => assistant.id === "architect")
+        ?.contextProfileId,
+    ).toBe(profile.id);
   });
 
   it("does not append missing built-in assistants based on old schema versions", async () => {

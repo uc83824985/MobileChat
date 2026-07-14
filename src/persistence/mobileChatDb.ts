@@ -6,6 +6,7 @@ import {
   type ContextSummaryFramework,
   createInitialSnapshot,
   DATABASE_SCHEMA_VERSION,
+  defaultContextProfile,
   defaultContextSummaryFramework,
   defaultUtilityAssistantRefs,
   DEFAULT_MODEL_REF,
@@ -162,11 +163,18 @@ const findModelInProfiles = (apiProfiles: ApiProfile[], ref: ModelRef) => {
 const normalizeAssistant = (
   assistant: Assistant,
   apiProfiles: ApiProfile[],
+  contextProfiles: AppSettings["contextProfiles"],
 ): Assistant => {
   const modelBindings = Array.isArray(assistant.modelBindings)
     ? assistant.modelBindings
     : [];
   const hasDefault = modelBindings.some((binding) => binding.isDefault);
+  const contextProfileId =
+    contextProfiles.find((profile) => profile.id === assistant.contextProfileId)
+      ?.id ??
+    contextProfiles[0]?.id ??
+    defaultContextProfile.id;
+
   return {
     id: assistant.id,
     name: assistant.name,
@@ -191,6 +199,7 @@ const normalizeAssistant = (
     }),
     prompt: assistant.prompt ?? "",
     initialMessage: assistant.initialMessage ?? "",
+    contextProfileId,
     enabled: assistant.enabled !== false,
   };
 };
@@ -224,6 +233,24 @@ const normalizeContextSummaryFramework = (
     }),
   };
 };
+
+const normalizeContextProfiles = (
+  profiles?: AppSettings["contextProfiles"],
+): AppSettings["contextProfiles"] =>
+  Array.isArray(profiles) && profiles.length > 0
+    ? profiles.map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        description: profile.description,
+        dimensionOverrides: Array.isArray(profile.dimensionOverrides)
+          ? profile.dimensionOverrides.map((override) => ({
+              dimensionId: override.dimensionId,
+              titleOverride: override.titleOverride,
+              instruction: override.instruction,
+            }))
+          : [],
+      }))
+    : [defaultContextProfile];
 
 const normalizeConversation = (conversation: Conversation): Conversation => {
   const contextSummaries =
@@ -261,11 +288,14 @@ export const normalizeSnapshot = (
     ? cloneApiProfiles(snapshot.apiProfiles)
     : cloneInitialApiProfiles();
   const settings: PartialSettings = snapshot.settings ?? {};
+  const contextProfiles = normalizeContextProfiles(settings.contextProfiles);
   const assistants = snapshot.assistants
     ? snapshot.assistants.map((assistant) =>
-        normalizeAssistant(assistant, apiProfiles),
+        normalizeAssistant(assistant, apiProfiles, contextProfiles),
       )
-    : initialSnapshot.assistants;
+    : initialSnapshot.assistants.map((assistant) =>
+        normalizeAssistant(assistant, apiProfiles, contextProfiles),
+      );
   const conversations = snapshot.conversations
     ? snapshot.conversations.map((conversation) =>
         normalizeConversation(conversation),
@@ -314,6 +344,13 @@ export const normalizeSnapshot = (
       storagePersisted: settings.storagePersisted ?? null,
       storageUsage: settings.storageUsage,
       storageQuota: settings.storageQuota,
+      contextProfiles,
+      editingContextProfileId:
+        contextProfiles.find(
+          (profile) => profile.id === settings.editingContextProfileId,
+        )?.id ??
+        contextProfiles[0]?.id ??
+        defaultContextProfile.id,
       updatedAt: settings.updatedAt ?? now,
     },
     apiProfiles,

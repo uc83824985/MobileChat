@@ -6,7 +6,7 @@ Date: 2026-07-14
 
 - The mobile/desktop shell is usable with persisted local state.
 - Conversation creation, conversation selection, title edit, title/summary search, archive action, archived conversation view, draft input, send, stop, debug panel toggle, settings open/close, theme switch, streaming switch, assistant switch, and model switch are covered by automated tests.
-- Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, backup, theme, and streaming controls.
+- Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, context Profile, backup, theme, and streaming controls.
 - The app has OpenAI-compatible Responses and Chat Completions request loops. Responses sends `POST {baseUrl}/responses` using `store:false` and omits optional `metadata` for wider relay compatibility; Chat Completions sends `POST {baseUrl}/chat/completions`. Without an API key it shows a local configuration error. Streaming mode uses SSE text deltas when the gateway truly streams; if a `stream:true` request is buffered into JSON, the client falls back to one-shot JSON parsing.
 - Mobile browser compatibility is covered by responsive CSS plus Playwright Mobile Chrome checks. The default mobile layout keeps the side conversation rail as a drawer, collapses settings/detail grids to one column, and preserves the same application logic as desktop.
 - A persisted "布局模式" display setting supports `auto`, `mobile`, and `desktop`. `auto` follows viewport width, `mobile` forces drawer/single-column layout, and `desktop` forces the desktop layout structure. This is layout-only and does not change conversation state, local persistence, request construction, or provider protocol behavior.
@@ -31,9 +31,10 @@ Date: 2026-07-14
 - Dark mode styles native select options and applies `color-scheme: dark` to avoid white dropdown backgrounds with pale text.
 - The assistant details panel is schema-rendered from `assistantFields`, so newly added assistants use the same reflected editor instead of a special hard-coded page.
 - API Key editing uses an app-owned persistent show/hide button instead of relying on browser-specific password-field eye icons.
-- Debug mode exposes a manual **总结上下文** action and a **显示总结** preview. Summary generation calls the configured context-summary utility assistant, stores the generated active rolling summary on the conversation, and keeps the visible message thread unchanged except for a small debug status hint.
+- Debug mode exposes a manual **总结上下文** action and a **显示总结** preview. Summary generation calls the configured global context-summary utility assistant, applies the current chat assistant's context Profile, stores the generated active rolling summary on the conversation, and keeps the visible message thread unchanged except for a small debug status hint.
 - Settings has explicit built-in feature references for **上下文总结助手** and **上下文压缩助手**. The utility kind only makes an assistant eligible; feature settings decide which utility assistant is used by each built-in operation.
 - Settings exposes the fixed five-section context-summary framework. Users can override each section's system description, restore one section, or restore all default descriptions; section IDs and titles remain app-defined.
+- Settings also exposes reusable **上下文 Profile** records. A chat assistant references one Profile; each Profile keeps the fixed five dimensions but can add per-dimension business/domain guidance, such as roleplay formatting rules, relationship/emotion tracking, random events, or task-specific exploration notes.
 
 ## API Profile and model configuration
 
@@ -51,22 +52,22 @@ Date: 2026-07-14
   - optional context window;
   - enabled flag.
 - The API Profile editor shows the full model list as selectable model cards, so every model visible in assistant model access can be traced back to a model-side configuration record.
-- Assistants own model bindings that reference existing API Profile + model records, with snapshots of key display fields for provenance.
+- Assistants own model bindings that reference existing API Profile + model records, with snapshots of key display fields for provenance. Chat assistants also reference a reusable context Profile; utility summary assistants remain global and read the active chat assistant's Profile at execution time.
 
 ## User-owned connection configuration
 
 - The repo no longer seeds a concrete relay URL, API key, or model slug. First-run data contains a generic editable API Profile and model placeholder.
 - User-specific routes and provider-specific model slugs should be created through the settings UI, import flow, or a local-only MobileChatDB update. Newly created API Profiles and models default optional descriptions to empty strings.
 - API keys remain in the browser's IndexedDB unless the user exports with credentials in a future explicit flow.
-- CRUD status: API Profiles, model definitions, assistants, active conversations, and archived conversations all expose create/read/update/delete flows in the UI. Deleting the last required runtime object creates a blank local fallback so the app remains operable.
+- CRUD status: API Profiles, model definitions, assistants, context Profiles, active conversations, and archived conversations all expose create/read/update/delete flows in the UI. Deleting the last required runtime object creates a blank local fallback so the app remains operable.
 - Conversation deletion uses a confirmation prompt before permanently removing the conversation and its owned messages.
 - Single-message deletion uses a separate confirmation prompt. UI terminology distinguishes large conversation containers as "对话" and individual records inside a conversation as "消息".
 
 ## Persistence and import/export
 
-- `MobileChatDB` stores settings, API profiles, assistants, conversations, messages, and reserved stores for drafts/checkpoints/blobs.
+- `MobileChatDB` stores settings, API profiles, assistants, reusable context Profiles, conversations, messages, and reserved stores for drafts/checkpoints/blobs.
 - Messages now store `createdAt`, assistant `completedAt`, and assistant `elapsedMs` where available. They are rendered chronologically by creation time, while completed assistant responses show finish time and request duration.
-- Conversations may store `contextSummaries[]` plus `activeContextSummaryId`. The current implementation still manages one active rolling summary, but each record already keeps kind, status, boundary message ID, covered message count, retained raw tail count, framework snapshot, update time, and summary-assistant/model source snapshot.
+- Conversations may store `contextSummaries[]` plus `activeContextSummaryId`. The current implementation still manages one active rolling summary, but each record already keeps kind, status, boundary message ID, covered message count, retained raw tail count, framework snapshot, context Profile snapshot, update time, and summary-assistant/model source snapshot.
 - During rapid iteration, persistence accepts only the current MobileChatDB record shape. Older fields are not translated into current configuration; users may reconfigure local profiles/assistants if a breaking schema change lands before the stable version.
 - UI edits update memory immediately and are autosaved after a short debounce. Settings close and page visibility changes flush the latest snapshot.
 - Settings persist the selected theme and whether Responses streaming is enabled.

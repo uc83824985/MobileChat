@@ -25,6 +25,10 @@ The system SHALL allow a user to create, edit, disable, and delete assistants co
 - **WHEN** two assistants bind to the same model in the same API profile
 - **THEN** both assistants reference the same API profile and model definition while retaining independent prompts and identities
 
+#### Scenario: Bind a reusable context profile
+- **WHEN** a chat assistant references a Context Profile
+- **THEN** regular chat requests and context-summary requests use that Profile's five-dimension guidance without requiring a dedicated summary assistant for that chat assistant
+
 ### Requirement: Chat and utility assistant kinds
 The system SHALL classify assistants as `chat` or `utility`, and SHALL require each utility assistant to declare a supported semantic role such as `context-compression`.
 
