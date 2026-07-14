@@ -52,6 +52,13 @@ test("supports basic mobile interactions, title editing, and model switching", a
   await page.getByLabel("新建对话").click();
   await expect(page.locator(".conversation-rail")).not.toHaveClass(/open/);
   await expect(page.getByText("开始一个新对话")).toBeVisible();
+  const floatingDrawerButton = page.getByLabel("悬浮对话入口");
+  if (await floatingDrawerButton.isVisible()) {
+    await floatingDrawerButton.click();
+    await expect(page.locator(".conversation-rail")).toHaveClass(/open/);
+    await page.getByLabel("关闭对话列表").click({ force: true });
+    await expect(page.locator(".conversation-rail")).not.toHaveClass(/open/);
+  }
 
   await page.getByLabel("编辑标题").click();
   await page.getByLabel("对话标题").fill("手机标题");
@@ -93,8 +100,6 @@ test("supports basic mobile interactions, title editing, and model switching", a
   await page.getByRole("button", { name: "编辑模型 默认模型" }).click();
   await expect(page.getByLabel("模型名称")).toHaveValue("默认模型");
   await page.getByLabel("模型名称").fill("手机主模型");
-  await page.getByLabel("启用联网工具").check({ force: true });
-  await expect(page.getByLabel("启用联网工具")).toBeChecked();
   await page.getByText("新增模型").click();
   await expect(page.getByLabel("模型名称")).toHaveValue("new-model-2");
   await page.getByText("删除当前模型").click();

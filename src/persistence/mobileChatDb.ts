@@ -44,6 +44,9 @@ type LegacySettings = Partial<AppSettings> & {
   desktopLayoutEnabled?: boolean;
   streamingEnabled?: boolean;
 };
+type LegacyModelDefinition = ModelDefinition & {
+  webSearchEnabled?: unknown;
+};
 type SnapshotInput = Omit<
   Partial<LocalDataSnapshot>,
   "settings" | "assistants" | "messages"
@@ -127,10 +130,10 @@ const cloneInitialApiProfiles = (): ApiProfile[] =>
     models: profile.models.map((model) => normalizeModel(model)),
   }));
 
-const normalizeModel = (model: ModelDefinition): ModelDefinition => ({
-  ...model,
-  webSearchEnabled: Boolean(model.webSearchEnabled),
-});
+const normalizeModel = (model: LegacyModelDefinition): ModelDefinition => {
+  const { webSearchEnabled: _legacyWebSearchEnabled, ...normalized } = model;
+  return normalized;
+};
 
 const normalizeApiProfiles = (apiProfiles: ApiProfile[]): ApiProfile[] =>
   apiProfiles.map((profile) => ({

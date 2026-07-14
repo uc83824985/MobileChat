@@ -73,22 +73,26 @@ The first release SHALL implement minimal OpenAI-compatible Responses and Chat C
 - **THEN** the system parses the JSON response, stores the completed assistant message, and records that true incremental streaming was not observed
 
 ### Requirement: Explicit hosted tool capabilities
-The system SHALL treat web search and other hosted provider tools as explicit model-level capabilities of the selected protocol/profile/model rather than assuming that a prompt can make the model access the internet.
+The system SHALL treat web search and other hosted provider tools as explicit per-turn send options for the selected protocol/profile/model rather than assuming that a prompt can make the model access the internet or statically enabling the tool on every request from a model.
 
 #### Scenario: Enable web search for a Responses-compatible route
-- **WHEN** a user enables web access for a model binding whose adapter supports hosted search
+- **WHEN** a user enables web access for the next send through a Responses-compatible route
 - **THEN** the request includes the adapter-specific tool configuration, such as a Responses `tools` entry for `web_search`, and stores any returned search/citation diagnostics without making them part of local memory
 
 #### Scenario: Enable web search for a Chat Completions search route
-- **WHEN** a user enables web access for a model binding whose API profile uses Chat Completions
+- **WHEN** a user enables web access for the next send through a Chat Completions API profile
 - **THEN** the request includes Chat Completions `web_search_options` rather than a Responses `tools` entry
+
+#### Scenario: Web search is single-turn
+- **WHEN** a user sends a message with the temporary web-access option enabled
+- **THEN** that option is consumed for the current request and the next draft returns to the default non-web state unless the user enables it again
 
 #### Scenario: Web search unsupported by the selected route
 - **WHEN** a user sends a request that requires web access through a profile, model, or protocol that does not declare search support
 - **THEN** the system reports the unsupported capability before or during send instead of silently relying on the model to browse
 
 ### Requirement: Explicit multimodal send capabilities
-The system SHALL treat image, file, and other non-text content as adapter-declared capabilities and SHALL serialize content parts only when the selected adapter/profile/model can accept them.
+The system SHALL treat image, file, and other non-text content as per-draft content plus adapter-declared send capabilities, and SHALL serialize content parts only when the current draft includes them and the selected adapter/profile/model can accept them.
 
 #### Scenario: Send an image-capable draft
 - **WHEN** a draft contains an image URL or local image content part and the selected model binding declares image-input support

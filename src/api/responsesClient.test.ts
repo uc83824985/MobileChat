@@ -42,7 +42,6 @@ const model: ModelDefinition = {
   name: "test-model",
   description: "",
   enabled: true,
-  webSearchEnabled: false,
 };
 
 const messages: Message[] = [
@@ -119,7 +118,7 @@ describe("responsesClient", () => {
     });
   });
 
-  it("adds the web_search tool when the selected model enables web access", async () => {
+  it("adds the web_search tool only when the request enables web access", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -139,11 +138,11 @@ describe("responsesClient", () => {
         ...model,
         id: "web-model",
         name: "web-model",
-        webSearchEnabled: true,
       },
       messages,
       signal: new AbortController().signal,
       stream: false,
+      webSearchEnabled: true,
     });
 
     expect(
@@ -303,10 +302,11 @@ describe("responsesClient", () => {
       },
       assistant,
       conversation,
-      model: { ...model, webSearchEnabled: true },
+      model,
       messages,
       signal: new AbortController().signal,
       stream: false,
+      webSearchEnabled: true,
     });
 
     expect(
@@ -340,10 +340,11 @@ describe("responsesClient", () => {
         apiProfile,
         assistant,
         conversation,
-        model: { ...model, webSearchEnabled: true },
+        model,
         messages,
         signal: new AbortController().signal,
         stream: true,
+        webSearchEnabled: true,
       }),
     ).rejects.toThrow(
       /POST https:\/\/api\.example\.test\/v1\/responses.*协议：openai-responses.*模型：test-model.*联网工具：on.*\/v1/,

@@ -96,7 +96,6 @@ const createEmptyApiProfile = (index: number): ApiProfile => ({
       description: "新建模型预设",
       contextWindow: 128000,
       enabled: true,
-      webSearchEnabled: false,
     },
   ],
 });
@@ -409,6 +408,10 @@ function App() {
   const [streamingEnabled, setStreamingEnabled] = useState(
     bootSnapshot.settings.streamingEnabled,
   );
+  const [nextTurnWebSearchEnabled, setNextTurnWebSearchEnabled] =
+    useState(false);
+  const [nextTurnMultimodalEnabled, setNextTurnMultimodalEnabled] =
+    useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [debugEnabled, setDebugEnabled] = useState(
@@ -443,6 +446,7 @@ function App() {
   const saveTimerRef = useRef<number | null>(null);
   const latestSnapshotRef = useRef<LocalDataSnapshot>(bootSnapshot);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const messageThreadRef = useRef<HTMLDivElement | null>(null);
 
   const activeAssistant = useMemo(
     () =>
@@ -543,9 +547,23 @@ function App() {
             : "0%",
       ],
       ["发送前预算", activeResolvedModel?.model.name ?? "未选择模型"],
+      [
+        "本轮选项",
+        [
+          nextTurnWebSearchEnabled ? "联网" : "不联网",
+          nextTurnMultimodalEnabled ? "多模态预留" : "仅文本",
+        ].join(" · "),
+      ],
       ["发送后 usage", formatObservedUsage(lastObservedUsage)],
     ],
-    [activeMessages, activeResolvedModel?.model.name, draft, lastObservedUsage],
+    [
+      activeMessages,
+      activeResolvedModel?.model.name,
+      draft,
+      lastObservedUsage,
+      nextTurnMultimodalEnabled,
+      nextTurnWebSearchEnabled,
+    ],
   );
   const appSettings = useMemo(
     () => ({
@@ -1278,7 +1296,6 @@ function App() {
                   description: "通过模型详情面板编辑这个模型。",
                   contextWindow: 128000,
                   enabled: true,
-                  webSearchEnabled: false,
                 },
               ],
             }
@@ -1352,12 +1369,7 @@ function App() {
     modelId: string,
     key: keyof Pick<
       ModelDefinition,
-      | "id"
-      | "name"
-      | "description"
-      | "contextWindow"
-      | "enabled"
-      | "webSearchEnabled"
+      "id" | "name" | "description" | "contextWindow" | "enabled"
     >,
     value: string | number | boolean,
   ) => {
@@ -1562,6 +1574,7 @@ function App() {
 
     const source = createSourceSnapshot(activeAssistant, resolvedModel);
     const requestStartedAt = Date.now();
+    const requestWebSearchEnabled = nextTurnWebSearchEnabled;
     const assistantMessage: Message = {
       id: createId("assistant"),
       conversationId: activeConversation.id,
@@ -1576,6 +1589,8 @@ function App() {
     let streamedText = "";
 
     abortControllerRef.current = controller;
+    setNextTurnWebSearchEnabled(false);
+    setNextTurnMultimodalEnabled(false);
     setLastObservedUsage(undefined);
     setMessages((current) => [
       ...current.filter((message) => !idsToRemove.has(message.id)),
@@ -1602,6 +1617,7 @@ function App() {
         messages: requestMessages,
         signal: controller.signal,
         stream: streamingEnabled,
+        webSearchEnabled: requestWebSearchEnabled,
         onTextDelta: streamingEnabled
           ? (_delta, fullText) => {
               streamedText = fullText;
@@ -1708,6 +1724,7 @@ function App() {
 
     const source = createSourceSnapshot(activeAssistant, resolvedModel);
     const requestStartedAt = Date.now();
+    const requestWebSearchEnabled = nextTurnWebSearchEnabled;
     const assistantMessage: Message = {
       id: createId("assistant"),
       conversationId: activeConversation.id,
@@ -1722,6 +1739,8 @@ function App() {
     let streamedText = "";
 
     abortControllerRef.current = controller;
+    setNextTurnWebSearchEnabled(false);
+    setNextTurnMultimodalEnabled(false);
     setLastObservedUsage(undefined);
     setMessages((current) => [
       ...current.filter((message) => !idsToRemove.has(message.id)),
@@ -1748,6 +1767,7 @@ function App() {
         messages: requestMessages,
         signal: controller.signal,
         stream: streamingEnabled,
+        webSearchEnabled: requestWebSearchEnabled,
         onTextDelta: streamingEnabled
           ? (_delta, fullText) => {
               streamedText = fullText;
@@ -1847,6 +1867,7 @@ function App() {
     const source = createSourceSnapshot(activeAssistant, resolvedModel);
     const { userCreatedAt, assistantCreatedAt } = createTurnTimestamps();
     const requestStartedAt = Date.parse(assistantCreatedAt);
+    const requestWebSearchEnabled = nextTurnWebSearchEnabled;
     const userMessage: Message = {
       id: createId("message"),
       conversationId: activeConversation.id,
@@ -1872,6 +1893,8 @@ function App() {
 
     abortControllerRef.current = controller;
     setDraft("");
+    setNextTurnWebSearchEnabled(false);
+    setNextTurnMultimodalEnabled(false);
     setLastObservedUsage(undefined);
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setPendingMessageId(assistantMessage.id);
@@ -1895,6 +1918,7 @@ function App() {
         messages: [...activeMessages, userMessage],
         signal: controller.signal,
         stream: streamingEnabled,
+        webSearchEnabled: requestWebSearchEnabled,
         onTextDelta: streamingEnabled
           ? (_delta, fullText) => {
               streamedText = fullText;
@@ -1972,6 +1996,11 @@ function App() {
     void sendMessage();
   };
 
+  const scrollMessageThreadToTop = () => {
+    messageThreadRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   return (
     <main
       className={`app-shell ${
@@ -2011,6 +2040,31 @@ function App() {
           aria-label="关闭对话列表"
           onClick={() => setDrawerOpen(false)}
         />
+      ) : null}
+
+      {!drawerOpen ? (
+        <div
+          className="mobile-floating-actions mobile-only"
+          aria-label="快捷操作"
+        >
+          <button
+            className="floating-action"
+            type="button"
+            aria-label="悬浮对话入口"
+            onClick={() => setDrawerOpen(true)}
+          >
+            <PanelLeft size={18} />
+            对话
+          </button>
+          <button
+            className="floating-action"
+            type="button"
+            aria-label="回到消息顶部"
+            onClick={scrollMessageThreadToTop}
+          >
+            ↑ 顶部
+          </button>
+        </div>
       ) : null}
 
       <aside className={`conversation-rail ${drawerOpen ? "open" : ""}`}>
@@ -2210,7 +2264,7 @@ function App() {
           </div>
         </header>
 
-        <div className="message-thread">
+        <div className="message-thread" ref={messageThreadRef}>
           {activeMessages.length > 0 ? (
             activeMessages.map((message) => {
               const createdTime = formatMessageTime(message.createdAt);
@@ -2314,18 +2368,59 @@ function App() {
           >
             <StopCircle size={20} />
           </button>
-          <textarea
-            rows={1}
-            placeholder={
-              activeConversationReadOnly
-                ? "归档对话仅浏览，恢复后可继续"
-                : "输入消息"
-            }
-            disabled={activeConversationReadOnly}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={sendOnEnter}
-          />
+          <div className="composer-stack">
+            <textarea
+              rows={1}
+              placeholder={
+                activeConversationReadOnly
+                  ? "归档对话仅浏览，恢复后可继续"
+                  : nextTurnMultimodalEnabled
+                    ? "当前仍仅发送文本；图片/文件内容选择后续接入"
+                    : "输入消息"
+              }
+              disabled={activeConversationReadOnly}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={sendOnEnter}
+            />
+            <div className="turn-options" aria-label="本轮选项">
+              <button
+                className={`option-chip ${
+                  nextTurnWebSearchEnabled ? "active" : ""
+                }`}
+                type="button"
+                aria-label="本轮联网"
+                aria-pressed={nextTurnWebSearchEnabled}
+                disabled={
+                  activeConversationReadOnly || Boolean(pendingMessageId)
+                }
+                onClick={() =>
+                  setNextTurnWebSearchEnabled((enabled) => !enabled)
+                }
+              >
+                <Search size={14} />
+                联网
+              </button>
+              <button
+                className={`option-chip ${
+                  nextTurnMultimodalEnabled ? "active" : ""
+                }`}
+                type="button"
+                aria-label="本轮多模态"
+                aria-pressed={nextTurnMultimodalEnabled}
+                disabled={
+                  activeConversationReadOnly || Boolean(pendingMessageId)
+                }
+                onClick={() =>
+                  setNextTurnMultimodalEnabled((enabled) => !enabled)
+                }
+                title="当前是单轮临时开关预留；图片/文件选择与发送后续接入。"
+              >
+                <Plus size={14} />
+                多模态
+              </button>
+            </div>
+          </div>
           <button
             className="send-button"
             type="button"
@@ -2737,10 +2832,7 @@ function App() {
                         >
                           <span>{model.name}</span>
                           <small>{model.id}</small>
-                          <small>
-                            {model.enabled ? "已启用" : "已停用"}
-                            {model.webSearchEnabled ? " · 联网" : ""}
-                          </small>
+                          <small>{model.enabled ? "已启用" : "已停用"}</small>
                         </button>
                       ))}
                     </div>
@@ -2808,26 +2900,6 @@ function App() {
                               )
                             }
                           />
-                        </label>
-                        <label className="detail-field checkbox-field">
-                          <span>启用联网工具</span>
-                          <input
-                            aria-label="启用联网工具"
-                            checked={editingModel.webSearchEnabled}
-                            type="checkbox"
-                            onChange={(event) =>
-                              updateModelField(
-                                editingApiProfile.id,
-                                editingModel.id,
-                                "webSearchEnabled",
-                                event.target.checked,
-                              )
-                            }
-                          />
-                          <small>
-                            开启后该模型请求会发送 Responses web_search
-                            工具配置。
-                          </small>
                         </label>
                         <label className="detail-field">
                           <span>模型描述</span>

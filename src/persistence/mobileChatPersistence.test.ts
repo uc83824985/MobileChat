@@ -81,16 +81,11 @@ describe("MobileChat persistence", () => {
     expect(restored.settings.streamingEnabled).toBe(false);
     expect(restored.settings.activeModelRef.modelId).toBe("default-model");
     expect(restored.apiProfiles[0]?.apiKey).toBe("local-only-key");
-    expect(
-      restored.apiProfiles[0]?.models.find(
-        (model) => model.id === "default-model",
-      )?.name,
-    ).toBe("Persisted Model");
-    expect(
-      restored.apiProfiles[0]?.models.find(
-        (model) => model.id === "default-model",
-      )?.webSearchEnabled,
-    ).toBe(true);
+    const restoredModel = restored.apiProfiles[0]?.models.find(
+      (model) => model.id === "default-model",
+    );
+    expect(restoredModel?.name).toBe("Persisted Model");
+    expect("webSearchEnabled" in (restoredModel ?? {})).toBe(false);
     expect(
       restored.assistants.find((assistant) => assistant.id === "research")
         ?.name,

@@ -17,6 +17,7 @@
 - 2026-07-13: Added Chat Completions web-search serialization through `web_search_options: {}` and added confirmation for individual message deletion.
 - 2026-07-13: Added persisted message timing metadata (`createdAt`, `completedAt`, `elapsedMs`) and clarified cache diagnostics when a relay returns input tokens but omits cached-token detail.
 - 2026-07-13: Replaced the ambiguous "电脑端布局" toggle with a persisted layout mode: `auto`, `mobile`, or `desktop`. Layout changes apply immediately and remain display-only.
+- 2026-07-14: Moved web search from model-level static configuration to a composer-level single-turn option, added a current-turn multimodal placeholder, and added mobile floating controls for opening the drawer and returning to the top of the message thread.
 - The full task checklist remains open where the spec still requires dirty-record repositories, endpoint validation, pricing metadata, utility roles, checkpoint execution, merge import, complete context projection, provider-specific hosted tool variants, multimodal content sending, and full streaming event/error coverage beyond the current text-delta path.
 
 ## 2. Domain model and local persistence

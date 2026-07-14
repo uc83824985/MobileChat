@@ -49,7 +49,6 @@ export type ModelDefinition = {
   description: string;
   contextWindow?: number;
   enabled: boolean;
-  webSearchEnabled: boolean;
 };
 
 export type ApiProfile = {
@@ -186,7 +185,6 @@ export const initialApiProfiles: ApiProfile[] = [
         description: "请编辑为你的中转站或模型服务支持的模型 ID。",
         contextWindow: 128000,
         enabled: true,
-        webSearchEnabled: false,
       },
     ],
   },

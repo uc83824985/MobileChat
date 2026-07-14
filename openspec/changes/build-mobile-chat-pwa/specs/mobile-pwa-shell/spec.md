@@ -14,6 +14,10 @@ The system SHALL provide mobile-accessible navigation between the conversation l
 - **WHEN** the application is displayed on a phone-sized viewport
 - **THEN** conversation management is available through a compact drawer or equivalent mobile control without obscuring the active chat permanently
 
+#### Scenario: Open navigation after scrolling
+- **WHEN** a user is reading a long conversation on a phone-sized viewport
+- **THEN** a mobile-only floating control can open the conversation drawer without requiring the user to scroll back to the top header
+
 ### Requirement: Offline application shell
 The system SHALL cache the static application shell and SHALL distinguish between offline application access and network-dependent chat operations.
 

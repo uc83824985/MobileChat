@@ -1,6 +1,6 @@
 # Mobile UI state
 
-Date: 2026-07-13
+Date: 2026-07-14
 
 ## Current verified state
 
@@ -11,9 +11,9 @@ Date: 2026-07-13
 - Mobile browser compatibility is covered by responsive CSS plus Playwright Mobile Chrome checks. The default mobile layout keeps the side conversation rail as a drawer, collapses settings/detail grids to one column, and preserves the same application logic as desktop.
 - A persisted "布局模式" display setting supports `auto`, `mobile`, and `desktop`. `auto` follows viewport width, `mobile` forces drawer/single-column layout, and `desktop` forces the desktop layout structure. This is layout-only and does not change conversation state, local persistence, request construction, or provider protocol behavior.
 - Route compatibility is protocol-specific. A user-configured Grok route was observed to fail with 404 on Responses while succeeding on Chat Completions, so each API Profile must preserve the selected protocol instead of assuming one relay-wide default.
-- Web access is protocol-specific: Responses models send `tools: [{ type: "web_search" }]`; Chat Completions models send `web_search_options: {}` when the model-level web access toggle is enabled.
+- Web access is protocol-specific and turn-scoped: Responses sends `tools: [{ type: "web_search" }]`; Chat Completions sends `web_search_options: {}` only when the composer's current-turn web option is enabled.
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
-- Web access is now wired as a model-level request option. Multimodal input is still not wired into the MobileChat request builder and must be implemented as explicit adapter/profile/model capabilities rather than prompt-only expectations.
+- Web access is now wired as a composer-level temporary request option rather than a static model toggle. Multimodal intent is also kept in the composer as a current-turn placeholder; image/file content sending is still not wired into the request builder.
 
 ## Implemented response to mobile feedback
 
@@ -21,6 +21,7 @@ Date: 2026-07-13
 - Model selection is a second native `<select>` and is limited to the currently selected assistant's allowed model bindings.
 - The settings panel is full-screen on small screens and a wide details panel on desktop.
 - The conversation drawer keeps the bottom archive/settings actions visible while the conversation list scrolls.
+- Mobile layout has floating controls for opening the conversation drawer and returning to the top of the message thread, so long conversations do not require scrolling back to the header for navigation.
 - The chat header provides a direct title edit entry. Press Enter or the check button to save; Esc or the close button cancels.
 - Archived conversations now have a sidebar entry. The archived view searches only title and summary, allows browsing and restoring, and keeps the composer read-only until restore.
 - Assistant messages expose a retry action; retry removes the selected assistant reply and later messages before regenerating with the current assistant/model. Messages also expose a local delete action.
@@ -41,7 +42,6 @@ Date: 2026-07-13
   - display name;
   - description;
   - optional context window;
-  - web access flag;
   - enabled flag.
 - The API Profile editor shows the full model list as selectable model cards, so every model visible in assistant model access can be traced back to a model-side configuration record.
 - Assistants no longer own raw `apiProfileName` / `model` fields as the active configuration path. They own model bindings that reference existing API Profile + model records, with snapshots of key display fields for provenance.
@@ -77,9 +77,9 @@ Date: 2026-07-13
 
 ## Web access and multimodal route flags
 
-- For an OpenAI-compatible Responses route, web access requires an explicit tool configuration such as `tools: [{ "type": "web_search" }]`. MobileChat stores this as `ModelDefinition.webSearchEnabled` and sends the tool only when the active model enables it.
+- For an OpenAI-compatible Responses route, web access requires an explicit tool configuration such as `tools: [{ "type": "web_search" }]`. MobileChat sends it only when the current composer turn enables “联网”.
 - Prompting “请联网查询” is not sufficient if the request does not declare a search tool or the selected model route does not support it.
-- Image URL/file input should use generic MobileChat content parts locally, then serialize only when the active adapter/profile/model declares image-input support.
+- Image URL/file input should use generic MobileChat content parts locally, then serialize only when the current draft contains those parts and the active adapter/profile/model declares image-input support.
 - Streaming can be requested by sending `stream: true`, but true incremental display still requires the gateway to flush SSE events. If the gateway returns JSON, MobileChat falls back to one-shot display.
 - Enabling web access can legitimately increase response latency because the provider or relay may perform hosted search/tool execution before producing the final assistant text. Successful searched responses are therefore not treated as an implementation error solely because they are slower than non-search turns.
 

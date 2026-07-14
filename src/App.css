@@ -470,6 +470,12 @@ button:disabled {
   padding: 12px 16px;
 }
 
+.composer-stack {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
 .composer textarea {
   background: var(--field);
   border: 1px solid var(--line);
@@ -484,6 +490,32 @@ button:disabled {
 .composer textarea:disabled {
   cursor: not-allowed;
   opacity: 0.7;
+}
+
+.turn-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.option-chip {
+  background: var(--button);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.option-chip.active {
+  background: var(--selected);
+  border-color: var(--accent);
+  color: var(--text-strong);
+}
+
+.option-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .send-button {
@@ -989,6 +1021,25 @@ button:disabled {
   display: none;
 }
 
+.mobile-floating-actions {
+  bottom: calc(88px + env(safe-area-inset-bottom));
+  display: none;
+  gap: 8px;
+  left: 12px;
+  position: fixed;
+  z-index: 3;
+}
+
+.floating-action {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-soft);
+  color: var(--text-strong);
+  font-size: 12px;
+  padding: 9px 11px;
+}
+
 .app-shell.mobile-layout {
   grid-template-columns: 1fr;
 }
@@ -1019,6 +1070,10 @@ button:disabled {
 
 .mobile-layout .mobile-only {
   display: inline-grid;
+}
+
+.mobile-layout .mobile-floating-actions {
+  display: flex;
 }
 
 .mobile-layout .chat-header {

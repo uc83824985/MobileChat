@@ -137,6 +137,57 @@ describe("App", () => {
     expect(screen.getByText("cache 未返回/989")).toBeInTheDocument();
   });
 
+  it("uses web search as a single-turn composer option", async () => {
+    const fetchMock = vi.fn();
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ output_text: "searched once" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ output_text: "plain once" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    configureApiProfile({ apiKey: "test-key" });
+
+    fireEvent.click(screen.getByLabelText("新建对话"));
+    fireEvent.click(screen.getByLabelText("本轮联网"));
+    expect(screen.getByLabelText("本轮联网")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "需要搜索" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    expect(await screen.findByText("searched once")).toBeInTheDocument();
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).tools,
+    ).toEqual([{ type: "web_search" }]);
+    expect(screen.getByLabelText("本轮联网")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "不搜索" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    expect(await screen.findByText("plain once")).toBeInTheDocument();
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)).tools).toBe(
+      undefined,
+    );
+  });
+
   it("can stop a pending model request after API key is configured", async () => {
     vi.stubGlobal(
       "fetch",
@@ -214,10 +265,6 @@ describe("App", () => {
       target: { value: "主模型" },
     });
     expect(screen.getByLabelText("模型名称")).toHaveValue("主模型");
-
-    expect(screen.getByLabelText("启用联网工具")).not.toBeChecked();
-    fireEvent.click(screen.getByLabelText("启用联网工具"));
-    expect(screen.getByLabelText("启用联网工具")).toBeChecked();
 
     fireEvent.click(screen.getByText("新增模型"));
     expect(screen.getByLabelText("模型名称")).toHaveValue("new-model-2");

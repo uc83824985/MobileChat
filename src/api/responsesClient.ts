@@ -15,6 +15,7 @@ export type ResponsesChatRequest = {
   messages: Message[];
   signal: AbortSignal;
   stream: boolean;
+  webSearchEnabled?: boolean;
   onTextDelta?: (delta: string, fullText: string) => void;
 };
 
@@ -153,15 +154,21 @@ const buildResponsesRequestBody = ({
   model,
   messages,
   stream,
+  webSearchEnabled,
 }: Pick<
   ResponsesChatRequest,
-  "assistant" | "conversation" | "model" | "messages" | "stream"
+  | "assistant"
+  | "conversation"
+  | "model"
+  | "messages"
+  | "stream"
+  | "webSearchEnabled"
 >) =>
   JSON.stringify({
     model: model.id,
     instructions: assistant.prompt || undefined,
     input: createTextItems(messages),
-    tools: model.webSearchEnabled ? [{ type: "web_search" }] : undefined,
+    tools: webSearchEnabled ? [{ type: "web_search" }] : undefined,
     store: false,
     stream,
     metadata: {
@@ -175,10 +182,14 @@ const buildChatCompletionsRequestBody = ({
   model,
   messages,
   stream,
-}: Pick<ResponsesChatRequest, "assistant" | "model" | "messages" | "stream">) =>
+  webSearchEnabled,
+}: Pick<
+  ResponsesChatRequest,
+  "assistant" | "model" | "messages" | "stream" | "webSearchEnabled"
+>) =>
   JSON.stringify({
     model: model.id,
-    web_search_options: model.webSearchEnabled ? {} : undefined,
+    web_search_options: webSearchEnabled ? {} : undefined,
     messages: [
       ...(assistant.prompt
         ? [{ role: "system", content: assistant.prompt }]
@@ -196,16 +207,20 @@ const getProtocolEndpoint = (apiProfile: ApiProfile) =>
 const buildRequestContextText = ({
   apiProfile,
   model,
-}: Pick<ResponsesChatRequest, "apiProfile" | "model">) =>
+  webSearchEnabled,
+}: Pick<ResponsesChatRequest, "apiProfile" | "model" | "webSearchEnabled">) =>
   `请求目标：POST ${normalizeBaseUrl(apiProfile.baseUrl)}${getProtocolEndpoint(
     apiProfile,
   )}；协议：${apiProfile.protocol}；模型：${model.id}；联网工具：${
-    model.webSearchEnabled ? "on" : "off"
+    webSearchEnabled ? "on" : "off"
   }。`;
 
 const buildErrorMessage = async (
   response: Response,
-  context: Pick<ResponsesChatRequest, "apiProfile" | "model">,
+  context: Pick<
+    ResponsesChatRequest,
+    "apiProfile" | "model" | "webSearchEnabled"
+  >,
 ) => {
   const rawBody = await response.text().catch(() => "");
   const contextText = buildRequestContextText(context);
@@ -472,6 +487,7 @@ export const requestResponsesChat = async ({
   messages,
   signal,
   stream,
+  webSearchEnabled = false,
   onTextDelta,
 }: ResponsesChatRequest): Promise<ResponsesChatResult> => {
   const baseUrl = normalizeBaseUrl(apiProfile.baseUrl);
@@ -497,6 +513,7 @@ export const requestResponsesChat = async ({
           model,
           messages,
           stream,
+          webSearchEnabled,
         })
       : buildResponsesRequestBody({
           assistant,
@@ -504,6 +521,7 @@ export const requestResponsesChat = async ({
           model,
           messages,
           stream,
+          webSearchEnabled,
         });
 
   const response = await fetchProtocolEndpoint({
@@ -514,7 +532,13 @@ export const requestResponsesChat = async ({
   });
 
   if (!response.ok) {
-    throw new Error(await buildErrorMessage(response, { apiProfile, model }));
+    throw new Error(
+      await buildErrorMessage(response, {
+        apiProfile,
+        model,
+        webSearchEnabled,
+      }),
+    );
   }
 
   if (stream) {
