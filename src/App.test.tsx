@@ -163,7 +163,8 @@ describe("App", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByText(/本轮: 联网/)).toBeInTheDocument();
+    expect(screen.getByText(/联网 · 仅文本/)).toBeInTheDocument();
+    expect(screen.queryByText(/本轮:/)).not.toBeInTheDocument();
     expect(screen.queryByText("本轮选项")).not.toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("输入消息"), {
       target: { value: "需要搜索" },
@@ -245,6 +246,18 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("流式输出"));
     expect(screen.getByLabelText("流式输出")).not.toBeChecked();
 
+    expect(screen.getByLabelText("API Key")).toHaveAttribute(
+      "type",
+      "password",
+    );
+    fireEvent.click(screen.getByLabelText("显示密钥"));
+    expect(screen.getByLabelText("API Key")).toHaveAttribute("type", "text");
+    fireEvent.click(screen.getByLabelText("隐藏密钥"));
+    expect(screen.getByLabelText("API Key")).toHaveAttribute(
+      "type",
+      "password",
+    );
+
     fireEvent.click(screen.getByLabelText("关闭设置"));
     expect(
       screen.queryByRole("dialog", { name: "设置" }),
@@ -270,6 +283,7 @@ describe("App", () => {
 
     fireEvent.click(screen.getByText("新增模型"));
     expect(screen.getByLabelText("模型名称")).toHaveValue("new-model-2");
+    expect(screen.getByLabelText("模型描述")).toHaveValue("");
     fireEvent.click(screen.getByText("删除当前模型"));
     expect(screen.getByLabelText("模型名称")).toHaveValue("主模型");
 
@@ -355,6 +369,7 @@ describe("App", () => {
     expect(screen.getByLabelText("选择 API Profile")).toHaveDisplayValue(
       "API Profile 2",
     );
+    expect(screen.getByLabelText("模型描述")).toHaveValue("");
     fireEvent.click(screen.getByText("删除当前 Profile"));
     expect(screen.getByLabelText("选择 API Profile")).toHaveDisplayValue(
       "默认连接",

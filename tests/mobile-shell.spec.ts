@@ -58,6 +58,8 @@ test("supports basic mobile interactions, title editing, and model switching", a
     await expect(page.locator(".conversation-rail")).toHaveClass(/open/);
     await page.getByLabel("关闭对话列表").click({ force: true });
     await expect(page.locator(".conversation-rail")).not.toHaveClass(/open/);
+    await page.getByLabel("回到消息顶部").click();
+    await expect(page.getByLabel("回到消息底部")).toBeVisible();
   }
 
   await page.getByLabel("编辑标题").click();
@@ -102,6 +104,7 @@ test("supports basic mobile interactions, title editing, and model switching", a
   await page.getByLabel("模型名称").fill("手机主模型");
   await page.getByText("新增模型").click();
   await expect(page.getByLabel("模型名称")).toHaveValue("new-model-2");
+  await expect(page.getByLabel("模型描述")).toHaveValue("");
   await page.getByText("删除当前模型").click();
   await expect(page.getByLabel("模型名称")).toHaveValue("手机主模型");
 });

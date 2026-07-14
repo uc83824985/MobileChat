@@ -22,12 +22,14 @@ Date: 2026-07-14
 - The settings panel is full-screen on small screens and a wide details panel on desktop.
 - The conversation drawer keeps the bottom archive/settings actions visible while the conversation list scrolls.
 - Mobile layout has floating controls for opening the conversation drawer and returning to the top of the message thread, so long conversations do not require scrolling back to the header for navigation.
+- The floating scroll control toggles between top and bottom targets after it is used, so returning to the top exposes a quick path back to the latest messages.
 - The chat header provides a direct title edit entry. Press Enter or the check button to save; Esc or the close button cancels.
 - Archived conversations now have a sidebar entry. The archived view searches only title and summary, allows browsing and restoring, and keeps the composer read-only until restore.
 - Assistant messages expose a retry action; retry removes the selected assistant reply and later messages before regenerating with the current assistant/model. Messages also expose a local delete action.
 - Message text preserves returned line breaks and indentation in the renderer and wraps long URLs/tokens. The client does not semantically rewrite or strip provider-returned search traces unless a future adapter exposes structured search/citation diagnostics that can be rendered separately.
 - Dark mode styles native select options and applies `color-scheme: dark` to avoid white dropdown backgrounds with pale text.
 - The assistant details panel is schema-rendered from `assistantFields`, so newly added assistants use the same reflected editor instead of a special hard-coded page.
+- API Key editing uses an app-owned persistent show/hide button instead of relying on browser-specific password-field eye icons.
 
 ## API Profile and model configuration
 
@@ -51,7 +53,7 @@ Date: 2026-07-14
 ## User-owned connection configuration
 
 - The repo no longer seeds a concrete relay URL, API key, or model slug. First-run data contains a generic editable API Profile and model placeholder.
-- User-specific routes, provider-specific model slugs, and web-search-enabled models should be created through the settings UI, import flow, or a local-only MobileChatDB update.
+- User-specific routes and provider-specific model slugs should be created through the settings UI, import flow, or a local-only MobileChatDB update. Newly created API Profiles and models default optional descriptions to empty strings.
 - API keys remain in the browser's IndexedDB unless the user exports with credentials in a future explicit flow.
 - CRUD status: API Profiles, model definitions, assistants, active conversations, and archived conversations all expose create/read/update/delete flows in the UI. Deleting the last required runtime object creates a blank local fallback so the app remains operable.
 - Conversation deletion uses a confirmation prompt before permanently removing the conversation and its owned messages.
@@ -83,7 +85,7 @@ Date: 2026-07-14
 - Image URL/file input should use generic MobileChat content parts locally, then serialize only when the current draft contains those parts and the active adapter/profile/model declares image-input support.
 - Streaming can be requested by sending `stream: true`, but true incremental display still requires the gateway to flush SSE events. If the gateway returns JSON, MobileChat falls back to one-shot display.
 - Enabling web access can legitimately increase response latency because the provider or relay may perform hosted search/tool execution before producing the final assistant text. Successful searched responses are therefore not treated as an implementation error solely because they are slower than non-search turns.
-- Debug diagnostics fold current-turn options into the pre-send budget card, for example `模型名 · 本轮: 联网 · 仅文本`, instead of rendering a separate transient-options card.
+- Debug diagnostics fold current-turn options into the pre-send budget card, for example `模型名 · 联网 · 仅文本`, instead of rendering a separate transient-options card.
 
 ## Verification
 

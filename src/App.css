@@ -835,6 +835,31 @@ button:disabled {
   resize: vertical;
 }
 
+.secret-field {
+  align-items: center;
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.detail-field .secret-field input {
+  background: transparent;
+  border: 0;
+}
+
+.secret-field button {
+  background: transparent;
+  color: var(--text-muted);
+  justify-content: center;
+  padding: 8px 10px;
+}
+
+.secret-field button:hover {
+  color: var(--text-strong);
+}
+
 .detail-field small {
   color: var(--text-muted);
   font-size: 12px;

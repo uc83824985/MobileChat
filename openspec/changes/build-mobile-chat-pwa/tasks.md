@@ -19,6 +19,7 @@
 - 2026-07-13: Replaced the ambiguous "电脑端布局" toggle with a persisted layout mode: `auto`, `mobile`, or `desktop`. Layout changes apply immediately and remain display-only.
 - 2026-07-14: Moved web search from model-level static configuration to a composer-level single-turn option, added a current-turn multimodal placeholder, and added mobile floating controls for opening the drawer and returning to the top of the message thread.
 - 2026-07-14: Preserved message whitespace/long-token wrapping in the renderer and folded current-turn options into the pre-send diagnostics card.
+- 2026-07-14: Added a persistent API-key reveal control, empty descriptions for newly created profiles/models, top/bottom floating scroll toggle behavior, and documented the minimal manual/threshold context-compaction path.
 - The full task checklist remains open where the spec still requires dirty-record repositories, endpoint validation, pricing metadata, utility roles, checkpoint execution, merge import, complete context projection, provider-specific hosted tool variants, multimodal content sending, and full streaming event/error coverage beyond the current text-delta path.
 
 ## 2. Domain model and local persistence

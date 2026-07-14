@@ -4,6 +4,8 @@ import {
   Check,
   Database,
   Download,
+  Eye,
+  EyeOff,
   KeyRound,
   MessageSquarePlus,
   Palette,
@@ -84,7 +86,7 @@ const AUTOSAVE_DELAY_MS = 400;
 const createEmptyApiProfile = (index: number): ApiProfile => ({
   id: createId("api-profile"),
   name: `API Profile ${index}`,
-  description: "OpenAI-compatible Responses API 配置",
+  description: "",
   baseUrl: "",
   apiKey: "",
   protocol: "openai-responses",
@@ -93,7 +95,7 @@ const createEmptyApiProfile = (index: number): ApiProfile => ({
     {
       id: "new-model",
       name: "新模型",
-      description: "新建模型预设",
+      description: "",
       contextWindow: 128000,
       enabled: true,
     },
@@ -418,6 +420,10 @@ function App() {
     bootSnapshot.settings.debugEnabled,
   );
   const [draft, setDraft] = useState("");
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
+  const [scrollShortcutTarget, setScrollShortcutTarget] = useState<
+    "top" | "bottom"
+  >("top");
   const [conversationSearch, setConversationSearch] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [editingTitleConversationId, setEditingTitleConversationId] = useState<
@@ -548,7 +554,7 @@ function App() {
       ],
       [
         "发送前预算",
-        `${activeResolvedModel?.model.name ?? "未选择模型"} · 本轮: ${
+        `${activeResolvedModel?.model.name ?? "未选择模型"} · ${
           nextTurnWebSearchEnabled ? "联网" : "不联网"
         } · ${nextTurnMultimodalEnabled ? "多模态预留" : "仅文本"}`,
       ],
@@ -1291,7 +1297,7 @@ function App() {
                 {
                   id: modelId,
                   name: modelId,
-                  description: "通过模型详情面板编辑这个模型。",
+                  description: "",
                   contextWindow: 128000,
                   enabled: true,
                 },
@@ -1994,9 +2000,34 @@ function App() {
     void sendMessage();
   };
 
-  const scrollMessageThreadToTop = () => {
-    messageThreadRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-    window.scrollTo({ top: 0, behavior: "smooth" });
+  const scrollMessageThreadToEdge = () => {
+    const thread = messageThreadRef.current;
+    if (scrollShortcutTarget === "top") {
+      thread?.scrollTo({ top: 0, behavior: "smooth" });
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      setScrollShortcutTarget("bottom");
+      return;
+    }
+
+    thread?.scrollTo({ top: thread.scrollHeight, behavior: "smooth" });
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+    setScrollShortcutTarget("top");
+  };
+
+  const updateScrollShortcutTarget = () => {
+    const thread = messageThreadRef.current;
+    if (!thread) {
+      return;
+    }
+
+    const maxScrollTop = thread.scrollHeight - thread.clientHeight;
+    if (thread.scrollTop <= 8) {
+      setScrollShortcutTarget("bottom");
+      return;
+    }
+    if (thread.scrollTop >= maxScrollTop - 8) {
+      setScrollShortcutTarget("top");
+    }
   };
 
   return (
@@ -2057,10 +2088,12 @@ function App() {
           <button
             className="floating-action"
             type="button"
-            aria-label="回到消息顶部"
-            onClick={scrollMessageThreadToTop}
+            aria-label={
+              scrollShortcutTarget === "top" ? "回到消息顶部" : "回到消息底部"
+            }
+            onClick={scrollMessageThreadToEdge}
           >
-            ↑ 顶部
+            {scrollShortcutTarget === "top" ? "↑ 顶部" : "↓ 底部"}
           </button>
         </div>
       ) : null}
@@ -2262,7 +2295,11 @@ function App() {
           </div>
         </header>
 
-        <div className="message-thread" ref={messageThreadRef}>
+        <div
+          className="message-thread"
+          ref={messageThreadRef}
+          onScroll={updateScrollShortcutTarget}
+        >
           {activeMessages.length > 0 ? (
             activeMessages.map((message) => {
               const createdTime = formatMessageTime(message.createdAt);
@@ -2727,18 +2764,33 @@ function App() {
                           <KeyRound size={14} />
                           API Key
                         </span>
-                        <input
-                          aria-label="API Key"
-                          type="password"
-                          value={editingApiProfile.apiKey}
-                          onChange={(event) =>
-                            updateApiProfileField(
-                              editingApiProfile.id,
-                              "apiKey",
-                              event.target.value,
-                            )
-                          }
-                        />
+                        <div className="secret-field">
+                          <input
+                            aria-label="API Key"
+                            type={apiKeyVisible ? "text" : "password"}
+                            value={editingApiProfile.apiKey}
+                            onChange={(event) =>
+                              updateApiProfileField(
+                                editingApiProfile.id,
+                                "apiKey",
+                                event.target.value,
+                              )
+                            }
+                          />
+                          <button
+                            type="button"
+                            aria-label={apiKeyVisible ? "隐藏密钥" : "显示密钥"}
+                            onClick={() =>
+                              setApiKeyVisible((visible) => !visible)
+                            }
+                          >
+                            {apiKeyVisible ? (
+                              <EyeOff size={16} />
+                            ) : (
+                              <Eye size={16} />
+                            )}
+                          </button>
+                        </div>
                       </label>
                       <label className="detail-field checkbox-field">
                         <span>启用 Profile</span>
