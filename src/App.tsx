@@ -546,13 +546,11 @@ function App() {
             ? "low"
             : "0%",
       ],
-      ["发送前预算", activeResolvedModel?.model.name ?? "未选择模型"],
       [
-        "本轮选项",
-        [
-          nextTurnWebSearchEnabled ? "联网" : "不联网",
-          nextTurnMultimodalEnabled ? "多模态预留" : "仅文本",
-        ].join(" · "),
+        "发送前预算",
+        `${activeResolvedModel?.model.name ?? "未选择模型"} · 本轮: ${
+          nextTurnWebSearchEnabled ? "联网" : "不联网"
+        } · ${nextTurnMultimodalEnabled ? "多模态预留" : "仅文本"}`,
       ],
       ["发送后 usage", formatObservedUsage(lastObservedUsage)],
     ],

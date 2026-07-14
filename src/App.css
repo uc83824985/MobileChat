@@ -383,6 +383,8 @@ button:disabled {
 .message p {
   line-height: 1.55;
   margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .message-meta {

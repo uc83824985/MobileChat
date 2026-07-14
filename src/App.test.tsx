@@ -163,6 +163,8 @@ describe("App", () => {
       "aria-pressed",
       "true",
     );
+    expect(screen.getByText(/本轮: 联网/)).toBeInTheDocument();
+    expect(screen.queryByText("本轮选项")).not.toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("输入消息"), {
       target: { value: "需要搜索" },
     });
