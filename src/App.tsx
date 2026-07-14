@@ -82,6 +82,7 @@ type ResolvedModel = {
 
 const bootSnapshot = createInitialSnapshot();
 const AUTOSAVE_DELAY_MS = 400;
+const SCROLL_EDGE_THRESHOLD_PX = 12;
 
 const createEmptyApiProfile = (index: number): ApiProfile => ({
   id: createId("api-profile"),
@@ -454,6 +455,39 @@ function App() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const messageThreadRef = useRef<HTMLDivElement | null>(null);
 
+  const updateScrollShortcutTarget = useCallback(() => {
+    const thread = messageThreadRef.current;
+    const threadMaxScrollTop = thread
+      ? thread.scrollHeight - thread.clientHeight
+      : 0;
+    const threadScrollable = threadMaxScrollTop > SCROLL_EDGE_THRESHOLD_PX;
+
+    if (threadScrollable && thread) {
+      if (thread.scrollTop <= SCROLL_EDGE_THRESHOLD_PX) {
+        setScrollShortcutTarget("bottom");
+        return;
+      }
+      if (thread.scrollTop >= threadMaxScrollTop - SCROLL_EDGE_THRESHOLD_PX) {
+        setScrollShortcutTarget("top");
+        return;
+      }
+    }
+
+    const scrollElement = document.scrollingElement ?? document.documentElement;
+    const pageMaxScrollTop = scrollElement.scrollHeight - window.innerHeight;
+    const pageScrollable = pageMaxScrollTop > SCROLL_EDGE_THRESHOLD_PX;
+
+    if (pageScrollable) {
+      if (window.scrollY <= SCROLL_EDGE_THRESHOLD_PX) {
+        setScrollShortcutTarget("bottom");
+        return;
+      }
+      if (window.scrollY >= pageMaxScrollTop - SCROLL_EDGE_THRESHOLD_PX) {
+        setScrollShortcutTarget("top");
+      }
+    }
+  }, []);
+
   const activeAssistant = useMemo(
     () =>
       assistants.find((assistant) => assistant.id === activeAssistantId) ??
@@ -667,6 +701,18 @@ function App() {
     root.dataset.theme = themeMode;
     root.style.colorScheme = themeMode;
   }, [themeMode]);
+
+  useEffect(() => {
+    updateScrollShortcutTarget();
+    window.addEventListener("scroll", updateScrollShortcutTarget, {
+      passive: true,
+    });
+    window.addEventListener("resize", updateScrollShortcutTarget);
+    return () => {
+      window.removeEventListener("scroll", updateScrollShortcutTarget);
+      window.removeEventListener("resize", updateScrollShortcutTarget);
+    };
+  }, [activeMessages.length, updateScrollShortcutTarget]);
 
   useEffect(() => {
     const showOfflineReady = () => setPwaNotice("offline-ready");
@@ -2014,22 +2060,6 @@ function App() {
     setScrollShortcutTarget("top");
   };
 
-  const updateScrollShortcutTarget = () => {
-    const thread = messageThreadRef.current;
-    if (!thread) {
-      return;
-    }
-
-    const maxScrollTop = thread.scrollHeight - thread.clientHeight;
-    if (thread.scrollTop <= 8) {
-      setScrollShortcutTarget("bottom");
-      return;
-    }
-    if (thread.scrollTop >= maxScrollTop - 8) {
-      setScrollShortcutTarget("top");
-    }
-  };
-
   return (
     <main
       className={`app-shell ${
@@ -2297,6 +2327,7 @@ function App() {
 
         <div
           className="message-thread"
+          aria-label="消息列表"
           ref={messageThreadRef}
           onScroll={updateScrollShortcutTarget}
         >

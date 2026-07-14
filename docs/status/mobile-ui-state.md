@@ -22,7 +22,7 @@ Date: 2026-07-14
 - The settings panel is full-screen on small screens and a wide details panel on desktop.
 - The conversation drawer keeps the bottom archive/settings actions visible while the conversation list scrolls.
 - Mobile layout has floating controls for opening the conversation drawer and returning to the top of the message thread, so long conversations do not require scrolling back to the header for navigation.
-- The floating scroll control toggles between top and bottom targets after it is used, so returning to the top exposes a quick path back to the latest messages.
+- The floating scroll control toggles between top and bottom targets after it is used or when the user manually scrolls to either edge, so returning to the top exposes a quick path back to the latest messages.
 - The chat header provides a direct title edit entry. Press Enter or the check button to save; Esc or the close button cancels.
 - Archived conversations now have a sidebar entry. The archived view searches only title and summary, allows browsing and restoring, and keeps the composer read-only until restore.
 - Assistant messages expose a retry action; retry removes the selected assistant reply and later messages before regenerating with the current assistant/model. Messages also expose a local delete action.

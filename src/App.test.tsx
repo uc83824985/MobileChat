@@ -264,6 +264,32 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("updates the floating scroll shortcut after manual thread scrolling", () => {
+    render(<App />);
+
+    const messageThread = screen.getByLabelText("消息列表");
+    Object.defineProperty(messageThread, "scrollHeight", {
+      configurable: true,
+      value: 1000,
+    });
+    Object.defineProperty(messageThread, "clientHeight", {
+      configurable: true,
+      value: 200,
+    });
+    Object.defineProperty(messageThread, "scrollTop", {
+      configurable: true,
+      value: 0,
+      writable: true,
+    });
+
+    fireEvent.scroll(messageThread);
+    expect(screen.getByLabelText("回到消息底部")).toBeInTheDocument();
+
+    messageThread.scrollTop = 800;
+    fireEvent.scroll(messageThread);
+    expect(screen.getByLabelText("回到消息顶部")).toBeInTheDocument();
+  });
+
   it("edits API profiles, models, and assistant model bindings", () => {
     render(<App />);
 
