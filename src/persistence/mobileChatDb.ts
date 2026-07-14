@@ -241,6 +241,28 @@ const migrateMessages = (messages: LegacyMessage[]): Message[] =>
       message.createdAt ?? parseCreatedAtFromMessageId(message.id, index),
   }));
 
+const appendMissingInitialAssistants = (
+  assistants: Assistant[],
+  initialAssistants: Assistant[],
+  apiProfiles: ApiProfile[],
+): Assistant[] => {
+  const existingIds = new Set(assistants.map((assistant) => assistant.id));
+  const missingInitialAssistants = initialAssistants.filter(
+    (assistant) => !existingIds.has(assistant.id),
+  );
+
+  if (missingInitialAssistants.length === 0) {
+    return assistants;
+  }
+
+  return [
+    ...assistants,
+    ...missingInitialAssistants.map((assistant) =>
+      migrateAssistant(assistant, apiProfiles),
+    ),
+  ];
+};
+
 export const normalizeSnapshot = (
   snapshot: SnapshotInput,
 ): LocalDataSnapshot => {
@@ -250,12 +272,25 @@ export const normalizeSnapshot = (
     snapshot.apiProfiles && snapshot.apiProfiles.length > 0
       ? normalizeApiProfiles(snapshot.apiProfiles)
       : cloneInitialApiProfiles();
-  const assistants =
+  const settings: LegacySettings = snapshot.settings ?? {};
+  const shouldAppendInitialAssistants =
+    (settings.schemaVersion ?? 0) < DATABASE_SCHEMA_VERSION;
+  const migratedAssistants =
     snapshot.assistants && snapshot.assistants.length > 0
       ? snapshot.assistants.map((assistant) =>
           migrateAssistant(assistant, apiProfiles),
         )
       : initialSnapshot.assistants;
+  const assistants =
+    snapshot.assistants &&
+    snapshot.assistants.length > 0 &&
+    shouldAppendInitialAssistants
+      ? appendMissingInitialAssistants(
+          migratedAssistants,
+          initialSnapshot.assistants,
+          apiProfiles,
+        )
+      : migratedAssistants;
   const conversations =
     snapshot.conversations && snapshot.conversations.length > 0
       ? snapshot.conversations
@@ -267,7 +302,6 @@ export const normalizeSnapshot = (
     (conversation) => !conversation.archived,
   );
   const firstAssistant = assistants[0];
-  const settings: LegacySettings = snapshot.settings ?? {};
 
   return {
     settings: {

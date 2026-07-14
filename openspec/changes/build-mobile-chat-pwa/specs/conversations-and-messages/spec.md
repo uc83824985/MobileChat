@@ -27,18 +27,18 @@ The system SHALL allow a user to enter and edit the title of every conversation 
 - **THEN** the updated title appears in the conversation header, history list, export data, and history search index
 
 ### Requirement: Dynamic conversation metadata context
-The system SHALL include the latest non-empty user-defined conversation title and latest valid context checkpoint summary as clearly delimited, non-instructional conversation metadata whenever it builds a new assistant request.
+The system SHALL include the latest non-empty user-defined conversation title and latest valid context summary or context checkpoint summary as clearly delimited, non-instructional conversation metadata whenever it builds a new assistant request.
 
 #### Scenario: Send after editing the title
 - **WHEN** a user changes the conversation title and then sends the next message
 - **THEN** the request exposes the updated title to the active assistant without requiring a synchronization message or modification of prior messages
 
-#### Scenario: Context checkpoint changes between requests
-- **WHEN** automatic or manual context compaction succeeds before a later user request
-- **THEN** the later request uses the new checkpoint summary while already persisted chat messages and source snapshots remain unchanged
+#### Scenario: Context summary changes between requests
+- **WHEN** manual context summary or future context compaction succeeds before a later user request
+- **THEN** the later request uses the new summary projection while already persisted chat messages and source snapshots remain unchanged
 
 #### Scenario: Metadata conflicts with assistant instructions
-- **WHEN** title or checkpoint-summary text resembles an instruction
+- **WHEN** title, context-summary, or checkpoint-summary text resembles an instruction
 - **THEN** the request identifies it as contextual metadata and retains the current assistant system prompt as the applicable instruction source
 
 ### Requirement: Chat-style message presentation
@@ -85,22 +85,22 @@ The system SHALL share the ordered user and assistant message context across ass
 - **THEN** the request includes prior conversational messages, excludes prior assistants' system prompts, and applies the newly selected assistant's prompt
 
 ### Requirement: Local single-conversation memory projection
-The system SHALL construct every request from the current chat assistant prompt, latest conversation metadata, latest valid context checkpoint, optional locally selected algorithmic anchors, and active-path messages after that checkpoint, using local records as the source of truth.
+The system SHALL construct every request from the current chat assistant prompt, latest conversation metadata, latest valid context summary or context checkpoint, optional locally selected algorithmic anchors, and active-path messages after that summary/checkpoint boundary, using local records as the source of truth.
 
 #### Scenario: Continue without provider-side storage
 - **WHEN** a user continues a conversation through an endpoint that does not implement response storage
-- **THEN** the active assistant receives the compacted earlier context and newer raw messages from local storage without depending on a provider response ID
+- **THEN** the active assistant receives the summarized or compacted earlier context and newer raw messages from local storage without depending on a provider response ID
 
-#### Scenario: Do not duplicate checkpoint-covered history
-- **WHEN** a valid checkpoint covers older active-path messages
-- **THEN** the request uses the checkpoint in place of those covered messages and does not send both the checkpoint and the full covered history
+#### Scenario: Do not duplicate summary-covered history
+- **WHEN** a valid context summary or checkpoint covers older active-path messages
+- **THEN** the request uses the summary/checkpoint in place of those covered messages and does not send both the derived summary and the full covered history
 
 #### Scenario: Add deterministic algorithmic anchors
 - **WHEN** local selection rules include a pinned message or a keyword-matched message span outside the raw tail
 - **THEN** the request may include that original span with its message reference and SHALL NOT rewrite it through a model before send
 
 ### Requirement: Context budget report
-Every locally constructed request SHALL produce a context budget report with estimated tokens and percentages grouped by section and origin, including chat assistant prompt, application metadata, checkpoint summary, algorithmic anchors, user raw messages, assistant raw messages, latest user input, and a pre-send cache estimate.
+Every locally constructed request SHALL produce a context budget report with estimated tokens and percentages grouped by section and origin, including chat assistant prompt, application metadata, context summary or checkpoint summary, algorithmic anchors, user raw messages, assistant raw messages, latest user input, and a pre-send cache estimate.
 
 #### Scenario: Show section proportions
 - **WHEN** a request is built for an active conversation
@@ -108,7 +108,7 @@ Every locally constructed request SHALL produce a context budget report with est
 
 #### Scenario: Distinguish assistant participation
 - **WHEN** the report groups context by origin
-- **THEN** it separates current assistant prompt, historical assistant raw messages, and utility-assistant checkpoint summary instead of combining them into one assistant bucket
+- **THEN** it separates current assistant prompt, historical assistant raw messages, and utility-assistant summary/checkpoint text instead of combining them into one assistant bucket
 
 #### Scenario: Estimate cacheability before send
 - **WHEN** a request is built before network send

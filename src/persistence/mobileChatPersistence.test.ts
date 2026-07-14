@@ -1,6 +1,10 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it } from "vitest";
-import { createInitialSnapshot, type LocalDataSnapshot } from "../domain";
+import {
+  CONTEXT_SUMMARY_ASSISTANT_ID,
+  createInitialSnapshot,
+  type LocalDataSnapshot,
+} from "../domain";
 import {
   createMobileChatArchive,
   readMobileChatArchive,
@@ -28,8 +32,42 @@ describe("MobileChat persistence", () => {
     expect(snapshot.apiProfiles).toHaveLength(1);
     expect(snapshot.apiProfiles[0]?.baseUrl).toBe("");
     expect(snapshot.apiProfiles[0]?.models).toHaveLength(1);
-    expect(snapshot.assistants).toHaveLength(3);
+    expect(snapshot.assistants).toHaveLength(4);
+    expect(snapshot.assistants.map((assistant) => assistant.id)).toContain(
+      CONTEXT_SUMMARY_ASSISTANT_ID,
+    );
     expect(snapshot.conversations[0]?.title).toBe("本地上下文机制");
+  });
+
+  it("migrates the summary assistant once and respects later deletion", async () => {
+    const snapshot = createInitialSnapshot();
+    const legacySnapshot = {
+      ...snapshot,
+      settings: {
+        ...snapshot.settings,
+        schemaVersion: 7,
+      },
+      assistants: snapshot.assistants.filter(
+        (assistant) => assistant.id !== CONTEXT_SUMMARY_ASSISTANT_ID,
+      ),
+    } as unknown as LocalDataSnapshot;
+
+    await replaceSnapshot(legacySnapshot);
+    const migrated = await loadSnapshot();
+    expect(migrated.assistants.map((assistant) => assistant.id)).toContain(
+      CONTEXT_SUMMARY_ASSISTANT_ID,
+    );
+
+    await saveSnapshot({
+      ...migrated,
+      assistants: migrated.assistants.filter(
+        (assistant) => assistant.id !== CONTEXT_SUMMARY_ASSISTANT_ID,
+      ),
+    });
+    const restored = await loadSnapshot();
+    expect(restored.assistants.map((assistant) => assistant.id)).not.toContain(
+      CONTEXT_SUMMARY_ASSISTANT_ID,
+    );
   });
 
   it("persists assistant, model, and active settings edits", async () => {

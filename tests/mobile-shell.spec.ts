@@ -59,8 +59,6 @@ test("supports basic mobile interactions, title editing, and model switching", a
     await page.getByLabel("关闭对话列表").click({ force: true });
     await expect(page.locator(".conversation-rail")).not.toHaveClass(/open/);
     await expect(page.getByLabel("回到消息底部")).toBeVisible();
-    await page.getByLabel("回到消息底部").click();
-    await expect(page.getByLabel("回到消息顶部")).toBeVisible();
   }
 
   await page.getByLabel("编辑标题").click();

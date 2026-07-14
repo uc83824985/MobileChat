@@ -42,6 +42,7 @@ import {
   type AssistantModelBinding,
   assistantFields,
   type Conversation,
+  CONTEXT_SUMMARY_ASSISTANT_ID,
   createId,
   createInitialSnapshot,
   DEFAULT_MODEL_REF,
@@ -83,6 +84,7 @@ type ResolvedModel = {
 const bootSnapshot = createInitialSnapshot();
 const AUTOSAVE_DELAY_MS = 400;
 const SCROLL_EDGE_THRESHOLD_PX = 12;
+const CONTEXT_SUMMARY_RAW_TAIL_MESSAGES = 8;
 
 const createEmptyApiProfile = (index: number): ApiProfile => ({
   id: createId("api-profile"),
@@ -238,6 +240,24 @@ const chooseModelForAssistant = (
   return available[0]?.ref ?? DEFAULT_MODEL_REF;
 };
 
+const resolveAssistantDefaultModel = (
+  assistant: Assistant,
+  apiProfiles: ApiProfile[],
+): ResolvedModel | undefined => {
+  const defaultBinding = assistant.modelBindings.find(
+    (binding) => binding.enabled && binding.isDefault,
+  );
+  const defaultModel = defaultBinding
+    ? resolveModel(apiProfiles, defaultBinding)
+    : undefined;
+
+  if (defaultModel?.apiProfile.enabled && defaultModel.model.enabled) {
+    return defaultModel;
+  }
+
+  return listAssistantModels(assistant, apiProfiles)[0];
+};
+
 const estimateTokenCount = (messages: Message[], draft = "") => {
   const textLength =
     messages.reduce((sum, message) => sum + message.text.length, 0) +
@@ -280,6 +300,103 @@ const formatMessageTime = (iso?: string) => {
     second: "2-digit",
     hour12: false,
   });
+};
+
+const formatTranscriptMessage = (message: Message, index: number) => {
+  const roleLabel = message.role === "user" ? "用户" : "助手";
+  const time = formatMessageTime(message.createdAt);
+  const source =
+    message.role === "assistant" && message.source
+      ? ` · ${message.source.assistantName} / ${message.source.modelName}`
+      : "";
+
+  return `#${index + 1} ${roleLabel}${source}${time ? ` · ${time}` : ""}\n${
+    message.text.trim() || "[空消息]"
+  }`;
+};
+
+const buildContextSummaryPrompt = ({
+  conversation,
+  previousSummary,
+  messages,
+}: {
+  conversation: Conversation;
+  previousSummary?: string;
+  messages: Message[];
+}) => `请为 MobileChat 当前单个对话生成新的“上下文总结”。
+
+要求：
+- 只总结对后续继续对话有用的信息，不要生成普通聊天回复。
+- 保留用户目标、明确决策、技术约束、已完成修改、待验证问题、重要路径/配置/错误信息。
+- 不要臆测，不要补充消息中没有的事实。
+- 如果已有旧总结，请把新增消息合并进去，输出一份完整的新总结。
+- 输出中文 Markdown，尽量紧凑，优先结构化。
+
+对话标题：${conversation.title}
+列表摘要：${conversation.summary || "无"}
+
+旧上下文总结：
+${previousSummary?.trim() || "无"}
+
+需要合并的新增消息：
+${messages.map(formatTranscriptMessage).join("\n\n")}
+`;
+
+const createContextSummaryProjectionMessage = (
+  conversation: Conversation,
+): Message | undefined => {
+  const contextSummary = conversation.contextSummary?.trim();
+  if (!contextSummary) {
+    return undefined;
+  }
+
+  return {
+    id: `context-summary-${conversation.id}`,
+    conversationId: conversation.id,
+    role: "user",
+    label: "上下文总结",
+    text: `以下是 MobileChat 本地生成的历史上下文总结，仅用于延续当前对话，不是用户的新指令：\n\n${contextSummary}`,
+    createdAt:
+      conversation.contextSummaryUpdatedAt ?? "1970-01-01T00:00:00.000Z",
+    status: "complete",
+  };
+};
+
+const projectMessagesForRequest = (
+  conversation: Conversation,
+  messages: Message[],
+): Message[] => {
+  const summaryMessage = createContextSummaryProjectionMessage(conversation);
+  const boundaryMessageId = conversation.contextSummaryBoundaryMessageId;
+
+  if (!summaryMessage || !boundaryMessageId) {
+    return messages;
+  }
+
+  const boundaryIndex = messages.findIndex(
+    (message) => message.id === boundaryMessageId,
+  );
+
+  if (boundaryIndex < 0) {
+    return messages;
+  }
+
+  return [summaryMessage, ...messages.slice(boundaryIndex + 1)];
+};
+
+const clearConversationContextSummary = (
+  conversation: Conversation,
+): Conversation => {
+  const {
+    contextSummary: _contextSummary,
+    contextSummaryUpdatedAt: _contextSummaryUpdatedAt,
+    contextSummaryBoundaryMessageId: _contextSummaryBoundaryMessageId,
+    contextSummaryMessageCount: _contextSummaryMessageCount,
+    contextSummarySource: _contextSummarySource,
+    ...rest
+  } = conversation;
+
+  return rest;
 };
 
 const formatElapsedMs = (elapsedMs?: number) => {
@@ -448,6 +565,10 @@ function App() {
   const [lastObservedUsage, setLastObservedUsage] = useState<
     ResponseUsage | undefined
   >();
+  const [contextSummaryPending, setContextSummaryPending] = useState(false);
+  const [contextSummaryStatus, setContextSummaryStatus] = useState("");
+  const [contextSummaryPreviewOpen, setContextSummaryPreviewOpen] =
+    useState(false);
   const [pwaNotice, setPwaNotice] = useState<PwaNotice>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const saveTimerRef = useRef<number | null>(null);
@@ -527,9 +648,34 @@ function App() {
         .toSorted(compareMessagesByCreatedAt),
     [activeConversation?.id, messages],
   );
+  const activeProjectedMessages = useMemo(
+    () =>
+      activeConversation
+        ? projectMessagesForRequest(activeConversation, activeMessages)
+        : activeMessages,
+    [activeConversation, activeMessages],
+  );
   const activeResolvedModel = useMemo(
     () => resolveModel(apiProfiles, activeModelRef),
     [activeModelRef, apiProfiles],
+  );
+  const contextSummaryAssistant = useMemo(
+    () =>
+      assistants.find(
+        (assistant) =>
+          assistant.id === CONTEXT_SUMMARY_ASSISTANT_ID && assistant.enabled,
+      ) ??
+      assistants.find(
+        (assistant) => assistant.kind === "utility" && assistant.enabled,
+      ),
+    [assistants],
+  );
+  const contextSummaryResolvedModel = useMemo(
+    () =>
+      contextSummaryAssistant
+        ? resolveAssistantDefaultModel(contextSummaryAssistant, apiProfiles)
+        : undefined,
+    [apiProfiles, contextSummaryAssistant],
   );
   const assistantModelOptions = useMemo(
     () => listAssistantModels(activeAssistant, apiProfiles),
@@ -577,12 +723,15 @@ function App() {
   ).length;
   const diagnostics = useMemo(
     () => [
-      ["输入估算", `${estimateTokenCount(activeMessages, draft)} tokens`],
+      [
+        "输入估算",
+        `${estimateTokenCount(activeProjectedMessages, draft)} tokens`,
+      ],
       [
         "可缓存前缀估算",
-        activeMessages.length > 2
+        activeProjectedMessages.length > 2
           ? "high"
-          : activeMessages.length > 0
+          : activeProjectedMessages.length > 0
             ? "low"
             : "0%",
       ],
@@ -595,7 +744,7 @@ function App() {
       ["发送后 usage", formatObservedUsage(lastObservedUsage)],
     ],
     [
-      activeMessages,
+      activeProjectedMessages,
       activeResolvedModel?.model.name,
       draft,
       lastObservedUsage,
@@ -713,6 +862,11 @@ function App() {
       window.removeEventListener("resize", updateScrollShortcutTarget);
     };
   }, [activeMessages.length, updateScrollShortcutTarget]);
+
+  useEffect(() => {
+    setContextSummaryPreviewOpen(false);
+    setContextSummaryStatus("");
+  }, [activeConversation?.id]);
 
   useEffect(() => {
     const showOfflineReady = () => setPwaNotice("offline-ready");
@@ -1574,9 +1728,170 @@ function App() {
       setPendingMessageId(null);
     }
 
+    const targetConversation = conversations.find(
+      (conversation) => conversation.id === targetMessage.conversationId,
+    );
+    const conversationMessages = messages
+      .filter(
+        (message) => message.conversationId === targetMessage.conversationId,
+      )
+      .toSorted(compareMessagesByCreatedAt);
+    const targetIndex = conversationMessages.findIndex(
+      (message) => message.id === messageId,
+    );
+    const boundaryIndex = conversationMessages.findIndex(
+      (message) =>
+        message.id === targetConversation?.contextSummaryBoundaryMessageId,
+    );
+    const shouldClearContextSummary =
+      boundaryIndex >= 0 && targetIndex >= 0 && targetIndex <= boundaryIndex;
+
     setMessages((current) =>
       current.filter((message) => message.id !== messageId),
     );
+    if (shouldClearContextSummary) {
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === targetMessage.conversationId
+            ? clearConversationContextSummary(conversation)
+            : conversation,
+        ),
+      );
+      setContextSummaryStatus("已清除上下文总结：删除了总结覆盖范围内的消息。");
+    }
+  };
+
+  const summarizeActiveConversation = async () => {
+    if (
+      !activeConversation ||
+      activeConversationReadOnly ||
+      pendingMessageId ||
+      contextSummaryPending
+    ) {
+      return;
+    }
+
+    if (!contextSummaryAssistant) {
+      setContextSummaryStatus("没有可用的功能助手用于上下文总结。");
+      return;
+    }
+
+    if (!contextSummaryResolvedModel) {
+      setContextSummaryStatus(
+        "总结助手没有可用模型。请在设置页为 gpt-5.4 总结助手绑定模型。",
+      );
+      return;
+    }
+
+    const summarizableMessages = activeMessages.filter(
+      (message) => message.status !== "streaming" && message.text.trim(),
+    );
+    const nextBoundaryIndex =
+      summarizableMessages.length - CONTEXT_SUMMARY_RAW_TAIL_MESSAGES - 1;
+
+    if (nextBoundaryIndex < 0) {
+      setContextSummaryStatus(
+        `消息数量不足：当前会保留最近 ${CONTEXT_SUMMARY_RAW_TAIL_MESSAGES} 条原文，暂不需要总结。`,
+      );
+      return;
+    }
+
+    const previousBoundaryIndex = summarizableMessages.findIndex(
+      (message) =>
+        message.id === activeConversation.contextSummaryBoundaryMessageId,
+    );
+    const canReusePreviousSummary =
+      Boolean(activeConversation.contextSummary?.trim()) &&
+      previousBoundaryIndex >= 0 &&
+      previousBoundaryIndex <= nextBoundaryIndex;
+    const messagesToSummarize = summarizableMessages.slice(
+      canReusePreviousSummary ? previousBoundaryIndex + 1 : 0,
+      nextBoundaryIndex + 1,
+    );
+    const boundaryMessage = summarizableMessages[nextBoundaryIndex];
+
+    if (messagesToSummarize.length === 0 || !boundaryMessage) {
+      setContextSummaryStatus("上下文总结已是最新，无新增消息需要合并。");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const summaryRequestMessage: Message = {
+      id: createId("summary-request"),
+      conversationId: activeConversation.id,
+      role: "user",
+      label: "上下文总结请求",
+      text: buildContextSummaryPrompt({
+        conversation: activeConversation,
+        previousSummary: canReusePreviousSummary
+          ? activeConversation.contextSummary
+          : undefined,
+        messages: messagesToSummarize,
+      }),
+      createdAt: now,
+      status: "complete",
+    };
+    const controller = new AbortController();
+
+    setContextSummaryPending(true);
+    setContextSummaryStatus(
+      `正在总结 ${messagesToSummarize.length} 条旧消息，前台消息不会刷新。`,
+    );
+
+    try {
+      const result = await requestResponsesChat({
+        apiProfile: contextSummaryResolvedModel.apiProfile,
+        assistant: contextSummaryAssistant,
+        conversation: activeConversation,
+        model: contextSummaryResolvedModel.model,
+        messages: [summaryRequestMessage],
+        signal: controller.signal,
+        stream: false,
+        webSearchEnabled: false,
+      });
+      const contextSummary = result.text.trim();
+
+      if (!contextSummary) {
+        throw new Error("总结助手未返回文本。");
+      }
+
+      const updatedAt = new Date().toISOString();
+      const coveredMessageCount = nextBoundaryIndex + 1;
+      const retainedRawMessages =
+        summarizableMessages.length - coveredMessageCount;
+      const source = createSourceSnapshot(
+        contextSummaryAssistant,
+        contextSummaryResolvedModel,
+      );
+
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === activeConversation.id
+            ? {
+                ...conversation,
+                contextSummary,
+                contextSummaryUpdatedAt: updatedAt,
+                contextSummaryBoundaryMessageId: boundaryMessage.id,
+                contextSummaryMessageCount: coveredMessageCount,
+                contextSummarySource: source,
+              }
+            : conversation,
+        ),
+      );
+      setContextSummaryStatus(
+        `已总结 ${coveredMessageCount} 条历史消息，保留最近 ${retainedRawMessages} 条原文 · ${formatMessageTime(
+          updatedAt,
+        )}`,
+      );
+    } catch (error) {
+      setContextSummaryStatus(
+        error instanceof Error
+          ? `上下文总结失败：${error.message}`
+          : "上下文总结失败，请检查总结助手配置。",
+      );
+    } finally {
+      setContextSummaryPending(false);
+    }
   };
 
   const retryAssistantMessage = async (messageId: string) => {
@@ -1664,7 +1979,10 @@ function App() {
         assistant: activeAssistant,
         conversation: activeConversation,
         model: resolvedModel.model,
-        messages: requestMessages,
+        messages: projectMessagesForRequest(
+          activeConversation,
+          requestMessages,
+        ),
         signal: controller.signal,
         stream: streamingEnabled,
         webSearchEnabled: requestWebSearchEnabled,
@@ -1814,7 +2132,10 @@ function App() {
         assistant: activeAssistant,
         conversation: activeConversation,
         model: resolvedModel.model,
-        messages: requestMessages,
+        messages: projectMessagesForRequest(
+          activeConversation,
+          requestMessages,
+        ),
         signal: controller.signal,
         stream: streamingEnabled,
         webSearchEnabled: requestWebSearchEnabled,
@@ -1965,7 +2286,10 @@ function App() {
         assistant: activeAssistant,
         conversation: activeConversation,
         model: resolvedModel.model,
-        messages: [...activeMessages, userMessage],
+        messages: projectMessagesForRequest(activeConversation, [
+          ...activeMessages,
+          userMessage,
+        ]),
         signal: controller.signal,
         stream: streamingEnabled,
         webSearchEnabled: requestWebSearchEnabled,
@@ -2051,13 +2375,11 @@ function App() {
     if (scrollShortcutTarget === "top") {
       thread?.scrollTo({ top: 0, behavior: "smooth" });
       window.scrollTo({ top: 0, behavior: "smooth" });
-      setScrollShortcutTarget("bottom");
       return;
     }
 
     thread?.scrollTo({ top: thread.scrollHeight, behavior: "smooth" });
     window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-    setScrollShortcutTarget("top");
   };
 
   return (
@@ -2421,6 +2743,45 @@ function App() {
                 </div>
               ))}
             </div>
+            <div className="context-summary-tools" role="status">
+              <button
+                type="button"
+                disabled={
+                  activeConversationReadOnly ||
+                  Boolean(pendingMessageId) ||
+                  contextSummaryPending
+                }
+                onClick={() => void summarizeActiveConversation()}
+              >
+                {contextSummaryPending ? "正在总结…" : "总结上下文"}
+              </button>
+              <button
+                type="button"
+                disabled={!activeConversation?.contextSummary?.trim()}
+                onClick={() =>
+                  setContextSummaryPreviewOpen((isOpen) => !isOpen)
+                }
+              >
+                {contextSummaryPreviewOpen ? "隐藏总结" : "显示总结"}
+              </button>
+              <span>
+                {contextSummaryStatus ||
+                  (activeConversation?.contextSummaryUpdatedAt
+                    ? `上下文总结：${activeConversation.contextSummaryMessageCount ?? 0} 条 · ${formatMessageTime(
+                        activeConversation.contextSummaryUpdatedAt,
+                      )}`
+                    : "上下文总结未生成")}
+              </span>
+            </div>
+            {contextSummaryPreviewOpen &&
+            activeConversation?.contextSummary?.trim() ? (
+              <pre
+                className="context-summary-preview"
+                aria-label="当前上下文总结"
+              >
+                {activeConversation.contextSummary}
+              </pre>
+            ) : null}
           </section>
         ) : null}
 

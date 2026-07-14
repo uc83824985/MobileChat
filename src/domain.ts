@@ -3,6 +3,11 @@ export type Conversation = {
   title: string;
   summary: string;
   archived: boolean;
+  contextSummary?: string;
+  contextSummaryUpdatedAt?: string;
+  contextSummaryBoundaryMessageId?: string;
+  contextSummaryMessageCount?: number;
+  contextSummarySource?: MessageSourceSnapshot;
 };
 
 export type ResponseUsage = {
@@ -139,10 +144,11 @@ export type LocalDataSnapshot = {
 
 export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 
-export const DATABASE_SCHEMA_VERSION = 7;
+export const DATABASE_SCHEMA_VERSION = 8;
 
 export const DEFAULT_PROFILE_ID = "default-profile";
 export const DEFAULT_MODEL_ID = "default-model";
+export const CONTEXT_SUMMARY_ASSISTANT_ID = "context-summary-gpt54";
 export const DEFAULT_MODEL_REF: ModelRef = {
   apiProfileId: DEFAULT_PROFILE_ID,
   modelId: DEFAULT_MODEL_ID,
@@ -198,6 +204,19 @@ export const defaultAssistant: Assistant = {
   modelBindings: [defaultBinding(true)],
   prompt: "你是一个务实的软件架构助手，优先给出可落地的设计。",
   initialMessage: "我会根据当前对话上下文协助推进实现。",
+  enabled: true,
+};
+
+export const contextSummaryAssistant: Assistant = {
+  id: CONTEXT_SUMMARY_ASSISTANT_ID,
+  name: "gpt-5.4 总结助手",
+  description:
+    "测试用功能助手：为单个对话生成可继续使用的上下文总结，不参与普通聊天。",
+  kind: "utility",
+  modelBindings: [defaultBinding(true)],
+  prompt:
+    "你是 MobileChat 的上下文总结助手。你的任务是把一个单独对话的旧消息整理成后续请求可使用的上下文总结。只保留对继续对话有用的信息：目标、已确认决策、约束、待办、术语定义、重要代码/配置发现、未解决问题。不要新增事实，不要评价，不要输出寒暄。输出中文 Markdown，结构清晰但尽量紧凑。",
+  initialMessage: "",
   enabled: true,
 };
 
@@ -272,13 +291,14 @@ export const initialAssistants: Assistant[] = [
   {
     id: "compact",
     name: "压缩助手",
-    description: "功能助手，用于后续上下文压缩和摘要生成。",
+    description: "功能助手，用于后续 /compact 风格上下文压缩。",
     kind: "utility",
     modelBindings: [defaultBinding(true)],
-    prompt: "你只输出结构化摘要，不参与普通聊天。",
+    prompt: "你只输出结构化压缩结果，不参与普通聊天。",
     initialMessage: "",
     enabled: true,
   },
+  contextSummaryAssistant,
 ];
 
 export const assistantFields: AssistantField[] = [

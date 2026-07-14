@@ -213,7 +213,16 @@ Current-conversation search derives an in-memory fuzzy index from searchable tex
 
 Search normalization handles Unicode case folding, whitespace, and punctuation consistently. A bundled fuzzy matcher may be used, but its scoring and highlighting are wrapped behind an application search service so the library can be replaced.
 
-### 10. Utility-assistant context compaction inspired by `/compact`
+### 10. Utility-assistant context summary and compaction
+
+Context summary and context compaction are separate mechanisms:
+
+- `ContextSummary` is a lightweight continuation summary stored directly on a conversation with a covered message boundary, covered-message count, update time, and source snapshot. It reduces repeated old-message input while keeping canonical messages visible and unchanged.
+- `ContextCheckpoint` is a future `/compact`-style immutable artifact with stricter validation, revisioning, prior-checkpoint links, and display-summary commit behavior.
+
+The first working implementation exposes manual **总结上下文** only in debug mode. It calls a configured utility assistant such as `gpt-5.4 总结助手`, does not append visible chat messages, and updates only a small debug status hint. Automatic summary triggers may later be based on completed-turn count, idle duration, long assistant replies, or projected-context thresholds.
+
+When a valid `ContextSummary` exists, request construction projects old covered messages into one clearly delimited non-instructional summary message plus the recent raw tail. Full canonical messages remain in local storage and export data.
 
 A completed turn is a user message followed by a terminal assistant message status. Global compaction defaults may be overridden per conversation and include enablement, a context-compression utility-assistant reference, minimum completed turns, completed-turn interval, optional estimated-input-token threshold, number of recent turns to preserve verbatim, and maximum lengths for continuation and display summaries.
 

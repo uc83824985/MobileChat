@@ -150,19 +150,13 @@ const createTextItems = (messages: Message[]) =>
 
 const buildResponsesRequestBody = ({
   assistant,
-  conversation,
   model,
   messages,
   stream,
   webSearchEnabled,
 }: Pick<
   ResponsesChatRequest,
-  | "assistant"
-  | "conversation"
-  | "model"
-  | "messages"
-  | "stream"
-  | "webSearchEnabled"
+  "assistant" | "model" | "messages" | "stream" | "webSearchEnabled"
 >) =>
   JSON.stringify({
     model: model.id,
@@ -171,10 +165,6 @@ const buildResponsesRequestBody = ({
     tools: webSearchEnabled ? [{ type: "web_search" }] : undefined,
     store: false,
     stream,
-    metadata: {
-      mobilechat_conversation_id: conversation.id,
-      mobilechat_assistant_id: assistant.id,
-    },
   });
 
 const buildChatCompletionsRequestBody = ({
@@ -482,7 +472,6 @@ const readResponsesStream = async (
 export const requestResponsesChat = async ({
   apiProfile,
   assistant,
-  conversation,
   model,
   messages,
   signal,
@@ -517,7 +506,6 @@ export const requestResponsesChat = async ({
         })
       : buildResponsesRequestBody({
           assistant,
-          conversation,
           model,
           messages,
           stream,

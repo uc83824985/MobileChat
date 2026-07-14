@@ -7,7 +7,7 @@ Date: 2026-07-14
 - The mobile/desktop shell is usable with persisted local state.
 - Conversation creation, conversation selection, title edit, title/summary search, archive action, archived conversation view, draft input, send, stop, debug panel toggle, settings open/close, theme switch, streaming switch, assistant switch, and model switch are covered by automated tests.
 - Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, backup, theme, and streaming controls.
-- The app has OpenAI-compatible Responses and Chat Completions request loops. Responses sends `POST {baseUrl}/responses` using `store:false`; Chat Completions sends `POST {baseUrl}/chat/completions`. Without an API key it shows a local configuration error. Streaming mode uses SSE text deltas when the gateway truly streams; if a `stream:true` request is buffered into JSON, the client falls back to one-shot JSON parsing.
+- The app has OpenAI-compatible Responses and Chat Completions request loops. Responses sends `POST {baseUrl}/responses` using `store:false` and omits optional `metadata` for wider relay compatibility; Chat Completions sends `POST {baseUrl}/chat/completions`. Without an API key it shows a local configuration error. Streaming mode uses SSE text deltas when the gateway truly streams; if a `stream:true` request is buffered into JSON, the client falls back to one-shot JSON parsing.
 - Mobile browser compatibility is covered by responsive CSS plus Playwright Mobile Chrome checks. The default mobile layout keeps the side conversation rail as a drawer, collapses settings/detail grids to one column, and preserves the same application logic as desktop.
 - A persisted "布局模式" display setting supports `auto`, `mobile`, and `desktop`. `auto` follows viewport width, `mobile` forces drawer/single-column layout, and `desktop` forces the desktop layout structure. This is layout-only and does not change conversation state, local persistence, request construction, or provider protocol behavior.
 - Route compatibility is protocol-specific. A user-configured Grok route was observed to fail with 404 on Responses while succeeding on Chat Completions, so each API Profile must preserve the selected protocol instead of assuming one relay-wide default.
@@ -22,7 +22,7 @@ Date: 2026-07-14
 - The settings panel is full-screen on small screens and a wide details panel on desktop.
 - The conversation drawer keeps the bottom archive/settings actions visible while the conversation list scrolls.
 - Mobile layout has floating controls for opening the conversation drawer and returning to the top of the message thread, so long conversations do not require scrolling back to the header for navigation.
-- The floating scroll control toggles between top and bottom targets after it is used or when the user manually scrolls to either edge, so returning to the top exposes a quick path back to the latest messages.
+- The floating scroll control target is derived only from the current scroll position. Clicking it triggers smooth scrolling but no longer flips its own state immediately, avoiding a brief top/bottom flicker while the browser is still scrolling.
 - The chat header provides a direct title edit entry. Press Enter or the check button to save; Esc or the close button cancels.
 - Archived conversations now have a sidebar entry. The archived view searches only title and summary, allows browsing and restoring, and keeps the composer read-only until restore.
 - Assistant messages expose a retry action; retry removes the selected assistant reply and later messages before regenerating with the current assistant/model. Messages also expose a local delete action.
@@ -30,6 +30,7 @@ Date: 2026-07-14
 - Dark mode styles native select options and applies `color-scheme: dark` to avoid white dropdown backgrounds with pale text.
 - The assistant details panel is schema-rendered from `assistantFields`, so newly added assistants use the same reflected editor instead of a special hard-coded page.
 - API Key editing uses an app-owned persistent show/hide button instead of relying on browser-specific password-field eye icons.
+- Debug mode exposes a manual **总结上下文** action and a **显示总结** preview. Summary generation calls the configured `gpt-5.4 总结助手` utility assistant, stores the generated `contextSummary` on the conversation, and keeps the visible message thread unchanged except for a small debug status hint.
 
 ## API Profile and model configuration
 
@@ -63,6 +64,7 @@ Date: 2026-07-14
 
 - `MobileChatDB` stores settings, API profiles, assistants, conversations, messages, and reserved stores for drafts/checkpoints/blobs.
 - Messages now store `createdAt`, assistant `completedAt`, and assistant `elapsedMs` where available. They are rendered chronologically by creation time, while completed assistant responses show finish time and request duration. Legacy generated message IDs are migrated into timestamps where possible, preventing IndexedDB key ordering from grouping `assistant-*` records before `message-*` records after reload.
+- Conversations may store a lightweight `contextSummary` with boundary message ID, covered message count, update time, and summary-assistant/model source snapshot. This is separate from the future immutable `ContextCheckpoint` / compact flow.
 - UI edits update memory immediately and are autosaved after a short debounce. Settings close and page visibility changes flush the latest snapshot.
 - Settings persist the selected theme and whether Responses streaming is enabled.
 - The current implementation persists normalized full snapshots. This is acceptable for the current small prototype; future large histories should move to dirty-record writes as specified in the architecture document.
@@ -86,6 +88,7 @@ Date: 2026-07-14
 - Streaming can be requested by sending `stream: true`, but true incremental display still requires the gateway to flush SSE events. If the gateway returns JSON, MobileChat falls back to one-shot display.
 - Enabling web access can legitimately increase response latency because the provider or relay may perform hosted search/tool execution before producing the final assistant text. Successful searched responses are therefore not treated as an implementation error solely because they are slower than non-search turns.
 - Debug diagnostics fold current-turn options into the pre-send budget card, for example `模型名 · 联网 · 仅文本`, instead of rendering a separate transient-options card.
+- When a valid `contextSummary` exists, the debug input estimate is based on the projected request (`contextSummary` plus raw tail) rather than the full visible message list.
 
 ## Verification
 

@@ -18,6 +18,25 @@ The system SHALL search historical conversations using only their user-defined t
 - **WHEN** a query matches only the body of a message in a non-active conversation
 - **THEN** that conversation is not returned unless the query also matches its title or summary
 
+### Requirement: Manual lightweight context summary
+The system SHALL support a lightweight per-conversation `ContextSummary` that is separate from immutable context compaction checkpoints and can replace older covered messages during request projection while preserving all canonical messages locally.
+
+#### Scenario: Generate a debug context summary
+- **WHEN** debug mode is enabled and the user invokes the manual context-summary action
+- **THEN** the system calls the configured utility summary assistant in the foreground, stores the resulting `contextSummary` with boundary, count, timestamp, and source snapshot metadata, and does not append a visible chat message
+
+#### Scenario: Preview the current summary
+- **WHEN** a valid `ContextSummary` exists and debug mode is enabled
+- **THEN** the system provides a local preview action that displays the stored summary without making a provider request
+
+#### Scenario: Use summary in the next request
+- **WHEN** a valid `ContextSummary` covers older messages
+- **THEN** the next assistant request includes the summary plus recent raw tail messages instead of sending both the summary and all covered raw messages
+
+#### Scenario: Covered message is deleted
+- **WHEN** the user deletes a message that is inside the current summary boundary
+- **THEN** the system clears that conversation's `ContextSummary` before later request construction
+
 ### Requirement: Configurable context-compaction policy
 The system SHALL allow foreground context compaction to be enabled or disabled and configured by a context-compression utility-assistant reference, minimum completed turns, completed-turn interval, optional estimated-input-token threshold, recent turns retained verbatim, and output-length limits.
 

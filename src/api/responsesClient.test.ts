@@ -113,6 +113,9 @@ describe("responsesClient", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).tools).toBe(
       undefined,
     );
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).metadata,
+    ).toBe(undefined);
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
       Accept: "text/event-stream, application/json",
     });

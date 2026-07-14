@@ -463,6 +463,48 @@ button:disabled {
   font-size: 14px;
 }
 
+.context-summary-tools {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.context-summary-tools button {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 700;
+  padding: 7px 12px;
+}
+
+.context-summary-tools button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.context-summary-tools span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.context-summary-preview {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 10px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
 .composer {
   align-items: center;
   border-top: 1px solid var(--line);
@@ -1331,6 +1373,11 @@ button:disabled {
 
   .diagnostic-grid {
     grid-template-columns: 1fr;
+  }
+
+  .context-summary-tools {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .composer {

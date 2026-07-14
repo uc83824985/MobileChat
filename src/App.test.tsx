@@ -137,6 +137,54 @@ describe("App", () => {
     expect(screen.getByText("cache 未返回/989")).toBeInTheDocument();
   });
 
+  it("generates and previews a debug context summary without adding a visible message", async () => {
+    const fetchMock = vi.fn().mockImplementation((_url, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      const inputText = Array.isArray(body.input)
+        ? body.input
+            .map((item: { content?: string }) => item.content)
+            .join("\n")
+        : "";
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            output_text: inputText.includes("请为 MobileChat 当前单个对话")
+              ? "SUMMARY RESULT"
+              : "chat response",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    configureApiProfile({ apiKey: "test-key" });
+
+    expect(screen.getByText("显示总结")).toBeDisabled();
+
+    for (let index = 0; index < 3; index += 1) {
+      fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+        target: { value: `summary seed ${index}` },
+      });
+      fireEvent.click(screen.getByLabelText("发送"));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(index + 1));
+      await waitFor(() =>
+        expect(screen.getAllByText("chat response")).toHaveLength(index + 1),
+      );
+    }
+
+    fireEvent.click(screen.getByText("总结上下文"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    await screen.findByText(/已总结/);
+
+    expect(screen.getByText("显示总结")).toBeEnabled();
+    fireEvent.click(screen.getByText("显示总结"));
+    expect(screen.getByLabelText("当前上下文总结")).toHaveTextContent(
+      "SUMMARY RESULT",
+    );
+    expect(screen.getAllByText("SUMMARY RESULT")).toHaveLength(1);
+  });
+
   it("uses web search as a single-turn composer option", async () => {
     const fetchMock = vi.fn();
     fetchMock
@@ -332,7 +380,7 @@ describe("App", () => {
 
     fireEvent.click(screen.getByText("新增"));
     expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
-      "新助手 4",
+      "新助手 5",
     );
   });
 
@@ -403,7 +451,7 @@ describe("App", () => {
 
     fireEvent.click(screen.getByText("新增"));
     expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
-      "新助手 4",
+      "新助手 5",
     );
     fireEvent.click(screen.getByText("删除助手"));
     expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
