@@ -694,6 +694,90 @@ button:disabled {
   margin: 0;
 }
 
+.summary-framework-panel {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.summary-framework-panel header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.summary-framework-panel h3 {
+  font-size: 18px;
+}
+
+.summary-framework-panel header button,
+.summary-framework-card button {
+  background: var(--button);
+  border-radius: 8px;
+  color: var(--text-strong);
+  padding: 8px 10px;
+}
+
+.summary-framework-card button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.summary-framework-note {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+.summary-framework-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.summary-framework-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.summary-framework-card-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.summary-framework-card h4 {
+  font-size: 16px;
+}
+
+.summary-framework-card-header span,
+.summary-framework-card label span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.summary-framework-card label {
+  display: grid;
+  gap: 6px;
+}
+
+.summary-framework-card textarea {
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-strong);
+  min-height: 88px;
+  padding: 9px;
+  resize: vertical;
+}
+
 .settings-summary {
   display: grid;
   gap: 10px;

@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CONTEXT_SUMMARY_ASSISTANT_ID,
   createInitialSnapshot,
+  defaultContextSummaryFramework,
+  defaultUtilityAssistantRefs,
   type LocalDataSnapshot,
 } from "../domain";
 import {
@@ -28,20 +30,131 @@ describe("MobileChat persistence", () => {
     expect(snapshot.settings.themeMode).toBe("system");
     expect(snapshot.settings.layoutMode).toBe("auto");
     expect(snapshot.settings.streamingEnabled).toBe(true);
+    expect(snapshot.settings.utilityAssistantRefs).toEqual(
+      defaultUtilityAssistantRefs,
+    );
+    expect(snapshot.settings.contextSummaryFramework.sections.length).toBe(
+      defaultContextSummaryFramework.sections.length,
+    );
+    expect(
+      snapshot.settings.contextSummaryFramework.sections.map(
+        (section) => section.title,
+      ),
+    ).toEqual(["严格记忆", "精确事实", "模糊记忆", "探索记录", "当前状态"]);
     expect(snapshot.settings.activeModelRef.modelId).toBe("default-model");
     expect(snapshot.apiProfiles).toHaveLength(1);
     expect(snapshot.apiProfiles[0]?.baseUrl).toBe("");
     expect(snapshot.apiProfiles[0]?.models).toHaveLength(1);
-    expect(snapshot.assistants).toHaveLength(4);
+    expect(snapshot.assistants).toHaveLength(3);
     expect(snapshot.assistants.map((assistant) => assistant.id)).toContain(
       CONTEXT_SUMMARY_ASSISTANT_ID,
     );
-    expect(snapshot.conversations[0]?.title).toBe("本地上下文机制");
+    expect(snapshot.conversations[0]?.title).toBe("新对话 1");
+    expect(snapshot.messages).toEqual([]);
   });
 
-  it("migrates the summary assistant once and respects later deletion", async () => {
+  it("does not reseed initial records over an existing empty database state", async () => {
     const snapshot = createInitialSnapshot();
-    const legacySnapshot = {
+
+    await replaceSnapshot({
+      ...snapshot,
+      apiProfiles: [],
+      assistants: [],
+      conversations: [],
+      messages: [],
+    });
+
+    const restored = await loadSnapshot();
+
+    expect(restored.apiProfiles).toEqual([]);
+    expect(restored.assistants).toEqual([]);
+    expect(restored.conversations).toEqual([]);
+    expect(restored.messages).toEqual([]);
+  });
+
+  it("ignores old scalar context summary fields instead of migrating them", async () => {
+    const snapshot = createInitialSnapshot();
+    const oldShapeSnapshot = {
+      ...snapshot,
+      conversations: snapshot.conversations.map((conversation) =>
+        conversation.id === "initial-conversation"
+          ? {
+              ...conversation,
+              contextSummary: "old scalar summary",
+              contextSummaryUpdatedAt: "2026-07-14T00:00:00.000Z",
+              contextSummaryBoundaryMessageId: "m2",
+              contextSummaryMessageCount: 2,
+            }
+          : conversation,
+      ),
+    } as unknown as LocalDataSnapshot;
+
+    await replaceSnapshot(oldShapeSnapshot);
+    const restored = await loadSnapshot();
+    const conversation = restored.conversations.find(
+      (candidate) => candidate.id === "initial-conversation",
+    );
+
+    expect(conversation?.activeContextSummaryId).toBeUndefined();
+    expect(conversation?.contextSummaries).toBeUndefined();
+    expect("contextSummary" in (conversation ?? {})).toBe(false);
+  });
+
+  it("normalizes summary framework to the current five dimensions", async () => {
+    const snapshot = createInitialSnapshot();
+    const snapshotWithExtraSections = {
+      ...snapshot,
+      settings: {
+        ...snapshot.settings,
+        contextSummaryFramework: {
+          ...snapshot.settings.contextSummaryFramework,
+          sections: [
+            {
+              id: "strict_memory",
+              title: "严格记忆",
+              instruction: "用户覆盖的严格记忆描述",
+              required: true,
+            },
+            {
+              id: "system_values",
+              title: "系统数值",
+              instruction: "旧系统数值描述",
+              required: false,
+            },
+            {
+              id: "persona_and_world",
+              title: "人物与设定",
+              instruction: "旧人物设定描述",
+              required: false,
+            },
+          ],
+        },
+      },
+    } as unknown as LocalDataSnapshot;
+
+    await replaceSnapshot(snapshotWithExtraSections);
+    const restored = await loadSnapshot();
+    const sections = restored.settings.contextSummaryFramework.sections;
+
+    expect(sections.map((section) => section.id)).toEqual([
+      "strict_memory",
+      "precise_facts",
+      "fuzzy_memory",
+      "exploration_log",
+      "current_state",
+    ]);
+    expect(sections[0]?.instruction).toBe("用户覆盖的严格记忆描述");
+    expect(sections.some((section) => section.id === "system_values")).toBe(
+      false,
+    );
+    expect(sections.some((section) => section.id === "persona_and_world")).toBe(
+      false,
+    );
+  });
+
+  it("does not append missing built-in assistants based on old schema versions", async () => {
+    const snapshot = createInitialSnapshot();
+    const snapshotWithoutSummaryAssistant = {
       ...snapshot,
       settings: {
         ...snapshot.settings,
@@ -52,18 +165,7 @@ describe("MobileChat persistence", () => {
       ),
     } as unknown as LocalDataSnapshot;
 
-    await replaceSnapshot(legacySnapshot);
-    const migrated = await loadSnapshot();
-    expect(migrated.assistants.map((assistant) => assistant.id)).toContain(
-      CONTEXT_SUMMARY_ASSISTANT_ID,
-    );
-
-    await saveSnapshot({
-      ...migrated,
-      assistants: migrated.assistants.filter(
-        (assistant) => assistant.id !== CONTEXT_SUMMARY_ASSISTANT_ID,
-      ),
-    });
+    await replaceSnapshot(snapshotWithoutSummaryAssistant);
     const restored = await loadSnapshot();
     expect(restored.assistants.map((assistant) => assistant.id)).not.toContain(
       CONTEXT_SUMMARY_ASSISTANT_ID,
@@ -76,8 +178,8 @@ describe("MobileChat persistence", () => {
       ...snapshot,
       settings: {
         ...snapshot.settings,
-        activeAssistantId: "research",
-        editingAssistantId: "research",
+        activeAssistantId: "architect",
+        editingAssistantId: "architect",
         themeMode: "light",
         layoutMode: "desktop",
         streamingEnabled: false,
@@ -96,7 +198,6 @@ describe("MobileChat persistence", () => {
                   ? {
                       ...model,
                       name: "Persisted Model",
-                      webSearchEnabled: true,
                     }
                   : model,
               ),
@@ -104,8 +205,8 @@ describe("MobileChat persistence", () => {
           : profile,
       ),
       assistants: snapshot.assistants.map((assistant) =>
-        assistant.id === "research"
-          ? { ...assistant, name: "持久化研究助手" }
+        assistant.id === "architect"
+          ? { ...assistant, name: "持久化默认助手" }
           : assistant,
       ),
     };
@@ -113,7 +214,7 @@ describe("MobileChat persistence", () => {
     await saveSnapshot(editedSnapshot);
     const restored = await loadSnapshot();
 
-    expect(restored.settings.activeAssistantId).toBe("research");
+    expect(restored.settings.activeAssistantId).toBe("architect");
     expect(restored.settings.themeMode).toBe("light");
     expect(restored.settings.layoutMode).toBe("desktop");
     expect(restored.settings.streamingEnabled).toBe(false);
@@ -123,36 +224,41 @@ describe("MobileChat persistence", () => {
       (model) => model.id === "default-model",
     );
     expect(restoredModel?.name).toBe("Persisted Model");
-    expect("webSearchEnabled" in (restoredModel ?? {})).toBe(false);
     expect(
       restored.assistants.find((assistant) => assistant.id === "research")
         ?.name,
-    ).toBe("持久化研究助手");
+    ).toBeUndefined();
+    expect(
+      restored.assistants.find((assistant) => assistant.id === "architect")
+        ?.name,
+    ).toBe("持久化默认助手");
   });
 
-  it("migrates legacy messages with timestamp-like ids into createdAt order", async () => {
+  it("uses current message timestamps without parsing old generated ids", async () => {
     const snapshot = createInitialSnapshot();
-    const legacySnapshot = {
+    const currentSnapshot = {
       ...snapshot,
       messages: [
         {
           id: "assistant-lvf9adyk-abcde",
-          conversationId: "local-context",
+          conversationId: "initial-conversation",
           role: "assistant",
           label: "助手",
           text: "old assistant",
+          createdAt: "2026-07-14T00:00:02.000Z",
         },
         {
           id: "message-lvf9adxw-abcde",
-          conversationId: "local-context",
+          conversationId: "initial-conversation",
           role: "user",
           label: "用户",
           text: "old user",
+          createdAt: "2026-07-14T00:00:01.000Z",
         },
       ],
     } as unknown as LocalDataSnapshot;
 
-    await replaceSnapshot(legacySnapshot);
+    await replaceSnapshot(currentSnapshot);
     const restored = await loadSnapshot();
     const restoredMessages = restored.messages.toSorted((left, right) =>
       left.createdAt.localeCompare(right.createdAt),

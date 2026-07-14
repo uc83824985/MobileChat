@@ -37,9 +37,9 @@ The default layout is responsive and mobile-first at narrow viewport widths: the
 
 Use React with TypeScript and Vite to build a fully static single-page application. Add a manifest and generated service worker through a PWA build integration, and configure the router and asset base for the `/MobileChat/` GitHub Pages path.
 
-This provides a small, conventional frontend toolchain with compile-time data model checks and no server runtime. A single hand-authored HTML file was considered, but rejected because the required IndexedDB migrations, multiple settings surfaces, streaming lifecycle, and testable state transitions would become difficult to maintain.
+This provides a small, conventional frontend toolchain with compile-time data model checks and no server runtime. A single hand-authored HTML file was considered, but rejected because the required IndexedDB repository layer, multiple settings surfaces, streaming lifecycle, and testable state transitions would become difficult to maintain.
 
-### 2. `MobileChatDB` IndexedDB repository layer with explicit migrations
+### 2. `MobileChatDB` IndexedDB repository layer with current-schema records
 
 Use a single IndexedDB database named `MobileChatDB` behind a typed repository boundary. A small IndexedDB helper library may manage transactions and schema upgrades, but domain code must not expose library-specific record types. UI preferences that are safe to lose may use `localStorage`; domain records do not.
 
@@ -57,7 +57,7 @@ contextCheckpoints
 blobs
 ```
 
-Every record uses a stable application-generated ID, ISO timestamp fields, and an explicit record version. Database upgrades run ordered migrations inside transactions where the browser permits them. Exported backups carry an independent export schema version.
+Every record uses a stable application-generated ID, ISO timestamp fields, and an explicit record version. During rapid iteration, the repository accepts the current schema only and rebuilds records from current DTO fields; obsolete fields are ignored instead of translated. Exported backups carry an independent export schema version.
 
 Writes are optimistic from the UI point of view: React state updates first, then a repository write commits the changed dirty record asynchronously. Selects, checkboxes, add/delete actions, message creation, checkpoint switching, import replacement, and archive/delete operations commit immediately, using transactions when consistency spans records. Text fields debounce commits for 300–500ms and flush on blur, settings close, send, and page visibility changes. The implementation must not serialize the whole database for every keystroke, block render on IndexedDB, or use synchronous `localStorage` for domain records. If real-device testing shows prompt editing jank on low-end phones, individual large text fields may switch to blur/manual save, but the default is non-blocking autosave.
 
@@ -220,7 +220,11 @@ Context summary and context compaction are separate mechanisms:
 - `ContextSummary` is a lightweight continuation summary stored directly on a conversation with a covered message boundary, covered-message count, update time, and source snapshot. It reduces repeated old-message input while keeping canonical messages visible and unchanged.
 - `ContextCheckpoint` is a future `/compact`-style immutable artifact with stricter validation, revisioning, prior-checkpoint links, and display-summary commit behavior.
 
-The first working implementation exposes manual **总结上下文** only in debug mode. It calls a configured utility assistant such as `gpt-5.4 总结助手`, does not append visible chat messages, and updates only a small debug status hint. Automatic summary triggers may later be based on completed-turn count, idle duration, long assistant replies, or projected-context thresholds.
+The first working implementation exposes manual **总结上下文** only in debug mode. It calls the utility assistant referenced by the built-in context-summary feature setting, does not append visible chat messages, and updates only a small debug status hint. Automatic summary triggers may later be based on completed-turn count, idle duration, long assistant replies, or projected-context thresholds.
+
+Conversation records store `contextSummaries[]` plus `activeContextSummaryId`. The current behavior still manages one active `rolling` summary, but each record carries kind, status, boundary, covered count, retained raw-tail count, framework snapshot, source snapshot, and timestamps so later segment and merged summaries can be added without replacing the data shape.
+
+The summary framework is local application configuration, not only free-form prompt text. The default framework defines five orthogonal sections by information use: strict memory, precise facts, fuzzy memory, exploration log, and current state. Domain-specific content such as character attributes or world rules is represented through these sections rather than a separate business-domain section. The framework is appended to the utility assistant prompt for each summary call.
 
 When a valid `ContextSummary` exists, request construction projects old covered messages into one clearly delimited non-instructional summary message plus the recent raw tail. Full canonical messages remain in local storage and export data.
 
@@ -262,17 +266,17 @@ blobs/<blob-id>     optional binary attachment payloads without Base64 expansion
 checksums.json      per-entry integrity hashes
 ```
 
-Complete migration mode includes API credentials after an explicit confirmation so another personal device can operate immediately; a credential-free export mode omits secret values while preserving profile and model metadata. Persistent browser file handles are never exported. Large exports report estimated size and attachment inclusion before creation.
+Complete transfer mode includes API credentials after an explicit confirmation so another personal device can operate immediately; a credential-free export mode omits secret values while preserving profile and model metadata. Persistent browser file handles are never exported. Large exports report estimated size and attachment inclusion before creation.
 
 Import reads the archive into an isolated representation, checks ZIP entry safety, checksums, export version, record schema, references, and blob metadata, then shows an import summary. Only after confirmation does it perform transactional replacement or ID-based merge. Merge preserves imported IDs when they do not conflict; unequal conflicts receive new IDs and all imported internal references, including checkpoint boundaries and source references, are remapped together. Replace clears domain stores only after validation succeeds.
 
-Persistence and import/export use the same versioned record DTOs and migration path. Export reads a committed `MobileChatDB` snapshot, converts records into archive DTOs, and records export options such as credential inclusion, attachment inclusion, estimated size, app version, and schema version. Import parses into isolated DTOs first, migrates them if necessary, validates references, then writes to `MobileChatDB` in a single replace or merge transaction. The last successful export timestamp is stored in `settings` and displayed in backup settings.
+Persistence and import/export use the same current record DTOs during rapid iteration. Export reads a committed `MobileChatDB` snapshot and records export options such as credential inclusion, attachment inclusion, estimated size, app version, and schema version. Import parses into isolated DTOs first, validates current-schema records and references, then writes to `MobileChatDB` in a single replace or merge transaction. Older record shapes are not translated in this phase; users may reconfigure local profiles and assistants after breaking changes. The last successful export timestamp is stored in `settings` and displayed in backup settings.
 
 Cross-device access is a manual export-transfer-import workflow through the phone or desktop file system, cloud drive, or another user-chosen transport. It does not imply account synchronization or a MobileChat server. A plain JSON diagnostic export may be offered separately, but `.mobilechat` is the normative complete-backup format.
 
 ### 13. Static deployment and verification
 
-Use GitHub Actions to build and publish the static artifact to GitHub Pages. Verification includes unit tests for adapters, migrations, context projection, budget reports, usage normalization, compaction thresholds, checkpoint validity, archive round trips, and search scope; component tests for conversation, diagnostics, and settings flows; and browser tests at representative phone viewport sizes.
+Use GitHub Actions to build and publish the static artifact to GitHub Pages. Verification includes unit tests for adapters, current-schema persistence, context projection, budget reports, usage normalization, compaction thresholds, checkpoint validity, archive round trips, and search scope; component tests for conversation, diagnostics, and settings flows; and browser tests at representative phone viewport sizes.
 
 ## Risks / Trade-offs
 
@@ -293,10 +297,10 @@ Use GitHub Actions to build and publish the static artifact to GitHub Pages. Ver
 ## Migration Plan
 
 1. Scaffold the typed PWA, tests, and GitHub Pages deployment without domain features.
-2. Introduce schema version 1 and seed no user records; this is a new application with no legacy database.
+2. Introduce schema version 1 and seed no user records; this is a new application with no previous production database.
 3. Implement features behind local development verification, then publish a Pages preview/build artifact.
 4. Validate installation, persistence, direct endpoint streaming, and IndexedDB behavior on Android Chrome and iOS Safari where available.
-5. Treat future database changes as forward-only migrations; rollback deploys the previous static build without deleting newer local records.
+5. Treat future database changes as forward-only schema revisions before stable release; rollback deploys the previous static build without deleting newer local records.
 
 ## Open Questions
 

@@ -3,11 +3,45 @@ export type Conversation = {
   title: string;
   summary: string;
   archived: boolean;
-  contextSummary?: string;
-  contextSummaryUpdatedAt?: string;
-  contextSummaryBoundaryMessageId?: string;
-  contextSummaryMessageCount?: number;
-  contextSummarySource?: MessageSourceSnapshot;
+  contextSummaries?: ContextSummaryRecord[];
+  activeContextSummaryId?: string;
+};
+
+export type ContextSummaryKind = "rolling" | "segment" | "merged";
+
+export type ContextSummaryStatus = "active" | "superseded";
+
+export type ContextSummaryFrameworkSection = {
+  id: string;
+  title: string;
+  instruction: string;
+  required: boolean;
+};
+
+export type ContextSummaryFramework = {
+  id: string;
+  name: string;
+  description: string;
+  schemaVersion: number;
+  sections: ContextSummaryFrameworkSection[];
+};
+
+export type ContextSummaryRecord = {
+  id: string;
+  kind: ContextSummaryKind;
+  status: ContextSummaryStatus;
+  schemaVersion: number;
+  text: string;
+  boundaryMessageId: string;
+  coveredMessageCount: number;
+  retainedRawMessageCount: number;
+  createdAt: string;
+  updatedAt: string;
+  previousSummaryId?: string;
+  source?: MessageSourceSnapshot;
+  frameworkId: string;
+  frameworkNameSnapshot: string;
+  frameworkSectionsSnapshot: ContextSummaryFrameworkSection[];
 };
 
 export type ResponseUsage = {
@@ -47,6 +81,11 @@ export type AssistantKind = "chat" | "utility";
 export type ThemeMode = "system" | "light" | "dark";
 export type LayoutMode = "auto" | "mobile" | "desktop";
 export type ApiProtocol = "openai-responses" | "openai-chat-completions";
+
+export type UtilityAssistantFeatureRefs = {
+  contextSummaryAssistantId: string;
+  contextCompressionAssistantId: string;
+};
 
 export type ModelDefinition = {
   id: string;
@@ -89,13 +128,6 @@ export type Assistant = {
   prompt: string;
   initialMessage: string;
   enabled: boolean;
-
-  /**
-   * Legacy v1 fields. They are kept optional so old IndexedDB records and
-   * archives can be migrated without losing the user's previous route choice.
-   */
-  apiProfileName?: string;
-  model?: string;
 };
 
 export type AssistantFieldKey =
@@ -121,6 +153,8 @@ export type AppSettings = {
   layoutMode: LayoutMode;
   streamingEnabled: boolean;
   debugEnabled: boolean;
+  utilityAssistantRefs: UtilityAssistantFeatureRefs;
+  contextSummaryFramework: ContextSummaryFramework;
   lastSuccessfulExportAt?: string;
   storagePersisted?: boolean | null;
   storageUsage?: number;
@@ -144,14 +178,66 @@ export type LocalDataSnapshot = {
 
 export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 
-export const DATABASE_SCHEMA_VERSION = 8;
+export const DATABASE_SCHEMA_VERSION = 9;
 
 export const DEFAULT_PROFILE_ID = "default-profile";
 export const DEFAULT_MODEL_ID = "default-model";
 export const CONTEXT_SUMMARY_ASSISTANT_ID = "context-summary-gpt54";
+export const CONTEXT_COMPRESSION_ASSISTANT_ID = "compact";
+export const DEFAULT_CONTEXT_SUMMARY_FRAMEWORK_ID = "default-context-summary";
 export const DEFAULT_MODEL_REF: ModelRef = {
   apiProfileId: DEFAULT_PROFILE_ID,
   modelId: DEFAULT_MODEL_ID,
+};
+
+export const defaultUtilityAssistantRefs: UtilityAssistantFeatureRefs = {
+  contextSummaryAssistantId: CONTEXT_SUMMARY_ASSISTANT_ID,
+  contextCompressionAssistantId: CONTEXT_COMPRESSION_ASSISTANT_ID,
+};
+
+export const defaultContextSummaryFramework: ContextSummaryFramework = {
+  id: DEFAULT_CONTEXT_SUMMARY_FRAMEWORK_ID,
+  name: "默认上下文总结框架",
+  description:
+    "用于单对话内继续上下文的结构化总结框架；后续可扩展为用户可编辑分类。",
+  schemaVersion: 1,
+  sections: [
+    {
+      id: "strict_memory",
+      title: "严格记忆",
+      instruction:
+        "只记录用户明确确认的需求、硬约束、长期偏好、必须遵守的规则和不可丢失结论。",
+      required: true,
+    },
+    {
+      id: "precise_facts",
+      title: "精确事实",
+      instruction:
+        "记录可精确引用的事实、字段、路径、版本、模型、配置、数值、角色属性和世界规则。禁止保存 API key 原文。",
+      required: false,
+    },
+    {
+      id: "fuzzy_memory",
+      title: "模糊记忆",
+      instruction:
+        "记录尚未完全确定但有助于理解方向的偏好、倾向、猜测和需要后续验证的背景。",
+      required: false,
+    },
+    {
+      id: "exploration_log",
+      title: "探索记录",
+      instruction:
+        "记录已尝试的方法、观察到的结果、失败原因和排除项，避免重复探索。",
+      required: true,
+    },
+    {
+      id: "current_state",
+      title: "当前状态",
+      instruction:
+        "记录已经完成的事项、当前阻塞点、下一步计划和待用户确认的问题。",
+      required: true,
+    },
+  ],
 };
 
 export const modelRefKey = (ref: ModelRef) =>
@@ -179,7 +265,7 @@ export const initialApiProfiles: ApiProfile[] = [
   {
     id: DEFAULT_PROFILE_ID,
     name: "默认连接",
-    description: "OpenAI-compatible Responses API 配置，请在本机设置页编辑。",
+    description: "",
     baseUrl: "",
     apiKey: "",
     protocol: "openai-responses",
@@ -188,7 +274,7 @@ export const initialApiProfiles: ApiProfile[] = [
       {
         id: DEFAULT_MODEL_ID,
         name: "默认模型",
-        description: "请编辑为你的中转站或模型服务支持的模型 ID。",
+        description: "",
         contextWindow: 128000,
         enabled: true,
       },
@@ -198,20 +284,20 @@ export const initialApiProfiles: ApiProfile[] = [
 
 export const defaultAssistant: Assistant = {
   id: "architect",
-  name: "架构助手",
-  description: "用于架构讨论、技术路线确认和上下文机制设计。",
+  name: "默认助手",
+  description: "",
   kind: "chat",
   modelBindings: [defaultBinding(true)],
-  prompt: "你是一个务实的软件架构助手，优先给出可落地的设计。",
-  initialMessage: "我会根据当前对话上下文协助推进实现。",
+  prompt: "",
+  initialMessage: "",
   enabled: true,
 };
 
 export const contextSummaryAssistant: Assistant = {
   id: CONTEXT_SUMMARY_ASSISTANT_ID,
-  name: "gpt-5.4 总结助手",
+  name: "上下文总结助手",
   description:
-    "测试用功能助手：为单个对话生成可继续使用的上下文总结，不参与普通聊天。",
+    "内置功能助手预设：为单个对话生成可继续使用的上下文总结，不参与普通聊天。",
   kind: "utility",
   modelBindings: [defaultBinding(true)],
   prompt:
@@ -222,72 +308,17 @@ export const contextSummaryAssistant: Assistant = {
 
 export const initialConversations: Conversation[] = [
   {
-    id: "local-context",
-    title: "本地上下文机制",
-    summary: "store:false、本地投影、checkpoint、cache estimate",
-    archived: false,
-  },
-  {
-    id: "mobile-preview",
-    title: "手机预览 contents",
-    summary: "文件选择、图片预览、权限差异",
-    archived: false,
-  },
-  {
-    id: "assistant-routes",
-    title: "助手与模型配置",
-    summary: "API profile、chat/utility assistant、模型绑定",
+    id: "initial-conversation",
+    title: "新对话 1",
+    summary: "",
     archived: false,
   },
 ];
 
-export const initialMessages: Message[] = [
-  {
-    id: "m1",
-    conversationId: "local-context",
-    role: "user",
-    label: "用户",
-    text: "放弃 store 方案，首版只使用本地上下文构建。",
-    createdAt: "2026-07-13T00:00:00.000Z",
-  },
-  {
-    id: "m2",
-    conversationId: "local-context",
-    role: "assistant",
-    label: "架构助手 · 默认模型",
-    text: "已切换为 store:false 基线。每次请求由本地 ContextProjection 构建，provider 返回的 ID 只保留为诊断字段。",
-    createdAt: "2026-07-13T00:00:01.000Z",
-  },
-  {
-    id: "m3",
-    conversationId: "local-context",
-    role: "user",
-    label: "用户",
-    text: "调试模式需要显示发送前 cache 估算和发送后 usage。",
-    createdAt: "2026-07-13T00:00:02.000Z",
-  },
-  {
-    id: "m4",
-    conversationId: "local-context",
-    role: "assistant",
-    label: "架构助手 · 默认模型",
-    text: "调试面板区分 estimate 和 observed：发送前显示 potentialCacheableRate，发送后显示 cachedInputTokens / inputTokens。",
-    createdAt: "2026-07-13T00:00:03.000Z",
-  },
-];
+export const initialMessages: Message[] = [];
 
 export const initialAssistants: Assistant[] = [
   defaultAssistant,
-  {
-    id: "research",
-    name: "研究助手",
-    description: "用于资料整理、方案比较和长问题拆解。",
-    kind: "chat",
-    modelBindings: [defaultBinding(true)],
-    prompt: "你是研究型助手，先澄清事实边界，再给出结论。",
-    initialMessage: "我可以帮助梳理资料和比较方案。",
-    enabled: true,
-  },
   {
     id: "compact",
     name: "压缩助手",
@@ -306,7 +337,7 @@ export const assistantFields: AssistantField[] = [
     key: "name",
     label: "助手名称",
     control: "text",
-    placeholder: "例如：架构助手",
+    placeholder: "例如：默认助手",
     helper: "显示在聊天页和消息来源快照中的名称。",
   },
   {
@@ -351,7 +382,7 @@ export const createInitialSettings = (
 ): AppSettings => ({
   id: "app",
   schemaVersion: DATABASE_SCHEMA_VERSION,
-  activeConversationId: "local-context",
+  activeConversationId: "initial-conversation",
   activeAssistantId: defaultAssistant.id,
   activeModelRef: DEFAULT_MODEL_REF,
   editingAssistantId: defaultAssistant.id,
@@ -359,6 +390,8 @@ export const createInitialSettings = (
   layoutMode: "auto",
   streamingEnabled: true,
   debugEnabled: true,
+  utilityAssistantRefs: defaultUtilityAssistantRefs,
+  contextSummaryFramework: defaultContextSummaryFramework,
   storagePersisted: null,
   updatedAt: now,
 });

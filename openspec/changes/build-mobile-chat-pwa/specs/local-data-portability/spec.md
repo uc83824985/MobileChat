@@ -9,7 +9,7 @@ The system SHALL use one versioned IndexedDB database named `MobileChatDB` as th
 
 #### Scenario: Upgrade local schema
 - **WHEN** application code requires a newer supported schema version
-- **THEN** it runs ordered migrations for `MobileChatDB` before exposing records to the UI
+- **THEN** rapid-iteration builds normalize records to the current schema and ignore obsolete fields instead of translating old configuration
 
 ### Requirement: Indexed local persistence
 The system SHALL persist API profiles, model definitions, assistants, conversations, messages, context checkpoints, display summaries, drafts, blobs, and application settings in browser-managed local storage using a versioned IndexedDB schema for structured records.
@@ -55,12 +55,13 @@ Conversation and message records SHALL remain readable and exportable without re
 - **WHEN** all assistants and API profiles are removed
 - **THEN** historical conversations and messages remain readable from their generic content and stored snapshots
 
-### Requirement: Versioned schema migration
-The system SHALL assign a schema version to persisted and exported data and SHALL run ordered, testable migrations before newer application code uses older records.
+### Requirement: Current-schema persistence during rapid iteration
+The system SHALL assign a schema version to persisted and exported data, but during the rapid-iteration phase it SHALL only guarantee current-schema records rather than maintaining ordered historical migrations.
 
 #### Scenario: Open data from an earlier schema
-- **WHEN** the application encounters a supported earlier schema version
-- **THEN** it migrates the data transactionally or leaves the original data intact and reports a recoverable migration failure
+- **WHEN** the application encounters data using fields that are no longer part of the current schema
+- **THEN** it ignores those obsolete fields instead of translating them into current configuration
+- **AND** the user may re-enter local configuration through Settings or import a current-schema archive
 
 ### Requirement: Portable compressed backup archive
 The system SHALL export a ZIP-compatible `.mobilechat` archive containing a versioned manifest, structured records, optional binary blob entries, and integrity checks required to restore the selected application state on another supported browser or device.
@@ -69,7 +70,7 @@ The system SHALL export a ZIP-compatible `.mobilechat` archive containing a vers
 - **WHEN** a user starts an export
 - **THEN** the archive is produced from committed `MobileChatDB` records using the same versioned record DTOs as local persistence, not from transient React state alone
 
-#### Scenario: Export a complete migration backup
+#### Scenario: Export a complete transfer backup
 - **WHEN** a user confirms a complete export including credentials and attachments
 - **THEN** the browser produces one `.mobilechat` file containing the required records, API credentials, attachment entries, and checksums without requiring a server
 
@@ -89,7 +90,7 @@ The system SHALL validate archive entry paths, checksums, export version, record
 
 #### Scenario: Import before local mutation
 - **WHEN** a user selects a `.mobilechat` archive
-- **THEN** the application parses, migrates, and validates the archive in isolation before opening a write transaction against `MobileChatDB`
+- **THEN** the application parses and validates current-schema records in isolation before opening a write transaction against `MobileChatDB`
 
 #### Scenario: Reject an invalid backup
 - **WHEN** a selected file has unsupported schema metadata or invalid required records
@@ -103,7 +104,7 @@ The system SHALL validate archive entry paths, checksums, export version, record
 - **WHEN** an imported record ID already exists locally with unequal content
 - **THEN** the system assigns a new local ID and consistently remaps every imported reference, including message parents, active leaves, checkpoint boundaries, assistant bindings, and blob references
 
-### Requirement: Manual cross-device migration
+### Requirement: Manual cross-device transfer
 The system SHALL support cross-device use through an explicit export-transfer-import workflow and SHALL NOT present this workflow as live synchronization.
 
 #### Scenario: Restore on a second phone

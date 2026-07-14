@@ -1,13 +1,23 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import "fake-indexeddb/auto";
+import { IDBFactory } from "fake-indexeddb";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { deleteMobileChatDb } from "./persistence/mobileChatDb";
 
 describe("App", () => {
   beforeEach(async () => {
+    cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.stubGlobal("indexedDB", new IDBFactory());
+    window.localStorage.clear();
     await deleteMobileChatDb();
   });
 
@@ -39,6 +49,18 @@ describe("App", () => {
     expect(screen.getByLabelText("调试诊断")).toBeInTheDocument();
   });
 
+  it("uses mirrored UI preferences before IndexedDB hydration", () => {
+    window.localStorage.setItem(
+      "mobilechat:ui-preferences",
+      JSON.stringify({ themeMode: "dark", layoutMode: "mobile" }),
+    );
+
+    render(<App />);
+
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(screen.getByRole("main")).toHaveClass("mobile-layout");
+  });
+
   it("edits the active conversation title from the chat header", () => {
     render(<App />);
 
@@ -57,7 +79,7 @@ describe("App", () => {
     configureApiProfile();
 
     fireEvent.click(screen.getByLabelText("新建对话"));
-    expect(screen.getAllByText("新对话 4")).toHaveLength(2);
+    expect(screen.getAllByText("新对话 2")).toHaveLength(2);
     expect(screen.getByText("开始一个新对话")).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("输入消息"), {
@@ -158,23 +180,23 @@ describe("App", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<App />);
-    configureApiProfile({ apiKey: "test-key" });
 
     expect(screen.getByText("显示总结")).toBeDisabled();
 
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       fireEvent.change(screen.getByPlaceholderText("输入消息"), {
         target: { value: `summary seed ${index}` },
       });
       fireEvent.click(screen.getByLabelText("发送"));
-      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(index + 1));
-      await waitFor(() =>
-        expect(screen.getAllByText("chat response")).toHaveLength(index + 1),
-      );
+      expect(
+        await screen.findByText(`summary seed ${index}`),
+      ).toBeInTheDocument();
     }
 
+    configureApiProfile({ apiKey: "test-key" });
+
     fireEvent.click(screen.getByText("总结上下文"));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await screen.findByText(/已总结/);
 
     expect(screen.getByText("显示总结")).toBeEnabled();
@@ -294,6 +316,39 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("流式输出"));
     expect(screen.getByLabelText("流式输出")).not.toBeChecked();
 
+    expect(screen.getByLabelText("上下文总结助手")).toHaveValue(
+      "context-summary-gpt54",
+    );
+    fireEvent.change(screen.getByLabelText("上下文总结助手"), {
+      target: { value: "compact" },
+    });
+    expect(screen.getByLabelText("上下文总结助手")).toHaveValue("compact");
+    expect(screen.getByLabelText("上下文压缩助手")).toHaveValue("compact");
+
+    expect(screen.getByLabelText("严格记忆系统描述")).toHaveValue(
+      "只记录用户明确确认的需求、硬约束、长期偏好、必须遵守的规则和不可丢失结论。",
+    );
+    fireEvent.change(screen.getByLabelText("严格记忆系统描述"), {
+      target: { value: "自定义严格记忆描述" },
+    });
+    expect(screen.getByLabelText("严格记忆系统描述")).toHaveValue(
+      "自定义严格记忆描述",
+    );
+    fireEvent.click(screen.getByLabelText("还原严格记忆默认描述"));
+    expect(screen.getByLabelText("严格记忆系统描述")).toHaveValue(
+      "只记录用户明确确认的需求、硬约束、长期偏好、必须遵守的规则和不可丢失结论。",
+    );
+    fireEvent.change(screen.getByLabelText("精确事实系统描述"), {
+      target: { value: "自定义精确事实描述" },
+    });
+    expect(screen.getByLabelText("精确事实系统描述")).toHaveValue(
+      "自定义精确事实描述",
+    );
+    fireEvent.click(screen.getByText("还原全部默认描述"));
+    expect(screen.getByLabelText("精确事实系统描述")).toHaveValue(
+      "记录可精确引用的事实、字段、路径、版本、模型、配置、数值、角色属性和世界规则。禁止保存 API key 原文。",
+    );
+
     expect(screen.getByLabelText("API Key")).toHaveAttribute(
       "type",
       "password",
@@ -361,9 +416,10 @@ describe("App", () => {
     fireEvent.click(screen.getByText("删除当前模型"));
     expect(screen.getByLabelText("模型名称")).toHaveValue("主模型");
 
-    fireEvent.change(screen.getByLabelText("设置中选择助手"), {
-      target: { value: "research" },
-    });
+    fireEvent.click(screen.getByText("新增"));
+    expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
+      "新助手 4",
+    );
     fireEvent.change(screen.getByLabelText("助手名称"), {
       target: { value: "移动助手" },
     });
@@ -371,7 +427,7 @@ describe("App", () => {
       target: { value: "移动端编辑后的 prompt" },
     });
 
-    expect(screen.getByLabelText("选择助手")).toHaveDisplayValue("架构助手");
+    expect(screen.getByLabelText("选择助手")).toHaveDisplayValue("移动助手");
     fireEvent.click(screen.getByText("设为当前"));
     expect(screen.getByLabelText("选择助手")).toHaveDisplayValue("移动助手");
     expect(screen.getByLabelText("初始 Prompt")).toHaveValue(
@@ -421,10 +477,10 @@ describe("App", () => {
     render(<App />);
 
     fireEvent.click(screen.getByLabelText("新建对话"));
-    expect(screen.getAllByText("新对话 4")).toHaveLength(2);
+    expect(screen.getAllByText("新对话 2")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
     expect(confirmSpy).toHaveBeenCalled();
-    expect(screen.queryByText("新对话 4")).not.toBeInTheDocument();
+    expect(screen.queryByText("新对话 2")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("新建对话"));
     fireEvent.click(screen.getByLabelText("编辑标题"));
@@ -451,11 +507,11 @@ describe("App", () => {
 
     fireEvent.click(screen.getByText("新增"));
     expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
-      "新助手 5",
+      "新助手 4",
     );
     fireEvent.click(screen.getByText("删除助手"));
     expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
-      "架构助手",
+      "默认助手",
     );
   });
 

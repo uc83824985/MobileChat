@@ -19,11 +19,25 @@ The system SHALL search historical conversations using only their user-defined t
 - **THEN** that conversation is not returned unless the query also matches its title or summary
 
 ### Requirement: Manual lightweight context summary
-The system SHALL support a lightweight per-conversation `ContextSummary` that is separate from immutable context compaction checkpoints and can replace older covered messages during request projection while preserving all canonical messages locally.
+The system SHALL support lightweight per-conversation `ContextSummary` records that are separate from immutable context compaction checkpoints and can replace older covered messages during request projection while preserving all canonical messages locally.
 
 #### Scenario: Generate a debug context summary
 - **WHEN** debug mode is enabled and the user invokes the manual context-summary action
-- **THEN** the system calls the configured utility summary assistant in the foreground, stores the resulting `contextSummary` with boundary, count, timestamp, and source snapshot metadata, and does not append a visible chat message
+- **THEN** the system calls the utility assistant referenced by the context-summary feature setting in the foreground, stores the resulting active rolling summary in `contextSummaries[]` with boundary, count, timestamp, framework snapshot, and source snapshot metadata, and does not append a visible chat message
+
+#### Scenario: Configure summary framework sections
+- **WHEN** the system calls a context-summary utility assistant
+- **THEN** the request includes the locally configured summary framework, including section names and instructions, so the assistant fills a stable structure rather than inventing categories
+- **AND** the default framework uses five orthogonal sections: strict memory, precise facts, fuzzy memory, exploration log, and current state
+
+#### Scenario: Override summary framework descriptions
+- **WHEN** the user edits a summary-framework section description in Settings
+- **THEN** future context-summary requests use the overridden description for that fixed section
+- **AND** the user can restore either that section or the full framework back to system defaults without changing section IDs, titles, or order
+
+#### Scenario: Configure feature assistant reference
+- **WHEN** the user changes the built-in context-summary assistant setting
+- **THEN** future manual summaries use that referenced enabled utility assistant instead of inferring behavior from utility kind alone
 
 #### Scenario: Preview the current summary
 - **WHEN** a valid `ContextSummary` exists and debug mode is enabled

@@ -42,9 +42,12 @@ import {
   type AssistantModelBinding,
   assistantFields,
   type Conversation,
+  type ContextSummaryFramework,
+  type ContextSummaryRecord,
   CONTEXT_SUMMARY_ASSISTANT_ID,
   createId,
   createInitialSnapshot,
+  defaultContextSummaryFramework,
   DEFAULT_MODEL_REF,
   defaultAssistant,
   type LocalDataSnapshot,
@@ -81,10 +84,50 @@ type ResolvedModel = {
   key: string;
 };
 
-const bootSnapshot = createInitialSnapshot();
+const UI_PREFERENCES_STORAGE_KEY = "mobilechat:ui-preferences";
 const AUTOSAVE_DELAY_MS = 400;
 const SCROLL_EDGE_THRESHOLD_PX = 12;
 const CONTEXT_SUMMARY_RAW_TAIL_MESSAGES = 8;
+
+const isThemeMode = (value: unknown): value is ThemeMode =>
+  value === "system" || value === "light" || value === "dark";
+
+const isLayoutMode = (value: unknown): value is LayoutMode =>
+  value === "auto" || value === "mobile" || value === "desktop";
+
+const readBootUiPreferences = ():
+  { themeMode?: ThemeMode; layoutMode?: LayoutMode } | undefined => {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { themeMode?: unknown; layoutMode?: unknown };
+    return {
+      themeMode: isThemeMode(parsed.themeMode) ? parsed.themeMode : undefined,
+      layoutMode: isLayoutMode(parsed.layoutMode)
+        ? parsed.layoutMode
+        : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+const createBootSnapshot = (): LocalDataSnapshot => {
+  const snapshot = createInitialSnapshot();
+  const uiPreferences = readBootUiPreferences();
+  return {
+    ...snapshot,
+    settings: {
+      ...snapshot.settings,
+      themeMode: uiPreferences?.themeMode ?? snapshot.settings.themeMode,
+      layoutMode: uiPreferences?.layoutMode ?? snapshot.settings.layoutMode,
+    },
+  };
+};
 
 const createEmptyApiProfile = (index: number): ApiProfile => ({
   id: createId("api-profile"),
@@ -315,14 +358,26 @@ const formatTranscriptMessage = (message: Message, index: number) => {
   }`;
 };
 
+const formatContextSummaryFramework = (framework: ContextSummaryFramework) =>
+  framework.sections
+    .map(
+      (section) =>
+        `## ${section.title}\n- sectionId: ${section.id}\n- required: ${
+          section.required ? "yes" : "no"
+        }\n- instruction: ${section.instruction}`,
+    )
+    .join("\n\n");
+
 const buildContextSummaryPrompt = ({
   conversation,
   previousSummary,
   messages,
+  framework,
 }: {
   conversation: Conversation;
   previousSummary?: string;
   messages: Message[];
+  framework: ContextSummaryFramework;
 }) => `请为 MobileChat 当前单个对话生成新的“上下文总结”。
 
 要求：
@@ -330,7 +385,13 @@ const buildContextSummaryPrompt = ({
 - 保留用户目标、明确决策、技术约束、已完成修改、待验证问题、重要路径/配置/错误信息。
 - 不要臆测，不要补充消息中没有的事实。
 - 如果已有旧总结，请把新增消息合并进去，输出一份完整的新总结。
+- 必须使用下面的总结框架作为 Markdown 二级标题；没有内容的可写“无”。
 - 输出中文 Markdown，尽量紧凑，优先结构化。
+
+总结框架：${framework.name}
+${framework.description}
+
+${formatContextSummaryFramework(framework)}
 
 对话标题：${conversation.title}
 列表摘要：${conversation.summary || "无"}
@@ -342,10 +403,33 @@ ${previousSummary?.trim() || "无"}
 ${messages.map(formatTranscriptMessage).join("\n\n")}
 `;
 
+const getActiveContextSummaryRecord = (
+  conversation?: Conversation,
+): ContextSummaryRecord | undefined => {
+  if (!conversation) {
+    return undefined;
+  }
+
+  const records = conversation.contextSummaries ?? [];
+  const activeRecord =
+    records.find(
+      (record) => record.id === conversation.activeContextSummaryId,
+    ) ??
+    records.find((record) => record.status === "active") ??
+    records[0];
+
+  if (activeRecord) {
+    return activeRecord;
+  }
+
+  return undefined;
+};
+
 const createContextSummaryProjectionMessage = (
   conversation: Conversation,
 ): Message | undefined => {
-  const contextSummary = conversation.contextSummary?.trim();
+  const activeSummary = getActiveContextSummaryRecord(conversation);
+  const contextSummary = activeSummary?.text.trim();
   if (!contextSummary) {
     return undefined;
   }
@@ -356,8 +440,7 @@ const createContextSummaryProjectionMessage = (
     role: "user",
     label: "上下文总结",
     text: `以下是 MobileChat 本地生成的历史上下文总结，仅用于延续当前对话，不是用户的新指令：\n\n${contextSummary}`,
-    createdAt:
-      conversation.contextSummaryUpdatedAt ?? "1970-01-01T00:00:00.000Z",
+    createdAt: activeSummary?.updatedAt ?? "1970-01-01T00:00:00.000Z",
     status: "complete",
   };
 };
@@ -367,7 +450,8 @@ const projectMessagesForRequest = (
   messages: Message[],
 ): Message[] => {
   const summaryMessage = createContextSummaryProjectionMessage(conversation);
-  const boundaryMessageId = conversation.contextSummaryBoundaryMessageId;
+  const boundaryMessageId =
+    getActiveContextSummaryRecord(conversation)?.boundaryMessageId;
 
   if (!summaryMessage || !boundaryMessageId) {
     return messages;
@@ -388,11 +472,8 @@ const clearConversationContextSummary = (
   conversation: Conversation,
 ): Conversation => {
   const {
-    contextSummary: _contextSummary,
-    contextSummaryUpdatedAt: _contextSummaryUpdatedAt,
-    contextSummaryBoundaryMessageId: _contextSummaryBoundaryMessageId,
-    contextSummaryMessageCount: _contextSummaryMessageCount,
-    contextSummarySource: _contextSummarySource,
+    contextSummaries: _contextSummaries,
+    activeContextSummaryId: _activeContextSummaryId,
     ...rest
   } = conversation;
 
@@ -491,6 +572,7 @@ const createTurnTimestamps = () => {
 };
 
 function App() {
+  const bootSnapshot = useMemo(() => createBootSnapshot(), []);
   const [apiProfiles, setApiProfiles] = useState<ApiProfile[]>(
     bootSnapshot.apiProfiles,
   );
@@ -527,6 +609,12 @@ function App() {
   );
   const [streamingEnabled, setStreamingEnabled] = useState(
     bootSnapshot.settings.streamingEnabled,
+  );
+  const [utilityAssistantRefs, setUtilityAssistantRefs] = useState(
+    bootSnapshot.settings.utilityAssistantRefs,
+  );
+  const [contextSummaryFramework, setContextSummaryFramework] = useState(
+    bootSnapshot.settings.contextSummaryFramework,
   );
   const [nextTurnWebSearchEnabled, setNextTurnWebSearchEnabled] =
     useState(false);
@@ -663,12 +751,18 @@ function App() {
     () =>
       assistants.find(
         (assistant) =>
+          assistant.id === utilityAssistantRefs.contextSummaryAssistantId &&
+          assistant.kind === "utility" &&
+          assistant.enabled,
+      ) ??
+      assistants.find(
+        (assistant) =>
           assistant.id === CONTEXT_SUMMARY_ASSISTANT_ID && assistant.enabled,
       ) ??
       assistants.find(
         (assistant) => assistant.kind === "utility" && assistant.enabled,
       ),
-    [assistants],
+    [assistants, utilityAssistantRefs.contextSummaryAssistantId],
   );
   const contextSummaryResolvedModel = useMemo(
     () =>
@@ -714,6 +808,10 @@ function App() {
   ]);
   const activeConversationReadOnly =
     showArchived || Boolean(activeConversation?.archived);
+  const activeContextSummary = useMemo(
+    () => getActiveContextSummaryRecord(activeConversation),
+    [activeConversation],
+  );
 
   const chatAssistantCount = assistants.filter(
     (assistant) => assistant.kind === "chat",
@@ -721,6 +819,10 @@ function App() {
   const utilityAssistantCount = assistants.filter(
     (assistant) => assistant.kind === "utility",
   ).length;
+  const utilityAssistants = useMemo(
+    () => assistants.filter((assistant) => assistant.kind === "utility"),
+    [assistants],
+  );
   const diagnostics = useMemo(
     () => [
       [
@@ -763,6 +865,8 @@ function App() {
       layoutMode,
       streamingEnabled,
       debugEnabled,
+      utilityAssistantRefs,
+      contextSummaryFramework,
       lastSuccessfulExportAt,
       storagePersisted: storageInfo.persisted,
       storageUsage: storageInfo.usage,
@@ -772,6 +876,7 @@ function App() {
       activeAssistantId,
       activeConversationId,
       activeModelRef,
+      contextSummaryFramework,
       debugEnabled,
       editingAssistantId,
       layoutMode,
@@ -781,6 +886,7 @@ function App() {
       storageInfo.quota,
       storageInfo.usage,
       themeMode,
+      utilityAssistantRefs,
     ],
   );
   const currentSnapshot = useMemo<LocalDataSnapshot>(
@@ -813,6 +919,8 @@ function App() {
     setLayoutMode(snapshot.settings.layoutMode);
     setStreamingEnabled(snapshot.settings.streamingEnabled);
     setDebugEnabled(snapshot.settings.debugEnabled);
+    setUtilityAssistantRefs(snapshot.settings.utilityAssistantRefs);
+    setContextSummaryFramework(snapshot.settings.contextSummaryFramework);
     setLastSuccessfulExportAt(snapshot.settings.lastSuccessfulExportAt);
     setStorageInfo({
       persisted: snapshot.settings.storagePersisted ?? null,
@@ -841,6 +949,15 @@ function App() {
 
   useEffect(() => {
     const root = document.documentElement;
+    try {
+      window.localStorage.setItem(
+        UI_PREFERENCES_STORAGE_KEY,
+        JSON.stringify({ themeMode, layoutMode }),
+      );
+    } catch {
+      // Ignore private-mode or quota errors; IndexedDB remains authoritative.
+    }
+
     if (themeMode === "system") {
       root.removeAttribute("data-theme");
       root.style.colorScheme = "light dark";
@@ -849,7 +966,7 @@ function App() {
 
     root.dataset.theme = themeMode;
     root.style.colorScheme = themeMode;
-  }, [themeMode]);
+  }, [layoutMode, themeMode]);
 
   useEffect(() => {
     updateScrollShortcutTarget();
@@ -1713,6 +1830,36 @@ function App() {
     }
   };
 
+  const updateContextSummaryFrameworkInstruction = (
+    sectionId: string,
+    instruction: string,
+  ) => {
+    setContextSummaryFramework((current) => ({
+      ...current,
+      sections: current.sections.map((section) =>
+        section.id === sectionId ? { ...section, instruction } : section,
+      ),
+    }));
+  };
+
+  const resetContextSummaryFrameworkInstruction = (sectionId: string) => {
+    const defaultSection = defaultContextSummaryFramework.sections.find(
+      (section) => section.id === sectionId,
+    );
+    if (!defaultSection) {
+      return;
+    }
+
+    updateContextSummaryFrameworkInstruction(
+      sectionId,
+      defaultSection.instruction,
+    );
+  };
+
+  const resetContextSummaryFramework = () => {
+    setContextSummaryFramework(defaultContextSummaryFramework);
+  };
+
   const deleteMessage = (messageId: string) => {
     const targetMessage = messages.find((message) => message.id === messageId);
     if (!targetMessage) {
@@ -1741,7 +1888,8 @@ function App() {
     );
     const boundaryIndex = conversationMessages.findIndex(
       (message) =>
-        message.id === targetConversation?.contextSummaryBoundaryMessageId,
+        message.id ===
+        getActiveContextSummaryRecord(targetConversation)?.boundaryMessageId,
     );
     const shouldClearContextSummary =
       boundaryIndex >= 0 && targetIndex >= 0 && targetIndex <= boundaryIndex;
@@ -1778,7 +1926,7 @@ function App() {
 
     if (!contextSummaryResolvedModel) {
       setContextSummaryStatus(
-        "总结助手没有可用模型。请在设置页为 gpt-5.4 总结助手绑定模型。",
+        "总结助手没有可用模型。请在设置页为当前上下文总结助手绑定模型。",
       );
       return;
     }
@@ -1797,11 +1945,10 @@ function App() {
     }
 
     const previousBoundaryIndex = summarizableMessages.findIndex(
-      (message) =>
-        message.id === activeConversation.contextSummaryBoundaryMessageId,
+      (message) => message.id === activeContextSummary?.boundaryMessageId,
     );
     const canReusePreviousSummary =
-      Boolean(activeConversation.contextSummary?.trim()) &&
+      Boolean(activeContextSummary?.text.trim()) &&
       previousBoundaryIndex >= 0 &&
       previousBoundaryIndex <= nextBoundaryIndex;
     const messagesToSummarize = summarizableMessages.slice(
@@ -1824,9 +1971,10 @@ function App() {
       text: buildContextSummaryPrompt({
         conversation: activeConversation,
         previousSummary: canReusePreviousSummary
-          ? activeConversation.contextSummary
+          ? activeContextSummary?.text
           : undefined,
         messages: messagesToSummarize,
+        framework: contextSummaryFramework,
       }),
       createdAt: now,
       status: "complete",
@@ -1863,17 +2011,31 @@ function App() {
         contextSummaryAssistant,
         contextSummaryResolvedModel,
       );
+      const summaryRecord: ContextSummaryRecord = {
+        id: createId("context-summary"),
+        kind: "rolling",
+        status: "active",
+        schemaVersion: contextSummaryFramework.schemaVersion,
+        text: contextSummary,
+        boundaryMessageId: boundaryMessage.id,
+        coveredMessageCount,
+        retainedRawMessageCount: retainedRawMessages,
+        createdAt: updatedAt,
+        updatedAt,
+        previousSummaryId: activeContextSummary?.id,
+        source,
+        frameworkId: contextSummaryFramework.id,
+        frameworkNameSnapshot: contextSummaryFramework.name,
+        frameworkSectionsSnapshot: contextSummaryFramework.sections,
+      };
 
       setConversations((current) =>
         current.map((conversation) =>
           conversation.id === activeConversation.id
             ? {
                 ...conversation,
-                contextSummary,
-                contextSummaryUpdatedAt: updatedAt,
-                contextSummaryBoundaryMessageId: boundaryMessage.id,
-                contextSummaryMessageCount: coveredMessageCount,
-                contextSummarySource: source,
+                contextSummaries: [summaryRecord],
+                activeContextSummaryId: summaryRecord.id,
               }
             : conversation,
         ),
@@ -2757,7 +2919,7 @@ function App() {
               </button>
               <button
                 type="button"
-                disabled={!activeConversation?.contextSummary?.trim()}
+                disabled={!activeContextSummary?.text.trim()}
                 onClick={() =>
                   setContextSummaryPreviewOpen((isOpen) => !isOpen)
                 }
@@ -2766,20 +2928,19 @@ function App() {
               </button>
               <span>
                 {contextSummaryStatus ||
-                  (activeConversation?.contextSummaryUpdatedAt
-                    ? `上下文总结：${activeConversation.contextSummaryMessageCount ?? 0} 条 · ${formatMessageTime(
-                        activeConversation.contextSummaryUpdatedAt,
+                  (activeContextSummary?.updatedAt
+                    ? `上下文总结：${activeContextSummary.coveredMessageCount} 条 · ${formatMessageTime(
+                        activeContextSummary.updatedAt,
                       )}`
                     : "上下文总结未生成")}
               </span>
             </div>
-            {contextSummaryPreviewOpen &&
-            activeConversation?.contextSummary?.trim() ? (
+            {contextSummaryPreviewOpen && activeContextSummary?.text.trim() ? (
               <pre
                 className="context-summary-preview"
                 aria-label="当前上下文总结"
               >
-                {activeConversation.contextSummary}
+                {activeContextSummary.text}
               </pre>
             ) : null}
           </section>
@@ -2971,6 +3132,112 @@ function App() {
               <div className="settings-row compact">
                 <span>功能助手</span>
                 <strong>{utilityAssistantCount}</strong>
+              </div>
+              <label className="settings-row compact theme-select">
+                <span>上下文总结助手</span>
+                <select
+                  aria-label="上下文总结助手"
+                  value={utilityAssistantRefs.contextSummaryAssistantId}
+                  onChange={(event) =>
+                    setUtilityAssistantRefs((current) => ({
+                      ...current,
+                      contextSummaryAssistantId: event.target.value,
+                    }))
+                  }
+                >
+                  {utilityAssistants.map((assistant) => (
+                    <option key={assistant.id} value={assistant.id}>
+                      {assistant.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="settings-row compact theme-select">
+                <span>上下文压缩助手</span>
+                <select
+                  aria-label="上下文压缩助手"
+                  value={utilityAssistantRefs.contextCompressionAssistantId}
+                  onChange={(event) =>
+                    setUtilityAssistantRefs((current) => ({
+                      ...current,
+                      contextCompressionAssistantId: event.target.value,
+                    }))
+                  }
+                >
+                  {utilityAssistants.map((assistant) => (
+                    <option key={assistant.id} value={assistant.id}>
+                      {assistant.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </section>
+
+            <section
+              className="summary-framework-panel"
+              aria-label="上下文总结框架"
+            >
+              <header>
+                <div>
+                  <p className="eyebrow">Context summary framework</p>
+                  <h3>上下文总结框架</h3>
+                </div>
+                <button type="button" onClick={resetContextSummaryFramework}>
+                  还原全部默认描述
+                </button>
+              </header>
+              <p className="summary-framework-note">
+                五个维度是固定基向量；这里只允许覆盖系统描述，用于引导总结助手正确分类。
+              </p>
+              <div className="summary-framework-grid">
+                {contextSummaryFramework.sections.map((section) => {
+                  const defaultSection =
+                    defaultContextSummaryFramework.sections.find(
+                      (candidate) => candidate.id === section.id,
+                    );
+                  const isDefaultInstruction =
+                    section.instruction === defaultSection?.instruction;
+
+                  return (
+                    <article
+                      className="summary-framework-card"
+                      key={section.id}
+                    >
+                      <div className="summary-framework-card-header">
+                        <div>
+                          <h4>{section.title}</h4>
+                          <span>
+                            {section.required ? "必填维度" : "按需填写"}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          aria-label={`还原${section.title}默认描述`}
+                          disabled={isDefaultInstruction}
+                          onClick={() =>
+                            resetContextSummaryFrameworkInstruction(section.id)
+                          }
+                        >
+                          还原默认
+                        </button>
+                      </div>
+                      <label>
+                        <span>系统描述</span>
+                        <textarea
+                          aria-label={`${section.title}系统描述`}
+                          rows={3}
+                          value={section.instruction}
+                          onChange={(event) =>
+                            updateContextSummaryFrameworkInstruction(
+                              section.id,
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </label>
+                    </article>
+                  );
+                })}
               </div>
             </section>
 

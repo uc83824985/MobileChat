@@ -43,14 +43,14 @@ Claude Messages API 更明确地采用无状态设计：每轮发送完整的会
 
 因此首版将该类 relay 的 provider continuation 默认标记为不支持。能力探测必须验证唯一内容的实际回忆，不能只检查 HTTP 成功、字段被接受或 Response ID 是否存在。
 
-仓库不再内置该中转站、模型 slug 或任何个人路由配置。此记录只保留为历史兼容性观察；模型 slug 的可用性以用户本机数据库中的实际配置和网关返回为准。
+仓库不再内置该中转站、模型 slug 或任何个人路由配置。此记录只保留为历史路由观察；模型 slug 的可用性以用户本机数据库中的实际配置和网关返回为准。
 
 ## 单对话 Memory 的含义
 
 MobileChat 首版中的 Memory 不是独立的跨会话数据库，而是以下三层：
 
 1. `messages`：完整、规范、不可因总结或压缩而删除的对话消息和分支关系。
-2. `ContextSummary`：由上下文总结助手生成、覆盖到某个消息边界的轻量继续上下文。
+2. `ContextSummary`：由上下文总结功能引用的 utility 助手生成、覆盖到某个消息边界的轻量继续上下文。
 3. recent raw tail：总结边界之后保留原文的近期消息。
 
 `ContextSummary` 和后续 `/compact` 风格 `ContextCheckpoint` 是两个机制。前者用于低成本地减少每次请求重复发送的旧消息；后者用于未来更严格的结构化压缩、校验、版本和不可变 checkpoint 管理。
@@ -91,7 +91,7 @@ MobileChatDB
 
 其中：
 
-- `meta`：数据库 schema 版本、迁移状态、应用版本兼容信息。
+- `meta`：数据库 schema 版本、应用版本和当前记录格式信息。
 - `settings`：当前助手、当前模型引用、当前对话、主题模式、流式输出开关、调试模式、存储持久化状态、最后成功导出时间等应用设置。
 - `apiProfiles`：API base URL、协议、凭据、模型列表和价格/上下文窗口元数据。模型是独立记录，不应只作为助手字段存在。
 - `assistants`：聊天助手和功能助手配置，包括 prompt、初始消息和模型绑定。助手引用已有 API Profile + model，并保存关键显示字段快照，避免模型或助手删除后消息来源完全丢失。
@@ -242,12 +242,22 @@ estimatedCacheReadHitRate =
 当前实现优先落地轻量 `ContextSummary`：
 
 - 调试模式下显示 **总结上下文** 手动入口。
-- 入口调用 `gpt-5.4 总结助手` 这类 `utility` 助手；该助手有自己的 prompt、模型绑定和来源快照。
+- 入口调用设置中 **上下文总结助手** 引用的 `utility` 助手；该助手有自己的 prompt、模型绑定和来源快照。`utility` kind 只表示助手不可作为聊天发言者，不能单独决定它用于总结、压缩还是其他功能。
 - 总结请求和输出不作为普通消息写入对话流，不刷新或追加前台消息，只在调试区域显示状态提示。
 - 调试模式下可以通过 **显示总结** 展开当前保存的 `contextSummary`，用于确认后续请求会引用的总结内容。
-- 成功后对话记录 `contextSummary`、`contextSummaryBoundaryMessageId`、`contextSummaryMessageCount`、`contextSummaryUpdatedAt` 和 `contextSummarySource`。
+- 成功后对话写入 `contextSummaries[]` 和 `activeContextSummaryId`。当前只维护一条 `rolling` active summary，但记录结构已保留 `kind`、`status`、`boundaryMessageId`、`coveredMessageCount`、`retainedRawMessageCount`、`framework` 快照、更新时间和来源快照，后续可扩展为多段 segment 和 merged summary。
 - 后续请求投影为：当前聊天助手 prompt + 轻量 `contextSummary` + 总结边界之后的原文 tail + 最新用户输入。
 - 如果删除了总结覆盖范围内的消息，应清除该对话的 `contextSummary`，避免引用过期语义。
+
+上下文总结框架由本地设置定义，并在调用总结助手时附加到 prompt。默认框架包含：
+
+- 严格记忆：用户明确确认、后续必须遵守的规则、限制、长期偏好和架构/业务决策。
+- 精确事实：可精确引用的事实、字段、路径、版本、模型、配置、数值、角色属性和世界规则；禁止保存 API key 原文。
+- 模糊记忆：有参考价值但未完全确认的偏好、倾向、假设和背景判断，不得当作硬规则执行。
+- 探索记录：已尝试方案、错误信息、观察结果、修复动作、验证结论和排除项。
+- 当前状态：当前进度、未提交状态、待办、阻塞点、下一步计划和待用户确认事项。
+
+这五个维度的 ID、标题和顺序作为系统级基向量固定；设置页只允许覆盖每个维度的系统描述，并提供单项还原和全部还原默认值。这样可以在保持总结输出结构稳定的同时，允许用户按自己的使用方式微调分类边界。
 
 自动总结暂不启用。后续触发条件可以是若干轮对话后、空闲一段时间后、单次长回复后，或发送前预算接近阈值时；这些触发仍应在前台执行，并避免打断用户阅读。
 
@@ -290,6 +300,8 @@ utility  为应用功能产生语义派生数据
 
 ## `.mobilechat` 跨设备迁移包
 
+快速迭代阶段不维护旧 schema 到新 schema 的完整迁移链。`MobileChatDB` 和 `.mobilechat` 导入均以当前记录结构为准；旧字段不会被翻译成当前配置。进入稳定版前再设计单向升级脚本和可恢复失败路径。
+
 规范格式是扩展名为 `.mobilechat` 的 ZIP-compatible 容器：
 
 ```text
@@ -317,7 +329,7 @@ MobileChatDB records
 → export DTO validation
 → records.json / blobs / checksums
 → isolated import parse
-→ import DTO migration + validation
+→ import current-schema DTO validation
 → MobileChatDB transaction replace or merge
 ```
 

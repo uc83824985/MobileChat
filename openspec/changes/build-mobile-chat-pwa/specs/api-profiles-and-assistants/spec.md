@@ -28,6 +28,10 @@ The system SHALL allow a user to create, edit, disable, and delete assistants co
 ### Requirement: Chat and utility assistant kinds
 The system SHALL classify assistants as `chat` or `utility`, and SHALL require each utility assistant to declare a supported semantic role such as `context-compression`.
 
+#### Scenario: Built-in features reference utility assistants
+- **WHEN** a built-in feature such as context summary or context compression needs a model call
+- **THEN** the feature SHALL use its configured utility-assistant reference and SHALL NOT infer the target solely from the assistant being marked `utility`
+
 #### Scenario: Keep a compression result out of the visible chat
 - **WHEN** a context-compression utility assistant successfully produces a checkpoint
 - **THEN** the result is stored as derived conversation state and the utility assistant is not displayed as a speaker in the conversation

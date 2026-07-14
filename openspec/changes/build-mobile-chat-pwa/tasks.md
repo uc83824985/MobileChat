@@ -10,7 +10,7 @@
 
 - 2026-07-13: Implemented a first persistence/config/API slice that is intentionally narrower than several full tasks below: normalized full-snapshot `MobileChatDB` save/load, credential-free `.mobilechat` import/export, light/dark/system theme setting, editable API Profiles with nested model definitions, assistant model bindings, chat-page assistant/model selectors, direct title editing, and a settings-toggleable `store:false` Responses request loop with SSE text-delta streaming.
 - 2026-07-13: Follow-up UI/API hardening added visible model-side cards for every configured model, archived-conversation browsing/search/restore, message retry/delete actions, cache-only post-send usage display, and JSON fallback when a `stream:true` relay returns a buffered non-SSE response.
-- 2026-07-13: Added model-level `webSearchEnabled` and Responses `web_search` tool emission for models that enable web access. Concrete relay URLs, API keys, and model slugs remain user-owned configuration and are not seeded by the repository.
+- 2026-07-13: Added an early model-level `webSearchEnabled` experiment and Responses `web_search` tool emission. Web search is now a composer-level single-turn option; concrete relay URLs, API keys, and model slugs remain user-owned configuration and are not seeded by the repository.
 - 2026-07-13: Completed first-pass delete flows for API Profiles, assistants, active conversations, and archived conversations. Provider errors now include non-secret route diagnostics: request URL, model ID, and web-search switch state.
 - 2026-07-13: Added an `openai-chat-completions` protocol option for relays/models that expose `/chat/completions` but not `/responses`; route diagnostics now include the selected protocol.
 - 2026-07-13: Recorded route-specific compatibility finding: a user-configured Grok route succeeded through Chat Completions after returning 404 on Responses. Added the user-message "重答" action to regenerate the assistant response from a chosen user message.
@@ -27,10 +27,10 @@
 
 - [ ] 2.1 Define versioned TypeScript domain types for API profiles, models, model pricing metadata, chat/utility assistants, bindings, conversations, messages, content parts, blobs, drafts, context checkpoints, display summaries, context budget reports, pre-send cache estimates, normalized usage stats, and settings
 - [ ] 2.2 Create the `MobileChatDB` IndexedDB database schema, including immutable context-checkpoint storage, typed repository interfaces, transactions, and store indexes
-- [ ] 2.3 Implement schema-version metadata and an ordered migration runner with rollback-safe failure handling
+- [ ] 2.3 Implement schema-version metadata and current-schema normalization for rapid iteration; design ordered migrations only before stable release
 - [ ] 2.4 Implement ID, timestamp, validation, and reference-resolution utilities shared by repositories and imports
 - [ ] 2.5 Implement conversation and message source-snapshot creation that excludes credentials and remains readable without live configuration
-- [ ] 2.6 Add repository tests for persistence, cascading conversation deletion, unresolved references, and migration failure recovery
+- [ ] 2.6 Add repository tests for persistence, cascading conversation deletion, unresolved references, and current-schema validation failure recovery
 - [ ] 2.7 Implement non-blocking autosave with dirty-record writes, save-status reporting, debounced text flushes, storage persistence requests, and quota/status diagnostics
 
 ## 3. API profiles and assistant configuration
@@ -96,7 +96,7 @@
 - [ ] 8.1 Define and document the ZIP-compatible `.mobilechat` archive layout, manifest version, record schema, checksums, and reference-integrity rules
 - [ ] 8.2 Implement complete local export for configuration, optional credentials, assistants, conversations, messages, checkpoints, settings, and binary blob entries
 - [ ] 8.3 Implement archive-size estimation, attachment selection, credential inclusion confirmation, and last-successful-export tracking
-- [ ] 8.4 Implement isolated ZIP parsing with entry-path safety, checksum verification, schema migration, validation, and an import-summary preview before local mutation
+- [ ] 8.4 Implement isolated ZIP parsing with entry-path safety, checksum verification, current-schema validation, and an import-summary preview before local mutation
 - [ ] 8.5 Implement transactional replace import and ID-remapped merge import with complete internal reference rewriting
 - [ ] 8.6 Add storage quota, transaction failure, corrupt archive, checksum mismatch, unsupported version, and browser eviction guidance to user-facing error flows
 - [ ] 8.7 Add cross-browser round-trip, merge-conflict, invalid-archive, credential-free, blob-integrity, and failed-replacement tests that prove existing data is preserved on failure
@@ -109,4 +109,4 @@
 - [ ] 9.4 Verify keyboard, screen-reader labels, focus handling, reduced motion, touch targets, drawers, dialogs, and streaming announcements
 - [ ] 9.5 Verify installability, offline reading, service-worker updates, IndexedDB persistence, and local content preview on supported desktop and mobile browsers
 - [ ] 9.6 Perform a real direct-endpoint smoke test for Responses streaming, usage fields, cache metric availability, and local stateless context behavior, documenting relay-specific compatibility observations separately from model-route failures
-- [ ] 9.7 Write README instructions for local development, GitHub Pages deployment, first-run API configuration, same-conversation memory and compaction, debug diagnostics, `.mobilechat` cross-device migration, supported protocol, and known mobile file limitations
+- [ ] 9.7 Write README instructions for local development, GitHub Pages deployment, first-run API configuration, same-conversation memory and compaction, debug diagnostics, `.mobilechat` cross-device transfer, supported protocol, and known mobile file limitations

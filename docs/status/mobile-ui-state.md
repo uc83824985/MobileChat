@@ -10,6 +10,7 @@ Date: 2026-07-14
 - The app has OpenAI-compatible Responses and Chat Completions request loops. Responses sends `POST {baseUrl}/responses` using `store:false` and omits optional `metadata` for wider relay compatibility; Chat Completions sends `POST {baseUrl}/chat/completions`. Without an API key it shows a local configuration error. Streaming mode uses SSE text deltas when the gateway truly streams; if a `stream:true` request is buffered into JSON, the client falls back to one-shot JSON parsing.
 - Mobile browser compatibility is covered by responsive CSS plus Playwright Mobile Chrome checks. The default mobile layout keeps the side conversation rail as a drawer, collapses settings/detail grids to one column, and preserves the same application logic as desktop.
 - A persisted "布局模式" display setting supports `auto`, `mobile`, and `desktop`. `auto` follows viewport width, `mobile` forces drawer/single-column layout, and `desktop` forces the desktop layout structure. This is layout-only and does not change conversation state, local persistence, request construction, or provider protocol behavior.
+- Theme and layout still persist in `MobileChatDB`, but the app also mirrors those two paint-critical UI preferences to `localStorage` and applies theme in a small head boot script. This avoids a first-paint light/dark flash while keeping IndexedDB authoritative for domain data.
 - Route compatibility is protocol-specific. A user-configured Grok route was observed to fail with 404 on Responses while succeeding on Chat Completions, so each API Profile must preserve the selected protocol instead of assuming one relay-wide default.
 - Web access is protocol-specific and turn-scoped: Responses sends `tools: [{ type: "web_search" }]`; Chat Completions sends `web_search_options: {}` only when the composer's current-turn web option is enabled.
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
@@ -30,7 +31,9 @@ Date: 2026-07-14
 - Dark mode styles native select options and applies `color-scheme: dark` to avoid white dropdown backgrounds with pale text.
 - The assistant details panel is schema-rendered from `assistantFields`, so newly added assistants use the same reflected editor instead of a special hard-coded page.
 - API Key editing uses an app-owned persistent show/hide button instead of relying on browser-specific password-field eye icons.
-- Debug mode exposes a manual **总结上下文** action and a **显示总结** preview. Summary generation calls the configured `gpt-5.4 总结助手` utility assistant, stores the generated `contextSummary` on the conversation, and keeps the visible message thread unchanged except for a small debug status hint.
+- Debug mode exposes a manual **总结上下文** action and a **显示总结** preview. Summary generation calls the configured context-summary utility assistant, stores the generated active rolling summary on the conversation, and keeps the visible message thread unchanged except for a small debug status hint.
+- Settings has explicit built-in feature references for **上下文总结助手** and **上下文压缩助手**. The utility kind only makes an assistant eligible; feature settings decide which utility assistant is used by each built-in operation.
+- Settings exposes the fixed five-section context-summary framework. Users can override each section's system description, restore one section, or restore all default descriptions; section IDs and titles remain app-defined.
 
 ## API Profile and model configuration
 
@@ -48,8 +51,7 @@ Date: 2026-07-14
   - optional context window;
   - enabled flag.
 - The API Profile editor shows the full model list as selectable model cards, so every model visible in assistant model access can be traced back to a model-side configuration record.
-- Assistants no longer own raw `apiProfileName` / `model` fields as the active configuration path. They own model bindings that reference existing API Profile + model records, with snapshots of key display fields for provenance.
-- Legacy assistant records containing `apiProfileName` / `model` are migrated into model bindings on load/import.
+- Assistants own model bindings that reference existing API Profile + model records, with snapshots of key display fields for provenance.
 
 ## User-owned connection configuration
 
@@ -63,8 +65,9 @@ Date: 2026-07-14
 ## Persistence and import/export
 
 - `MobileChatDB` stores settings, API profiles, assistants, conversations, messages, and reserved stores for drafts/checkpoints/blobs.
-- Messages now store `createdAt`, assistant `completedAt`, and assistant `elapsedMs` where available. They are rendered chronologically by creation time, while completed assistant responses show finish time and request duration. Legacy generated message IDs are migrated into timestamps where possible, preventing IndexedDB key ordering from grouping `assistant-*` records before `message-*` records after reload.
-- Conversations may store a lightweight `contextSummary` with boundary message ID, covered message count, update time, and summary-assistant/model source snapshot. This is separate from the future immutable `ContextCheckpoint` / compact flow.
+- Messages now store `createdAt`, assistant `completedAt`, and assistant `elapsedMs` where available. They are rendered chronologically by creation time, while completed assistant responses show finish time and request duration.
+- Conversations may store `contextSummaries[]` plus `activeContextSummaryId`. The current implementation still manages one active rolling summary, but each record already keeps kind, status, boundary message ID, covered message count, retained raw tail count, framework snapshot, update time, and summary-assistant/model source snapshot.
+- During rapid iteration, persistence accepts only the current MobileChatDB record shape. Older fields are not translated into current configuration; users may reconfigure local profiles/assistants if a breaking schema change lands before the stable version.
 - UI edits update memory immediately and are autosaved after a short debounce. Settings close and page visibility changes flush the latest snapshot.
 - Settings persist the selected theme and whether Responses streaming is enabled.
 - The current implementation persists normalized full snapshots. This is acceptable for the current small prototype; future large histories should move to dirty-record writes as specified in the architecture document.

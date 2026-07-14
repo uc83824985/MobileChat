@@ -2,15 +2,16 @@ import {
   type ApiProfile,
   type AppSettings,
   type Assistant,
-  type AssistantModelBinding,
   type Conversation,
+  type ContextSummaryFramework,
   createInitialSnapshot,
   DATABASE_SCHEMA_VERSION,
+  defaultContextSummaryFramework,
+  defaultUtilityAssistantRefs,
   DEFAULT_MODEL_REF,
   initialApiProfiles,
   type LocalDataSnapshot,
   type Message,
-  type ModelDefinition,
   type ModelRef,
   type StorageInfo,
 } from "../domain";
@@ -31,29 +32,17 @@ const STORES = [
 ] as const;
 
 type StoreName = (typeof STORES)[number];
-type LegacyAssistant = Assistant & {
-  apiProfileName?: string;
-  model?: string;
-};
-type LegacyMessage = Omit<Message, "createdAt"> & {
-  createdAt?: string;
-};
-type LegacySettings = Partial<AppSettings> & {
-  activeModelRef?: ModelRef;
-  themeMode?: AppSettings["themeMode"];
-  desktopLayoutEnabled?: boolean;
-  streamingEnabled?: boolean;
-};
-type LegacyModelDefinition = ModelDefinition & {
-  webSearchEnabled?: unknown;
+type PartialSettings = Partial<AppSettings> & {
+  contextSummaryFramework?: Partial<ContextSummaryFramework>;
 };
 type SnapshotInput = Omit<
   Partial<LocalDataSnapshot>,
-  "settings" | "assistants" | "messages"
+  "settings" | "assistants" | "conversations" | "messages"
 > & {
-  settings?: LegacySettings;
-  assistants?: LegacyAssistant[];
-  messages?: LegacyMessage[];
+  settings?: PartialSettings;
+  assistants?: Assistant[];
+  conversations?: Conversation[];
+  messages?: Message[];
 };
 
 const requestToPromise = <T>(request: IDBRequest<T>): Promise<T> =>
@@ -126,19 +115,38 @@ const replaceAll = <T>(store: IDBObjectStore, records: T[]) => {
 
 const cloneInitialApiProfiles = (): ApiProfile[] =>
   initialApiProfiles.map((profile) => ({
-    ...profile,
-    models: profile.models.map((model) => normalizeModel(model)),
+    id: profile.id,
+    name: profile.name,
+    description: profile.description,
+    baseUrl: profile.baseUrl,
+    apiKey: profile.apiKey,
+    protocol: profile.protocol,
+    enabled: profile.enabled,
+    models: profile.models.map((model) => ({
+      id: model.id,
+      name: model.name,
+      description: model.description,
+      contextWindow: model.contextWindow,
+      enabled: model.enabled,
+    })),
   }));
 
-const normalizeModel = (model: LegacyModelDefinition): ModelDefinition => {
-  const { webSearchEnabled: _legacyWebSearchEnabled, ...normalized } = model;
-  return normalized;
-};
-
-const normalizeApiProfiles = (apiProfiles: ApiProfile[]): ApiProfile[] =>
+const cloneApiProfiles = (apiProfiles: ApiProfile[]): ApiProfile[] =>
   apiProfiles.map((profile) => ({
-    ...profile,
-    models: profile.models.map((model) => normalizeModel(model)),
+    id: profile.id,
+    name: profile.name,
+    description: profile.description,
+    baseUrl: profile.baseUrl,
+    apiKey: profile.apiKey,
+    protocol: profile.protocol,
+    enabled: profile.enabled,
+    models: profile.models.map((model) => ({
+      id: model.id,
+      name: model.name,
+      description: model.description,
+      contextWindow: model.contextWindow,
+      enabled: model.enabled,
+    })),
   }));
 
 const findModelInProfiles = (apiProfiles: ApiProfile[], ref: ModelRef) => {
@@ -151,53 +159,20 @@ const findModelInProfiles = (apiProfiles: ApiProfile[], ref: ModelRef) => {
   return { apiProfile, model };
 };
 
-const bindingFromRef = (
-  apiProfiles: ApiProfile[],
-  ref: ModelRef,
-  isDefault: boolean,
-): AssistantModelBinding => {
-  const { apiProfile, model } = findModelInProfiles(apiProfiles, ref);
-  return {
-    apiProfileId: ref.apiProfileId,
-    modelId: ref.modelId,
-    enabled: true,
-    isDefault,
-    apiProfileNameSnapshot: apiProfile?.name ?? ref.apiProfileId,
-    modelNameSnapshot: model?.name ?? ref.modelId,
-    modelDescriptionSnapshot: model?.description ?? "",
-  };
-};
-
-const migrateAssistant = (
-  assistant: LegacyAssistant,
+const normalizeAssistant = (
+  assistant: Assistant,
   apiProfiles: ApiProfile[],
 ): Assistant => {
-  const migratedBindings =
-    Array.isArray(assistant.modelBindings) && assistant.modelBindings.length > 0
-      ? assistant.modelBindings
-      : [
-          bindingFromRef(
-            apiProfiles,
-            {
-              apiProfileId:
-                apiProfiles.find(
-                  (profile) =>
-                    profile.name === assistant.apiProfileName ||
-                    profile.id === assistant.apiProfileName,
-                )?.id ?? DEFAULT_MODEL_REF.apiProfileId,
-              modelId: assistant.model ?? DEFAULT_MODEL_REF.modelId,
-            },
-            true,
-          ),
-        ];
-
-  const hasDefault = migratedBindings.some((binding) => binding.isDefault);
+  const modelBindings = Array.isArray(assistant.modelBindings)
+    ? assistant.modelBindings
+    : [];
+  const hasDefault = modelBindings.some((binding) => binding.isDefault);
   return {
     id: assistant.id,
     name: assistant.name,
     description: assistant.description ?? "",
     kind: assistant.kind ?? "chat",
-    modelBindings: migratedBindings.map((binding, index) => {
+    modelBindings: modelBindings.map((binding, index) => {
       const { apiProfile, model } = findModelInProfiles(apiProfiles, binding);
       return {
         apiProfileId: binding.apiProfileId,
@@ -220,47 +195,61 @@ const migrateAssistant = (
   };
 };
 
-const parseCreatedAtFromMessageId = (
-  messageId: string,
-  fallbackIndex: number,
-): string => {
-  const timestampPart = messageId.split("-")[1];
-  const timestamp = timestampPart ? Number.parseInt(timestampPart, 36) : NaN;
-
-  if (Number.isFinite(timestamp) && timestamp > 0) {
-    return new Date(timestamp).toISOString();
-  }
-
-  return new Date(Date.UTC(2026, 6, 13, 0, 0, 0, fallbackIndex)).toISOString();
-};
-
-const migrateMessages = (messages: LegacyMessage[]): Message[] =>
-  messages.map((message, index) => ({
+const normalizeMessages = (messages: Message[], now: string): Message[] =>
+  messages.map((message) => ({
     ...message,
-    createdAt:
-      message.createdAt ?? parseCreatedAtFromMessageId(message.id, index),
+    createdAt: message.createdAt ?? now,
   }));
 
-const appendMissingInitialAssistants = (
-  assistants: Assistant[],
-  initialAssistants: Assistant[],
-  apiProfiles: ApiProfile[],
-): Assistant[] => {
-  const existingIds = new Set(assistants.map((assistant) => assistant.id));
-  const missingInitialAssistants = initialAssistants.filter(
-    (assistant) => !existingIds.has(assistant.id),
+const normalizeContextSummaryFramework = (
+  framework?: Partial<ContextSummaryFramework>,
+): ContextSummaryFramework => {
+  const incomingSections = Array.isArray(framework?.sections)
+    ? framework.sections
+    : [];
+
+  return {
+    ...defaultContextSummaryFramework,
+    sections: defaultContextSummaryFramework.sections.map((defaultSection) => {
+      const incomingSection = incomingSections.find(
+        (section) => section.id === defaultSection.id,
+      );
+      return {
+        ...defaultSection,
+        instruction:
+          typeof incomingSection?.instruction === "string"
+            ? incomingSection.instruction
+            : defaultSection.instruction,
+      };
+    }),
+  };
+};
+
+const normalizeConversation = (conversation: Conversation): Conversation => {
+  const contextSummaries =
+    Array.isArray(conversation.contextSummaries) &&
+    conversation.contextSummaries.length > 0
+      ? conversation.contextSummaries
+      : [];
+  const activeContextSummaryId =
+    conversation.activeContextSummaryId ??
+    contextSummaries.find((summary) => summary.status === "active")?.id ??
+    contextSummaries[0]?.id;
+  const hasActiveSummary = contextSummaries.some(
+    (summary) => summary.id === activeContextSummaryId,
   );
 
-  if (missingInitialAssistants.length === 0) {
-    return assistants;
-  }
-
-  return [
-    ...assistants,
-    ...missingInitialAssistants.map((assistant) =>
-      migrateAssistant(assistant, apiProfiles),
-    ),
-  ];
+  return {
+    id: conversation.id,
+    title: conversation.title,
+    summary: conversation.summary,
+    archived: conversation.archived,
+    contextSummaries:
+      contextSummaries.length > 0 ? contextSummaries : undefined,
+    activeContextSummaryId: hasActiveSummary
+      ? activeContextSummaryId
+      : undefined,
+  };
 };
 
 export const normalizeSnapshot = (
@@ -268,35 +257,22 @@ export const normalizeSnapshot = (
 ): LocalDataSnapshot => {
   const initialSnapshot = createInitialSnapshot();
   const now = new Date().toISOString();
-  const apiProfiles =
-    snapshot.apiProfiles && snapshot.apiProfiles.length > 0
-      ? normalizeApiProfiles(snapshot.apiProfiles)
-      : cloneInitialApiProfiles();
-  const settings: LegacySettings = snapshot.settings ?? {};
-  const shouldAppendInitialAssistants =
-    (settings.schemaVersion ?? 0) < DATABASE_SCHEMA_VERSION;
-  const migratedAssistants =
-    snapshot.assistants && snapshot.assistants.length > 0
-      ? snapshot.assistants.map((assistant) =>
-          migrateAssistant(assistant, apiProfiles),
-        )
-      : initialSnapshot.assistants;
-  const assistants =
-    snapshot.assistants &&
-    snapshot.assistants.length > 0 &&
-    shouldAppendInitialAssistants
-      ? appendMissingInitialAssistants(
-          migratedAssistants,
-          initialSnapshot.assistants,
-          apiProfiles,
-        )
-      : migratedAssistants;
-  const conversations =
-    snapshot.conversations && snapshot.conversations.length > 0
-      ? snapshot.conversations
-      : initialSnapshot.conversations;
+  const apiProfiles = snapshot.apiProfiles
+    ? cloneApiProfiles(snapshot.apiProfiles)
+    : cloneInitialApiProfiles();
+  const settings: PartialSettings = snapshot.settings ?? {};
+  const assistants = snapshot.assistants
+    ? snapshot.assistants.map((assistant) =>
+        normalizeAssistant(assistant, apiProfiles),
+      )
+    : initialSnapshot.assistants;
+  const conversations = snapshot.conversations
+    ? snapshot.conversations.map((conversation) =>
+        normalizeConversation(conversation),
+      )
+    : initialSnapshot.conversations;
   const messages = snapshot.messages
-    ? migrateMessages(snapshot.messages)
+    ? normalizeMessages(snapshot.messages, now)
     : initialSnapshot.messages;
   const firstConversation = conversations.find(
     (conversation) => !conversation.archived,
@@ -322,17 +298,18 @@ export const normalizeSnapshot = (
         firstAssistant?.id ??
         initialSnapshot.settings.editingAssistantId,
       themeMode: settings.themeMode ?? "system",
-      layoutMode:
-        settings.layoutMode ??
-        (typeof settings.desktopLayoutEnabled === "boolean"
-          ? settings.desktopLayoutEnabled
-            ? "desktop"
-            : "mobile"
-          : initialSnapshot.settings.layoutMode),
+      layoutMode: settings.layoutMode ?? initialSnapshot.settings.layoutMode,
       streamingEnabled:
         settings.streamingEnabled ?? initialSnapshot.settings.streamingEnabled,
       debugEnabled:
         settings.debugEnabled ?? initialSnapshot.settings.debugEnabled,
+      utilityAssistantRefs: {
+        ...defaultUtilityAssistantRefs,
+        ...settings.utilityAssistantRefs,
+      },
+      contextSummaryFramework: normalizeContextSummaryFramework(
+        settings.contextSummaryFramework,
+      ),
       lastSuccessfulExportAt: settings.lastSuccessfulExportAt,
       storagePersisted: settings.storagePersisted ?? null,
       storageUsage: settings.storageUsage,
@@ -412,16 +389,16 @@ export const loadSnapshot = async (): Promise<LocalDataSnapshot> => {
 
   const [settings, apiProfiles, assistants, conversations, messages] =
     await Promise.all([
-      requestToPromise<LegacySettings | undefined>(settingsRequest),
+      requestToPromise<PartialSettings | undefined>(settingsRequest),
       requestToPromise<ApiProfile[]>(apiProfilesRequest),
-      requestToPromise<LegacyAssistant[]>(assistantsRequest),
+      requestToPromise<Assistant[]>(assistantsRequest),
       requestToPromise<Conversation[]>(conversationsRequest),
-      requestToPromise<LegacyMessage[]>(messagesRequest),
+      requestToPromise<Message[]>(messagesRequest),
     ]);
   await transactionDone(transaction);
   db.close();
 
-  if (!settings || assistants.length === 0 || conversations.length === 0) {
+  if (!settings) {
     const initialSnapshot = createInitialSnapshot();
     await replaceSnapshot(initialSnapshot);
     return initialSnapshot;

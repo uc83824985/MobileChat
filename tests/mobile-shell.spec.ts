@@ -58,7 +58,7 @@ test("supports basic mobile interactions, title editing, and model switching", a
     await expect(page.locator(".conversation-rail")).toHaveClass(/open/);
     await page.getByLabel("关闭对话列表").click({ force: true });
     await expect(page.locator(".conversation-rail")).not.toHaveClass(/open/);
-    await expect(page.getByLabel("回到消息底部")).toBeVisible();
+    await expect(page.getByLabel(/回到消息(顶部|底部)/)).toBeVisible();
   }
 
   await page.getByLabel("编辑标题").click();
@@ -66,8 +66,8 @@ test("supports basic mobile interactions, title editing, and model switching", a
   await page.getByLabel("保存标题").click();
   await expect(page.getByText("手机标题")).toHaveCount(2);
 
-  await page.getByLabel("选择助手").selectOption("research");
-  await expect(page.getByLabel("选择助手")).toHaveValue("research");
+  await page.getByLabel("选择助手").selectOption("architect");
+  await expect(page.getByLabel("选择助手")).toHaveValue("architect");
   await expect(page.getByLabel("选择模型")).toHaveValue(
     "default-profile::default-model",
   );
@@ -80,7 +80,7 @@ test("supports basic mobile interactions, title editing, and model switching", a
   await openSettings(page);
   await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
   await expect(page.getByText("API Profiles")).toBeVisible();
-  await expect(page.getByLabel("设置中选择助手")).toHaveValue("research");
+  await expect(page.getByLabel("设置中选择助手")).toHaveValue("architect");
 
   await page.getByLabel("主题模式").selectOption("light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
@@ -88,9 +88,9 @@ test("supports basic mobile interactions, title editing, and model switching", a
   await page.getByLabel("流式输出").uncheck({ force: true });
   await expect(page.getByLabel("流式输出")).not.toBeChecked();
 
-  await page.getByLabel("助手名称").fill("手机研究助手");
+  await page.getByLabel("助手名称").fill("手机默认助手");
   await page.getByLabel("初始 Prompt").fill("手机端可编辑当前助手 prompt。");
-  await expect(page.getByLabel("助手名称")).toHaveValue("手机研究助手");
+  await expect(page.getByLabel("助手名称")).toHaveValue("手机默认助手");
   await expect(page.getByLabel("初始 Prompt")).toHaveValue(
     "手机端可编辑当前助手 prompt。",
   );

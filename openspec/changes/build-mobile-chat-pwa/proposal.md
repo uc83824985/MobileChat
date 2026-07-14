@@ -18,7 +18,7 @@ MobileChat needs a phone-first, one-tap chat experience that can talk directly t
 - Add in-conversation message search and history search limited to user-editable titles and generated summaries.
 - Add configurable foreground context compaction that references a utility assistant, can run after turn or estimated-token thresholds, and can be manually invoked in a `/compact`-style flow without deleting visible history.
 - Add extensible message `contents` suitable for future multimodal input, with first-pass local content selection and preview; editing remains experimental pending mobile permission testing.
-- Add local import/export and schema migration foundations, centered on a versioned compressed `.mobilechat` archive, so complete local state can be moved manually across devices and reused across application and assistant iterations.
+- Add local import/export foundations, centered on a versioned compressed `.mobilechat` archive, so complete local state can be moved manually across devices and reused across application and assistant iterations. During rapid iteration, older app schemas may require reconfiguration instead of automatic migration.
 
 ## Capabilities
 
@@ -29,7 +29,7 @@ MobileChat needs a phone-first, one-tap chat experience that can talk directly t
 - `conversations-and-messages`: Chat presentation, streaming Responses API interaction, shared context, source snapshots, and complete conversation lifecycle management.
 - `conversation-search-and-summaries`: Current-conversation message search, title/summary history search, editable titles, and configurable single-conversation context compaction through a utility assistant.
 - `extensible-message-contents`: Versioned content-part storage and preview behavior for text and future multimodal message contents.
-- `local-data-portability`: Indexed local persistence, schema migrations, compressed backup archive export/import, manual cross-device transfer, and assistant-independent data retention.
+- `local-data-portability`: Indexed local persistence, current-schema validation, compressed backup archive export/import, manual cross-device transfer, and assistant-independent data retention.
 
 ### Modified Capabilities
 

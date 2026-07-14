@@ -9,6 +9,23 @@
       content="MobileChat local-first mobile chat client"
     />
     <meta name="theme-color" content="#f7f7f2" />
+    <script>
+      (() => {
+        try {
+          const raw = localStorage.getItem("mobilechat:ui-preferences");
+          const preferences = raw ? JSON.parse(raw) : {};
+          const themeMode = preferences.themeMode;
+          if (themeMode === "light" || themeMode === "dark") {
+            document.documentElement.dataset.theme = themeMode;
+            document.documentElement.style.colorScheme = themeMode;
+          } else {
+            document.documentElement.style.colorScheme = "light dark";
+          }
+        } catch {
+          document.documentElement.style.colorScheme = "light dark";
+        }
+      })();
+    </script>
     <title>MobileChat</title>
   </head>
   <body>

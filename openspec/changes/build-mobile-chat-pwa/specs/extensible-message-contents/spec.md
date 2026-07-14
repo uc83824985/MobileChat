@@ -5,7 +5,7 @@ The system SHALL store message bodies as an ordered, versioned array of typed co
 
 #### Scenario: Store a text message
 - **WHEN** a user or assistant produces text content
-- **THEN** the message stores a text content part that can be rendered, searched, exported, imported, and migrated independently of the generating assistant
+- **THEN** the message stores a text content part that can be rendered, searched, exported, imported, and processed independently of the generating assistant
 
 ### Requirement: Content capability negotiation
 The system SHALL declare which content-part types each protocol adapter can send and receive and SHALL prevent unsupported parts from being silently omitted from a network request.
@@ -31,4 +31,3 @@ Writing changes back to a local file SHALL be treated as an optional experimenta
 #### Scenario: Editing API is unavailable
 - **WHEN** the mobile browser does not expose a supported writable file API
 - **THEN** preview and chat remain available and local-file editing controls are hidden or marked unavailable
-
