@@ -44,6 +44,11 @@ The system SHALL support lightweight per-conversation `ContextSummary` records t
 - **THEN** regular chat requests and future context-summary requests include that Profile's per-dimension guidance while preserving the fixed five-section framework
 - **AND** the system does not require a separate summary utility assistant for each chat assistant
 
+#### Scenario: Disable a profile dimension
+- **WHEN** the user disables a Context Profile dimension
+- **THEN** that dimension is excluded from regular chat context injection and context-summary prompts
+- **AND** any previously edited dimension guidance remains stored for preview and later re-enable but is not editable while disabled
+
 #### Scenario: Preview the current summary
 - **WHEN** a valid `ContextSummary` exists and debug mode is enabled
 - **THEN** the system provides a local preview action that displays the stored summary without making a provider request

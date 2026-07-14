@@ -170,6 +170,7 @@ describe("MobileChat persistence", () => {
       dimensionOverrides: [
         {
           dimensionId: "fuzzy_memory",
+          enabled: false,
           instruction: "记录关系温度、心情变化和共同经历。",
         },
       ],

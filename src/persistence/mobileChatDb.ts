@@ -245,6 +245,7 @@ const normalizeContextProfiles = (
         dimensionOverrides: Array.isArray(profile.dimensionOverrides)
           ? profile.dimensionOverrides.map((override) => ({
               dimensionId: override.dimensionId,
+              enabled: override.enabled !== false,
               titleOverride: override.titleOverride,
               instruction: override.instruction,
             }))

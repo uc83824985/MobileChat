@@ -28,6 +28,7 @@ export type ContextSummaryFramework = {
 
 export type ContextProfileDimensionOverride = {
   dimensionId: string;
+  enabled?: boolean;
   titleOverride?: string;
   instruction: string;
 };

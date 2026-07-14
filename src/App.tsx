@@ -28,6 +28,7 @@ import {
   useCallback,
   type KeyboardEvent,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -80,6 +81,11 @@ import {
 } from "./persistence/mobileChatDb";
 
 type PwaNotice = "offline-ready" | "update-available" | null;
+type CustomSelectOption = {
+  value: string;
+  label: string;
+  disabled?: boolean;
+};
 type ResolvedModel = {
   apiProfile: ApiProfile;
   model: ModelDefinition;
@@ -175,6 +181,119 @@ const createEmptyContextProfile = (index: number): ContextProfile => ({
   description: "",
   dimensionOverrides: [],
 });
+
+const CustomSelect = ({
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false,
+  className = "",
+}: {
+  label: string;
+  value: string;
+  options: CustomSelectOption[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  className?: string;
+}) => {
+  const listboxId = useId();
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selectedOption =
+    options.find((option) => option.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const closeOnOutside = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const selectValue = (nextValue: string) => {
+    const option = options.find((candidate) => candidate.value === nextValue);
+    if (!option || option.disabled) {
+      return;
+    }
+
+    onChange(nextValue);
+    setOpen(false);
+  };
+
+  const toggleOpen = () => {
+    if (!disabled && options.length > 0) {
+      setOpen((isOpen) => !isOpen);
+    }
+  };
+
+  return (
+    <div
+      className={`custom-select ${open ? "open" : ""} ${
+        disabled ? "disabled" : ""
+      } ${className}`}
+      ref={rootRef}
+    >
+      <button
+        className="custom-select-trigger"
+        type="button"
+        role="combobox"
+        aria-controls={listboxId}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-label={label}
+        disabled={disabled || options.length === 0}
+        onClick={toggleOpen}
+        onKeyDown={(event) => {
+          if (
+            event.key === "ArrowDown" ||
+            event.key === "Enter" ||
+            event.key === " "
+          ) {
+            event.preventDefault();
+            toggleOpen();
+          }
+        }}
+      >
+        <span>{selectedOption?.label ?? "未选择"}</span>
+        <span className="custom-select-chevron" aria-hidden="true" />
+      </button>
+      {open ? (
+        <div className="custom-select-menu" id={listboxId} role="listbox">
+          {options.map((option) => (
+            <button
+              className="custom-select-option"
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              disabled={option.disabled}
+              onClick={() => selectValue(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+};
 
 const confirmDestructiveAction = (message: string) =>
   typeof window === "undefined" || window.confirm(message);
@@ -396,11 +515,24 @@ const getContextProfileOverride = (
     (override) => override.dimensionId === dimensionId,
   );
 
+const isContextProfileDimensionEnabled = (
+  profile: ContextProfile,
+  dimensionId: string,
+) => getContextProfileOverride(profile, dimensionId)?.enabled !== false;
+
+const getEnabledContextProfileSections = (
+  framework: ContextSummaryFramework,
+  profile: ContextProfile,
+) =>
+  framework.sections.filter((section) =>
+    isContextProfileDimensionEnabled(profile, section.id),
+  );
+
 const formatContextProfile = (
   framework: ContextSummaryFramework,
   profile: ContextProfile,
 ) =>
-  framework.sections
+  getEnabledContextProfileSections(framework, profile)
     .map((section) => {
       const override = getContextProfileOverride(profile, section.id);
       const title = override?.titleOverride?.trim() || section.title;
@@ -418,19 +550,26 @@ const formatContextProfile = (
 const buildContextProfileInstruction = (
   framework: ContextSummaryFramework,
   profile: ContextProfile,
-) => `MobileChat 当前聊天助手绑定的上下文 Profile：
+) => {
+  const formattedProfile = formatContextProfile(framework, profile);
+  if (!formattedProfile.trim()) {
+    return "";
+  }
+
+  return `MobileChat 当前聊天助手绑定的上下文 Profile：
 名称：${profile.name}
 说明：${profile.description || "无"}
 
 这些设定用于理解当前对话中应优先保留和遵守的上下文，不是用户的新消息。请按各维度理解长期规则、事实、模糊状态、探索记录和当前现场：
 
-${formatContextProfile(framework, profile)}`;
+${formattedProfile}`;
+};
 
 const createEffectiveContextSummarySections = (
   framework: ContextSummaryFramework,
   profile: ContextProfile,
 ) =>
-  framework.sections.map((section) => {
+  getEnabledContextProfileSections(framework, profile).map((section) => {
     const override = getContextProfileOverride(profile, section.id);
     const overrideInstruction = override?.instruction.trim();
     return {
@@ -454,7 +593,18 @@ const buildContextSummaryPrompt = ({
   messages: Message[];
   framework: ContextSummaryFramework;
   contextProfile: ContextProfile;
-}) => `请为 MobileChat 当前单个对话生成新的“上下文总结”。
+}) => {
+  const effectiveSections = createEffectiveContextSummarySections(
+    framework,
+    contextProfile,
+  );
+  const effectiveFramework: ContextSummaryFramework = {
+    ...framework,
+    sections: effectiveSections,
+  };
+  const formattedProfile = formatContextProfile(framework, contextProfile);
+
+  return `请为 MobileChat 当前单个对话生成新的“上下文总结”。
 
 要求：
 - 只总结对后续继续对话有用的信息，不要生成普通聊天回复。
@@ -467,13 +617,13 @@ const buildContextSummaryPrompt = ({
 总结框架：${framework.name}
 ${framework.description}
 
-${formatContextSummaryFramework(framework)}
+${formatContextSummaryFramework(effectiveFramework)}
 
 当前聊天助手的上下文 Profile：${contextProfile.name}
 ${contextProfile.description || "无说明"}
 
 Profile 维度重载：
-${formatContextProfile(framework, contextProfile)}
+${formattedProfile || "当前 Profile 未启用任何上下文维度。"}
 
 对话标题：${conversation.title}
 列表摘要：${conversation.summary || "无"}
@@ -484,6 +634,7 @@ ${previousSummary?.trim() || "无"}
 需要合并的新增消息：
 ${messages.map(formatTranscriptMessage).join("\n\n")}
 `;
+};
 
 const getActiveContextSummaryRecord = (
   conversation?: Conversation,
@@ -934,7 +1085,9 @@ function App() {
         "输入估算",
         `${estimateTokenCount(
           activeProjectedMessages,
-          `${activeContextInstruction}\n${draft}`,
+          activeContextInstruction
+            ? `${activeContextInstruction}\n${draft}`
+            : draft,
         )} tokens`,
       ],
       [
@@ -2026,18 +2179,24 @@ function App() {
         }
 
         const trimmedInstruction = instruction.trim();
+        const existingOverride = profile.dimensionOverrides.find(
+          (override) => override.dimensionId === dimensionId,
+        );
+        const enabled = existingOverride?.enabled !== false;
         const existingOverrides = profile.dimensionOverrides.filter(
           (override) => override.dimensionId !== dimensionId,
         );
-        const nextOverrides = trimmedInstruction
-          ? [
-              ...existingOverrides,
-              {
-                dimensionId,
-                instruction,
-              },
-            ]
-          : existingOverrides;
+        const nextOverrides =
+          trimmedInstruction || !enabled
+            ? [
+                ...existingOverrides,
+                {
+                  dimensionId,
+                  enabled,
+                  instruction,
+                },
+              ]
+            : existingOverrides;
 
         return {
           ...profile,
@@ -2052,6 +2211,48 @@ function App() {
     dimensionId: string,
   ) => {
     updateContextProfileOverride(profileId, dimensionId, "");
+  };
+
+  const toggleContextProfileDimension = (
+    profileId: string,
+    dimensionId: string,
+    enabled: boolean,
+  ) => {
+    setContextProfiles((current) =>
+      current.map((profile) => {
+        if (profile.id !== profileId) {
+          return profile;
+        }
+
+        const existingOverride = getContextProfileOverride(
+          profile,
+          dimensionId,
+        );
+        const existingOverrides = profile.dimensionOverrides.filter(
+          (override) => override.dimensionId !== dimensionId,
+        );
+        const instruction = existingOverride?.instruction ?? "";
+
+        if (enabled && !instruction.trim()) {
+          return {
+            ...profile,
+            dimensionOverrides: existingOverrides,
+          };
+        }
+
+        return {
+          ...profile,
+          dimensionOverrides: [
+            ...existingOverrides,
+            {
+              dimensionId,
+              enabled,
+              instruction,
+            },
+          ],
+        };
+      }),
+    );
   };
 
   const resetContextProfile = (profileId: string) => {
@@ -2168,6 +2369,18 @@ function App() {
     if (!contextSummaryResolvedModel) {
       setContextSummaryStatus(
         "总结助手没有可用模型。请在设置页为当前上下文总结助手绑定模型。",
+      );
+      return;
+    }
+
+    if (
+      createEffectiveContextSummarySections(
+        contextSummaryFramework,
+        activeContextProfile,
+      ).length === 0
+    ) {
+      setContextSummaryStatus(
+        "当前上下文 Profile 未启用任何维度，已跳过总结。",
       );
       return;
     }
@@ -2838,12 +3051,9 @@ function App() {
       ) : null}
 
       {!drawerOpen ? (
-        <div
-          className="mobile-floating-actions mobile-only"
-          aria-label="快捷操作"
-        >
+        <div className="floating-actions" aria-label="快捷操作">
           <button
-            className="floating-action"
+            className="floating-action mobile-only"
             type="button"
             aria-label="悬浮对话入口"
             onClick={() => setDrawerOpen(true)}
@@ -3021,43 +3231,39 @@ function App() {
             <span>{activeConversation?.summary ?? "请新建或选择一个对话"}</span>
           </div>
           <div className="chat-pickers">
-            <label className="assistant-picker">
+            <div className="assistant-picker">
               <Bot size={18} />
               <span className="sr-only">选择助手</span>
-              <select
-                aria-label="选择助手"
+              <CustomSelect
+                label="选择助手"
                 value={activeAssistant.id}
-                onChange={(event) => activateAssistant(event.target.value)}
-              >
-                {assistants.map((assistant) => (
-                  <option key={assistant.id} value={assistant.id}>
-                    {assistant.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="assistant-picker model-picker">
+                options={assistants.map((assistant) => ({
+                  value: assistant.id,
+                  label: assistant.name,
+                }))}
+                onChange={activateAssistant}
+              />
+            </div>
+            <div className="assistant-picker model-picker">
               <Server size={18} />
               <span className="sr-only">选择模型</span>
-              <select
-                aria-label="选择模型"
+              <CustomSelect
+                label="选择模型"
                 disabled={assistantModelOptions.length === 0}
                 value={
                   activeResolvedModel
                     ? modelRefKey(activeResolvedModel.ref)
                     : modelRefKey(DEFAULT_MODEL_REF)
                 }
-                onChange={(event) =>
-                  setActiveModelRef(parseModelRefKey(event.target.value))
+                options={assistantModelOptions.map((option) => ({
+                  value: option.key,
+                  label: option.model.name,
+                }))}
+                onChange={(nextValue) =>
+                  setActiveModelRef(parseModelRefKey(nextValue))
                 }
-              >
-                {assistantModelOptions.map((option) => (
-                  <option key={option.key} value={option.key}>
-                    {option.model.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+              />
+            </div>
           </div>
         </header>
 
@@ -3313,25 +3519,23 @@ function App() {
                 <span>保存状态</span>
                 <strong>{saveStatusLabels[saveStatus]}</strong>
               </div>
-              <label className="settings-row compact theme-select">
+              <div className="settings-row compact theme-select">
                 <span>
                   <Palette size={16} />
                   主题模式
                 </span>
-                <select
-                  aria-label="主题模式"
+                <CustomSelect
+                  label="主题模式"
                   value={themeMode}
-                  onChange={(event) =>
-                    setThemeMode(event.target.value as ThemeMode)
-                  }
-                >
-                  {Object.entries(themeLabels).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  options={Object.entries(themeLabels).map(
+                    ([optionValue, optionLabel]) => ({
+                      value: optionValue,
+                      label: optionLabel,
+                    }),
+                  )}
+                  onChange={(nextValue) => setThemeMode(nextValue as ThemeMode)}
+                />
+              </div>
               <div className="settings-row compact">
                 <span>调试模式</span>
                 <label className="switch">
@@ -3357,22 +3561,22 @@ function App() {
                   <span />
                 </label>
               </div>
-              <label className="settings-row compact theme-select">
+              <div className="settings-row compact theme-select">
                 <span>布局模式</span>
-                <select
-                  aria-label="布局模式"
+                <CustomSelect
+                  label="布局模式"
                   value={layoutMode}
-                  onChange={(event) =>
-                    setLayoutMode(event.target.value as LayoutMode)
+                  options={Object.entries(layoutLabels).map(
+                    ([optionValue, optionLabel]) => ({
+                      value: optionValue,
+                      label: optionLabel,
+                    }),
+                  )}
+                  onChange={(nextValue) =>
+                    setLayoutMode(nextValue as LayoutMode)
                   }
-                >
-                  {Object.entries(layoutLabels).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                />
+              </div>
               <div className="settings-row compact">
                 <span>API Profiles</span>
                 <strong>{apiProfiles.length}</strong>
@@ -3389,44 +3593,40 @@ function App() {
                 <span>上下文 Profile</span>
                 <strong>{contextProfiles.length}</strong>
               </div>
-              <label className="settings-row compact theme-select">
+              <div className="settings-row compact theme-select">
                 <span>上下文总结助手</span>
-                <select
-                  aria-label="上下文总结助手"
+                <CustomSelect
+                  label="上下文总结助手"
                   value={utilityAssistantRefs.contextSummaryAssistantId}
-                  onChange={(event) =>
+                  options={utilityAssistants.map((assistant) => ({
+                    value: assistant.id,
+                    label: assistant.name,
+                  }))}
+                  onChange={(nextValue) =>
                     setUtilityAssistantRefs((current) => ({
                       ...current,
-                      contextSummaryAssistantId: event.target.value,
+                      contextSummaryAssistantId: nextValue,
                     }))
                   }
-                >
-                  {utilityAssistants.map((assistant) => (
-                    <option key={assistant.id} value={assistant.id}>
-                      {assistant.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="settings-row compact theme-select">
+                />
+              </div>
+              <div className="settings-row compact theme-select">
                 <span>上下文压缩助手</span>
-                <select
-                  aria-label="上下文压缩助手"
+                <CustomSelect
+                  label="上下文压缩助手"
                   value={utilityAssistantRefs.contextCompressionAssistantId}
-                  onChange={(event) =>
+                  options={utilityAssistants.map((assistant) => ({
+                    value: assistant.id,
+                    label: assistant.name,
+                  }))}
+                  onChange={(nextValue) =>
                     setUtilityAssistantRefs((current) => ({
                       ...current,
-                      contextCompressionAssistantId: event.target.value,
+                      contextCompressionAssistantId: nextValue,
                     }))
                   }
-                >
-                  {utilityAssistants.map((assistant) => (
-                    <option key={assistant.id} value={assistant.id}>
-                      {assistant.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                />
+              </div>
             </section>
 
             <section
@@ -3529,22 +3729,18 @@ function App() {
               </p>
               <div className="profile-layout">
                 <aside className="profile-directory">
-                  <label className="assistant-config-select">
+                  <div className="assistant-config-select">
                     <span>当前 Profile</span>
-                    <select
-                      aria-label="选择上下文 Profile"
+                    <CustomSelect
+                      label="选择上下文 Profile"
                       value={editingContextProfile.id}
-                      onChange={(event) =>
-                        setEditingContextProfileId(event.target.value)
-                      }
-                    >
-                      {contextProfiles.map((profile) => (
-                        <option key={profile.id} value={profile.id}>
-                          {profile.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      options={contextProfiles.map((profile) => ({
+                        value: profile.id,
+                        label: profile.name,
+                      }))}
+                      onChange={setEditingContextProfileId}
+                    />
+                  </div>
                   <div className="assistant-card-list">
                     {contextProfiles.map((profile) => (
                       <button
@@ -3604,11 +3800,17 @@ function App() {
                         editingContextProfile,
                         section.id,
                       );
+                      const enabled = isContextProfileDimensionEnabled(
+                        editingContextProfile,
+                        section.id,
+                      );
                       const value = override?.instruction ?? "";
 
                       return (
                         <article
-                          className="summary-framework-card"
+                          className={`summary-framework-card ${
+                            enabled ? "" : "disabled"
+                          }`}
                           key={section.id}
                         >
                           <div className="summary-framework-card-header">
@@ -3616,26 +3818,46 @@ function App() {
                               <h4>{section.title}</h4>
                               <span>{section.id}</span>
                             </div>
-                            <button
-                              type="button"
-                              disabled={!value.trim()}
-                              onClick={() =>
-                                clearContextProfileOverride(
-                                  editingContextProfile.id,
-                                  section.id,
-                                )
-                              }
-                            >
-                              清空重载
-                            </button>
+                            <div className="dimension-actions">
+                              <label className="dimension-toggle">
+                                <input
+                                  aria-label={`启用${section.title}上下文维度`}
+                                  checked={enabled}
+                                  type="checkbox"
+                                  onChange={(event) =>
+                                    toggleContextProfileDimension(
+                                      editingContextProfile.id,
+                                      section.id,
+                                      event.target.checked,
+                                    )
+                                  }
+                                />
+                                <span>启用</span>
+                              </label>
+                              <button
+                                type="button"
+                                disabled={!enabled || !value.trim()}
+                                onClick={() =>
+                                  clearContextProfileOverride(
+                                    editingContextProfile.id,
+                                    section.id,
+                                  )
+                                }
+                              >
+                                清空重载
+                              </button>
+                            </div>
                           </div>
                           <p className="summary-framework-note">
-                            默认：{section.instruction}
+                            {enabled
+                              ? `默认：${section.instruction}`
+                              : `未启用：该维度不会进入普通聊天或总结提示；当前重载内容仅保留为预览。默认：${section.instruction}`}
                           </p>
                           <label>
                             <span>Profile 重载说明</span>
                             <textarea
                               aria-label={`${section.title}上下文重载说明`}
+                              disabled={!enabled}
                               rows={3}
                               placeholder="留空则完全使用系统描述；填写时只补充该业务/玩法/角色场景的额外分类规则。"
                               value={value}
@@ -3748,26 +3970,24 @@ function App() {
 
               <div className="profile-layout">
                 <aside className="profile-directory">
-                  <label className="assistant-config-select">
+                  <div className="assistant-config-select">
                     <span>当前 Profile</span>
-                    <select
-                      aria-label="选择 API Profile"
+                    <CustomSelect
+                      label="选择 API Profile"
                       value={editingApiProfile?.id ?? ""}
-                      onChange={(event) => {
+                      options={apiProfiles.map((profile) => ({
+                        value: profile.id,
+                        label: profile.name,
+                      }))}
+                      onChange={(nextValue) => {
                         const profile = apiProfiles.find(
-                          (candidate) => candidate.id === event.target.value,
+                          (candidate) => candidate.id === nextValue,
                         );
-                        setEditingApiProfileId(event.target.value);
+                        setEditingApiProfileId(nextValue);
                         setEditingModelId(profile?.models[0]?.id ?? "");
                       }}
-                    >
-                      {apiProfiles.map((profile) => (
-                        <option key={profile.id} value={profile.id}>
-                          {profile.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                    />
+                  </div>
                   <div className="assistant-card-list">
                     {apiProfiles.map((profile) => (
                       <button
@@ -3809,27 +4029,30 @@ function App() {
                           }
                         />
                       </label>
-                      <label className="detail-field">
+                      <div className="detail-field">
                         <span>协议</span>
-                        <select
-                          aria-label="协议"
+                        <CustomSelect
+                          label="协议"
                           value={editingApiProfile.protocol}
-                          onChange={(event) =>
+                          options={[
+                            {
+                              value: "openai-responses",
+                              label: "OpenAI-compatible Responses",
+                            },
+                            {
+                              value: "openai-chat-completions",
+                              label: "OpenAI-compatible Chat Completions",
+                            },
+                          ]}
+                          onChange={(nextValue) =>
                             updateApiProfileField(
                               editingApiProfile.id,
                               "protocol",
-                              event.target.value as ApiProtocol,
+                              nextValue as ApiProtocol,
                             )
                           }
-                        >
-                          <option value="openai-responses">
-                            OpenAI-compatible Responses
-                          </option>
-                          <option value="openai-chat-completions">
-                            OpenAI-compatible Chat Completions
-                          </option>
-                        </select>
-                      </label>
+                        />
+                      </div>
                       <label className="detail-field">
                         <span>Base URL</span>
                         <input
@@ -3937,22 +4160,18 @@ function App() {
                       </button>
                     </div>
 
-                    <label className="assistant-config-select">
+                    <div className="assistant-config-select">
                       <span>当前模型</span>
-                      <select
-                        aria-label="选择模型配置"
+                      <CustomSelect
+                        label="选择模型配置"
                         value={editingModel?.id ?? ""}
-                        onChange={(event) =>
-                          setEditingModelId(event.target.value)
-                        }
-                      >
-                        {editingApiProfile.models.map((model) => (
-                          <option key={model.id} value={model.id}>
-                            {model.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                        options={editingApiProfile.models.map((model) => ({
+                          value: model.id,
+                          label: model.name,
+                        }))}
+                        onChange={setEditingModelId}
+                      />
+                    </div>
 
                     <div className="model-card-list" aria-label="模型配置列表">
                       {editingApiProfile.models.map((model) => (
@@ -4088,22 +4307,18 @@ function App() {
                   </button>
                 </div>
 
-                <label className="assistant-config-select">
+                <div className="assistant-config-select">
                   <span>当前编辑</span>
-                  <select
-                    aria-label="设置中选择助手"
+                  <CustomSelect
+                    label="设置中选择助手"
                     value={editingAssistant.id}
-                    onChange={(event) =>
-                      setEditingAssistantId(event.target.value)
-                    }
-                  >
-                    {assistants.map((assistant) => (
-                      <option key={assistant.id} value={assistant.id}>
-                        {assistant.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    options={assistants.map((assistant) => ({
+                      value: assistant.id,
+                      label: assistant.name,
+                    }))}
+                    onChange={setEditingAssistantId}
+                  />
+                </div>
 
                 <div className="assistant-card-list">
                   {assistants.map((assistant) => {
@@ -4184,27 +4399,27 @@ function App() {
 
                     if (field.control === "select") {
                       return (
-                        <label className="detail-field" key={field.key}>
+                        <div className="detail-field" key={field.key}>
                           <span>{field.label}</span>
-                          <select
-                            aria-label={field.label}
+                          <CustomSelect
+                            label={field.label}
                             value={String(value)}
-                            onChange={(event) =>
+                            options={
+                              field.options?.map((option) => ({
+                                value: option.value,
+                                label: option.label,
+                              })) ?? []
+                            }
+                            onChange={(nextValue) =>
                               updateAssistantField(
                                 editingAssistant.id,
                                 field.key,
-                                event.target.value,
+                                nextValue,
                               )
                             }
-                          >
-                            {field.options?.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
+                          />
                           {field.helper ? <small>{field.helper}</small> : null}
-                        </label>
+                        </div>
                       );
                     }
 
@@ -4262,34 +4477,32 @@ function App() {
                         <h3>助手上下文 Profile</h3>
                       </div>
                     </header>
-                    <label className="assistant-config-select">
+                    <div className="assistant-config-select">
                       <span>当前助手使用的 Profile</span>
-                      <select
-                        aria-label="助手上下文 Profile"
+                      <CustomSelect
+                        label="助手上下文 Profile"
                         value={
                           resolveContextProfile(
                             contextProfiles,
                             editingAssistant.contextProfileId,
                           ).id
                         }
-                        onChange={(event) =>
+                        options={contextProfiles.map((profile) => ({
+                          value: profile.id,
+                          label: profile.name,
+                        }))}
+                        onChange={(nextValue) =>
                           updateAssistantContextProfile(
                             editingAssistant.id,
-                            event.target.value,
+                            nextValue,
                           )
                         }
-                      >
-                        {contextProfiles.map((profile) => (
-                          <option key={profile.id} value={profile.id}>
-                            {profile.name}
-                          </option>
-                        ))}
-                      </select>
+                      />
                       <small>
                         普通聊天会注入该
                         Profile；主动总结时，全局总结助手也会按它执行分类。
                       </small>
-                    </label>
+                    </div>
                   </section>
                 ) : null}
 
@@ -4300,10 +4513,10 @@ function App() {
                       <h3>助手允许模型</h3>
                     </div>
                   </header>
-                  <label className="assistant-config-select">
+                  <div className="assistant-config-select">
                     <span>默认模型</span>
-                    <select
-                      aria-label="助手默认模型"
+                    <CustomSelect
+                      label="助手默认模型"
                       value={modelRefKey(
                         editingAssistant.modelBindings.find(
                           (binding) => binding.isDefault,
@@ -4311,24 +4524,17 @@ function App() {
                           editingAssistant.modelBindings[0] ??
                           DEFAULT_MODEL_REF,
                       )}
-                      onChange={(event) =>
-                        setAssistantDefaultModel(
-                          editingAssistant.id,
-                          event.target.value,
-                        )
+                      options={editingAssistant.modelBindings.map(
+                        (binding) => ({
+                          value: modelRefKey(binding),
+                          label: `${binding.apiProfileNameSnapshot} / ${binding.modelNameSnapshot}`,
+                        }),
+                      )}
+                      onChange={(nextValue) =>
+                        setAssistantDefaultModel(editingAssistant.id, nextValue)
                       }
-                    >
-                      {editingAssistant.modelBindings.map((binding) => (
-                        <option
-                          key={modelRefKey(binding)}
-                          value={modelRefKey(binding)}
-                        >
-                          {binding.apiProfileNameSnapshot} /{" "}
-                          {binding.modelNameSnapshot}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                    />
+                  </div>
 
                   <div className="binding-list">
                     {allModelOptions.map((option) => {

@@ -22,19 +22,22 @@ Date: 2026-07-14
 - Model selection is a second native `<select>` and is limited to the currently selected assistant's allowed model bindings.
 - The settings panel is full-screen on small screens and a wide details panel on desktop.
 - The conversation drawer keeps the bottom archive/settings actions visible while the conversation list scrolls.
-- Mobile layout has floating controls for opening the conversation drawer and returning to the top of the message thread, so long conversations do not require scrolling back to the header for navigation.
+- Desktop layout now uses the same pinned rail principle: the app shell is fixed to the viewport, the conversation history list scrolls inside the sidebar, and archive/settings actions remain pinned at the bottom instead of sharing the page scrollbar with the message area.
+- Mobile layout has a floating conversation-drawer entry, and both mobile and desktop layouts have a floating top/bottom message-thread shortcut so long conversations do not require scrolling back to the header for navigation.
 - The floating scroll control target is derived only from the current scroll position. Clicking it triggers smooth scrolling but no longer flips its own state immediately, avoiding a brief top/bottom flicker while the browser is still scrolling.
 - The chat header provides a direct title edit entry. Press Enter or the check button to save; Esc or the close button cancels.
 - Archived conversations now have a sidebar entry. The archived view searches only title and summary, allows browsing and restoring, and keeps the composer read-only until restore.
 - Assistant messages expose a retry action; retry removes the selected assistant reply and later messages before regenerating with the current assistant/model. Messages also expose a local delete action.
 - Message text preserves returned line breaks and indentation in the renderer and wraps long URLs/tokens. The client does not semantically rewrite or strip provider-returned search traces unless a future adapter exposes structured search/citation diagnostics that can be rendered separately.
 - Dark mode styles native select options and applies `color-scheme: dark` to avoid white dropdown backgrounds with pale text.
+- Native select popups have been replaced by a reusable custom combobox/listbox component, so selected options use the same green `--selected` background as conversation and card selections across dark and light themes.
 - The assistant details panel is schema-rendered from `assistantFields`, so newly added assistants use the same reflected editor instead of a special hard-coded page.
 - API Key editing uses an app-owned persistent show/hide button instead of relying on browser-specific password-field eye icons.
 - Debug mode exposes a manual **总结上下文** action and a **显示总结** preview. Summary generation calls the configured global context-summary utility assistant, applies the current chat assistant's context Profile, stores the generated active rolling summary on the conversation, and keeps the visible message thread unchanged except for a small debug status hint.
 - Settings has explicit built-in feature references for **上下文总结助手** and **上下文压缩助手**. The utility kind only makes an assistant eligible; feature settings decide which utility assistant is used by each built-in operation.
 - Settings exposes the fixed five-section context-summary framework. Users can override each section's system description, restore one section, or restore all default descriptions; section IDs and titles remain app-defined.
 - Settings also exposes reusable **上下文 Profile** records. A chat assistant references one Profile; each Profile keeps the fixed five dimensions but can add per-dimension business/domain guidance, such as roleplay formatting rules, relationship/emotion tracking, random events, or task-specific exploration notes.
+- Each Context Profile dimension has an explicit enable checkbox. Disabled dimensions stay visible and keep any previously edited text as local preview data, but they are greyed out, cannot be edited until re-enabled, and are excluded from regular chat injection and summary prompts.
 
 ## API Profile and model configuration
 

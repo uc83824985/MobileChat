@@ -37,6 +37,18 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("关闭设置"));
   };
 
+  const getCustomSelect = (label: string) =>
+    screen.getByRole("combobox", { name: label });
+
+  const expectCustomSelectValue = (label: string, value: string) => {
+    expect(getCustomSelect(label)).toHaveTextContent(value);
+  };
+
+  const chooseCustomSelectOption = (label: string, option: string) => {
+    fireEvent.click(getCustomSelect(label));
+    fireEvent.click(screen.getByRole("option", { name: option }));
+  };
+
   it("renders the mobile chat shell", () => {
     render(<App />);
 
@@ -296,19 +308,13 @@ describe("App", () => {
     expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
     expect(screen.getByText("API Profiles")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("主题模式"), {
-      target: { value: "light" },
-    });
+    chooseCustomSelectOption("主题模式", "亮色");
     expect(document.documentElement.dataset.theme).toBe("light");
 
-    expect(screen.getByLabelText("布局模式")).toHaveValue("auto");
-    fireEvent.change(screen.getByLabelText("布局模式"), {
-      target: { value: "desktop" },
-    });
+    expectCustomSelectValue("布局模式", "跟随屏幕");
+    chooseCustomSelectOption("布局模式", "电脑端");
     expect(screen.getByRole("main")).toHaveClass("desktop-layout");
-    fireEvent.change(screen.getByLabelText("布局模式"), {
-      target: { value: "mobile" },
-    });
+    chooseCustomSelectOption("布局模式", "手机端");
     expect(screen.getByRole("main")).not.toHaveClass("desktop-layout");
     expect(screen.getByRole("main")).toHaveClass("mobile-layout");
 
@@ -316,14 +322,10 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("流式输出"));
     expect(screen.getByLabelText("流式输出")).not.toBeChecked();
 
-    expect(screen.getByLabelText("上下文总结助手")).toHaveValue(
-      "context-summary-gpt54",
-    );
-    fireEvent.change(screen.getByLabelText("上下文总结助手"), {
-      target: { value: "compact" },
-    });
-    expect(screen.getByLabelText("上下文总结助手")).toHaveValue("compact");
-    expect(screen.getByLabelText("上下文压缩助手")).toHaveValue("compact");
+    expectCustomSelectValue("上下文总结助手", "上下文总结助手");
+    chooseCustomSelectOption("上下文总结助手", "压缩助手");
+    expectCustomSelectValue("上下文总结助手", "压缩助手");
+    expectCustomSelectValue("上下文压缩助手", "压缩助手");
 
     expect(screen.getByLabelText("严格记忆系统描述")).toHaveValue(
       "只记录用户明确确认的需求、硬约束、长期偏好、必须遵守的规则和不可丢失结论。",
@@ -349,16 +351,10 @@ describe("App", () => {
       "记录可精确引用的事实、字段、路径、版本、模型、配置、数值、角色属性和世界规则。禁止保存 API key 原文。",
     );
 
-    expect(screen.getByLabelText("选择上下文 Profile")).toHaveDisplayValue(
-      "通用上下文",
-    );
-    expect(screen.getByLabelText("助手上下文 Profile")).toHaveDisplayValue(
-      "通用上下文",
-    );
+    expectCustomSelectValue("选择上下文 Profile", "通用上下文");
+    expectCustomSelectValue("助手上下文 Profile", "通用上下文");
     fireEvent.click(screen.getByText("新增上下文 Profile"));
-    expect(screen.getByLabelText("选择上下文 Profile")).toHaveDisplayValue(
-      "上下文 Profile 2",
-    );
+    expectCustomSelectValue("选择上下文 Profile", "上下文 Profile 2");
     fireEvent.change(screen.getByLabelText("上下文 Profile 名称"), {
       target: { value: "角色扮演上下文" },
     });
@@ -368,15 +364,17 @@ describe("App", () => {
     expect(screen.getByLabelText("模糊记忆上下文重载说明")).toHaveValue(
       "记录关系温度、心情变化和共同经历。",
     );
-    const createdContextProfileId = (
-      screen.getByLabelText("选择上下文 Profile") as HTMLSelectElement
-    ).value;
-    fireEvent.change(screen.getByLabelText("助手上下文 Profile"), {
-      target: { value: createdContextProfileId },
-    });
-    expect(screen.getByLabelText("助手上下文 Profile")).toHaveDisplayValue(
-      "角色扮演上下文",
+    expect(screen.getByLabelText("启用模糊记忆上下文维度")).toBeChecked();
+    fireEvent.click(screen.getByLabelText("启用模糊记忆上下文维度"));
+    expect(screen.getByLabelText("启用模糊记忆上下文维度")).not.toBeChecked();
+    expect(screen.getByLabelText("模糊记忆上下文重载说明")).toBeDisabled();
+    expect(screen.getByLabelText("模糊记忆上下文重载说明")).toHaveValue(
+      "记录关系温度、心情变化和共同经历。",
     );
+    fireEvent.click(screen.getByLabelText("启用模糊记忆上下文维度"));
+    expect(screen.getByLabelText("模糊记忆上下文重载说明")).toBeEnabled();
+    chooseCustomSelectOption("助手上下文 Profile", "角色扮演上下文");
+    expectCustomSelectValue("助手上下文 Profile", "角色扮演上下文");
     fireEvent.click(screen.getByText("还原当前 Profile 重载"));
     expect(screen.getByLabelText("模糊记忆上下文重载说明")).toHaveValue("");
 
@@ -448,9 +446,7 @@ describe("App", () => {
     expect(screen.getByLabelText("模型名称")).toHaveValue("主模型");
 
     fireEvent.click(screen.getByText("新增"));
-    expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
-      "新助手 4",
-    );
+    expectCustomSelectValue("设置中选择助手", "新助手 4");
     fireEvent.change(screen.getByLabelText("助手名称"), {
       target: { value: "移动助手" },
     });
@@ -458,17 +454,15 @@ describe("App", () => {
       target: { value: "移动端编辑后的 prompt" },
     });
 
-    expect(screen.getByLabelText("选择助手")).toHaveDisplayValue("移动助手");
+    expectCustomSelectValue("选择助手", "移动助手");
     fireEvent.click(screen.getByText("设为当前"));
-    expect(screen.getByLabelText("选择助手")).toHaveDisplayValue("移动助手");
+    expectCustomSelectValue("选择助手", "移动助手");
     expect(screen.getByLabelText("初始 Prompt")).toHaveValue(
       "移动端编辑后的 prompt",
     );
 
     fireEvent.click(screen.getByText("新增"));
-    expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
-      "新助手 5",
-    );
+    expectCustomSelectValue("设置中选择助手", "新助手 5");
   });
 
   it("archives, searches, browses, and restores conversations", () => {
@@ -527,23 +521,15 @@ describe("App", () => {
 
     fireEvent.click(screen.getByText("设置"));
     fireEvent.click(screen.getByText("新增 Profile"));
-    expect(screen.getByLabelText("选择 API Profile")).toHaveDisplayValue(
-      "API Profile 2",
-    );
+    expectCustomSelectValue("选择 API Profile", "API Profile 2");
     expect(screen.getByLabelText("模型描述")).toHaveValue("");
     fireEvent.click(screen.getByText("删除当前 Profile"));
-    expect(screen.getByLabelText("选择 API Profile")).toHaveDisplayValue(
-      "默认连接",
-    );
+    expectCustomSelectValue("选择 API Profile", "默认连接");
 
     fireEvent.click(screen.getByText("新增"));
-    expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
-      "新助手 4",
-    );
+    expectCustomSelectValue("设置中选择助手", "新助手 4");
     fireEvent.click(screen.getByText("删除助手"));
-    expect(screen.getByLabelText("设置中选择助手")).toHaveDisplayValue(
-      "默认助手",
-    );
+    expectCustomSelectValue("设置中选择助手", "默认助手");
   });
 
   it("retries assistant replies and deletes messages", async () => {

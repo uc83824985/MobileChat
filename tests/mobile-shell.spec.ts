@@ -25,6 +25,27 @@ const openSettings = async (page: import("@playwright/test").Page) => {
     .evaluate((element: HTMLElement) => element.click());
 };
 
+const selectCustomOption = async (
+  page: import("@playwright/test").Page,
+  label: string,
+  option: string,
+) => {
+  await page.getByRole("combobox", { name: label }).click({ force: true });
+  await page
+    .getByRole("option", { name: option, exact: true })
+    .click({ force: true });
+};
+
+const expectCustomSelectValue = async (
+  page: import("@playwright/test").Page,
+  label: string,
+  value: string,
+) => {
+  await expect(page.getByRole("combobox", { name: label })).toContainText(
+    value,
+  );
+};
+
 test.beforeEach(async ({ page }) => {
   await resetDb(page);
 });
@@ -66,11 +87,9 @@ test("supports basic mobile interactions, title editing, and model switching", a
   await page.getByLabel("保存标题").click();
   await expect(page.getByText("手机标题")).toHaveCount(2);
 
-  await page.getByLabel("选择助手").selectOption("architect");
-  await expect(page.getByLabel("选择助手")).toHaveValue("architect");
-  await expect(page.getByLabel("选择模型")).toHaveValue(
-    "default-profile::default-model",
-  );
+  await selectCustomOption(page, "选择助手", "默认助手");
+  await expectCustomSelectValue(page, "选择助手", "默认助手");
+  await expectCustomSelectValue(page, "选择模型", "默认模型");
 
   await page.getByPlaceholder("输入消息").fill("测试移动端发送");
   await page.getByLabel("发送").click();
@@ -80,9 +99,9 @@ test("supports basic mobile interactions, title editing, and model switching", a
   await openSettings(page);
   await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
   await expect(page.getByText("API Profiles")).toBeVisible();
-  await expect(page.getByLabel("设置中选择助手")).toHaveValue("architect");
+  await expectCustomSelectValue(page, "设置中选择助手", "默认助手");
 
-  await page.getByLabel("主题模式").selectOption("light");
+  await selectCustomOption(page, "主题模式", "亮色");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.getByLabel("流式输出")).toBeChecked();
   await page.getByLabel("流式输出").uncheck({ force: true });
@@ -151,12 +170,43 @@ test("keeps settings rows compact on mobile", async ({ page }, testInfo) => {
     expect(rowBox?.height).toBeLessThan(90);
   }
 
-  await expect(page.getByLabel("布局模式")).toHaveValue("auto");
-  await page.getByLabel("布局模式").selectOption("desktop");
+  await expectCustomSelectValue(page, "布局模式", "跟随屏幕");
+  await selectCustomOption(page, "布局模式", "电脑端");
   await expect(page.locator(".app-shell")).toHaveClass(/desktop-layout/);
-  await page.getByLabel("布局模式").selectOption("mobile");
+  await selectCustomOption(page, "布局模式", "手机端");
   await expect(page.locator(".app-shell")).not.toHaveClass(/desktop-layout/);
   await expect(page.locator(".app-shell")).toHaveClass(/mobile-layout/);
+});
+
+test("keeps desktop conversation rail pinned with internal history scrolling", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "Desktop Chrome",
+    "Desktop rail scroll behavior is only meaningful in the desktop project.",
+  );
+
+  for (let index = 0; index < 36; index += 1) {
+    await page.getByLabel("新建对话").click();
+  }
+
+  const pageHasVerticalScroll = await page.evaluate(
+    () =>
+      document.documentElement.scrollHeight >
+      document.documentElement.clientHeight + 1,
+  );
+  const listIsScrollable = await page
+    .locator(".conversation-list")
+    .evaluate((element) => element.scrollHeight > element.clientHeight + 1);
+
+  expect(pageHasVerticalScroll).toBe(false);
+  expect(listIsScrollable).toBe(true);
+  await expect(
+    page.getByRole("button", { name: /已归档/, exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "设置", exact: true }),
+  ).toBeVisible();
 });
 
 test("verifies persistence and .mobilechat import/export on desktop", async ({
@@ -173,7 +223,7 @@ test("verifies persistence and .mobilechat import/export on desktop", async ({
   await page.getByLabel("保存标题").click();
   await openSettings(page);
 
-  await page.getByLabel("主题模式").selectOption("light");
+  await selectCustomOption(page, "主题模式", "亮色");
   await page.getByLabel("流式输出").uncheck({ force: true });
   await page.getByLabel("API Key").fill("desktop-local-key");
   await page.getByLabel("模型名称").fill("PC 主模型");
@@ -186,7 +236,7 @@ test("verifies persistence and .mobilechat import/export on desktop", async ({
     page.getByLabel("当前对话").getByText("PC 自定义标题"),
   ).toBeVisible();
   await openSettings(page);
-  await expect(page.getByLabel("主题模式")).toHaveValue("light");
+  await expectCustomSelectValue(page, "主题模式", "亮色");
   await expect(page.getByLabel("流式输出")).not.toBeChecked();
   await expect(page.getByLabel("API Key")).toHaveValue("desktop-local-key");
   await expect(page.getByLabel("模型名称")).toHaveValue("PC 主模型");
