@@ -15,6 +15,7 @@ Date: 2026-07-14
 - Web access is protocol-specific and turn-scoped: Responses sends `tools: [{ type: "web_search" }]`; Chat Completions sends `web_search_options: {}` only when the composer's current-turn web option is enabled.
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
 - Web access is now wired as a composer-level temporary request option rather than a static model toggle. Multimodal intent is also kept in the composer as a current-turn placeholder; image/file content sending is still not wired into the request builder.
+- The composer is a multi-line textarea that grows with content up to a bounded height. A persisted input shortcut setting supports either `Enter` to send with `Shift+Enter` newline, or `Enter` newline with `Ctrl+Enter` send. `Ctrl+J` always inserts a newline to mimic the CLI-style line break shortcut on desktop.
 
 ## Implemented response to mobile feedback
 
@@ -35,7 +36,12 @@ Date: 2026-07-14
 - Settings directory lists expose up/down reorder controls for context configurations, connections, models, and assistants. Assistant records are split into chat assistant and utility assistant sections, and reordering is constrained within each section. Reordering changes display/default order only; object IDs and cross-record references remain stable.
 - API Key editing uses an app-owned persistent show/hide button instead of relying on browser-specific password-field eye icons.
 - Debug mode exposes a manual **总结上下文** action and a **显示总结** preview. Summary generation calls the configured global context-summary utility assistant, applies the current chat assistant's context configuration, stores the generated active rolling summary on the conversation, and keeps the visible message thread unchanged except for a small debug status hint.
+- Debug mode also exposes a read-only **数据检查器**. It shows current database/state counts, the active conversation record, the current summary diff, messages covered by the summary boundary, retained raw tail messages, next-request projected messages, and read-only JSON dumps. This is intended for development validation before any editable DB inspector is introduced.
+- Manual debug summary no longer blocks solely because the message count is below the raw-tail retention threshold. The retained raw-tail message count is a persisted setting, defaults to 8, and is clamped to 0–50. When the conversation is shorter than the configured tail size, the UI shows a warning status but still executes the user-requested summary action; only an empty completed-message set is skipped.
+- Automatic context summary is enabled by a persisted **自动总结间隔** setting. `0` disables it; otherwise, after a chat/retry/regenerate response completes, the app counts completed text messages after the active summary boundary and starts a non-blocking summary job when the count reaches the interval. The job summarizes only the trigger-time message snapshot, so later user turns remain visible raw tail until a later trigger.
+- When an active summary already exists and its boundary is still present, the next summary request includes the previous summary plus only the newly completed raw messages after that boundary. The result replaces the single active rolling summary and advances the boundary; canonical messages remain unchanged.
 - Settings has explicit built-in feature references for **上下文总结助手** and **上下文压缩助手**. The utility kind only makes an assistant eligible; feature settings decide which utility assistant is used by each built-in operation.
+- Utility assistants have a model strategy. The default strategy is **跟随当前对话模型**, so summary/compression can run with the same connection + model as the active chat without extra setup. Switching a utility assistant to **指定模型** reveals its own allowed-model/default-model editor as an explicit override.
 - Settings exposes the fixed five-section context-summary framework. Users can override each section's system description, restore one section, or restore all default descriptions; section IDs and titles remain app-defined.
 - Settings also exposes reusable **上下文配置** records. A chat assistant references one context configuration; each configuration keeps the fixed five dimensions but can add per-dimension business/domain guidance, such as roleplay formatting rules, relationship/emotion tracking, random events, or task-specific exploration notes.
 - Each context configuration dimension has an explicit enable checkbox. Disabled dimensions stay visible and keep any previously edited text as local preview data, but they are greyed out, cannot be edited until re-enabled, and are excluded from regular chat injection and summary prompts.
@@ -57,7 +63,7 @@ Date: 2026-07-14
   - optional context window;
   - enabled flag.
 - The connection editor shows the full model list as selectable model cards, so every model visible in assistant model access can be traced back to a model-side configuration record.
-- Assistants own model bindings that reference existing connection + model records, with snapshots of key display fields for provenance. Chat assistants also reference a reusable context configuration; utility summary assistants remain global and read the active chat assistant's configuration at execution time.
+- Assistants own model bindings that reference existing connection + model records, with snapshots of key display fields for provenance. Chat assistants always use their own allowed-model/default-model selection. Utility assistants default to following the active chat model and only use their own model bindings when their model strategy is set to fixed. Chat assistants also reference a reusable context configuration; utility summary assistants remain global and read the active chat assistant's configuration at execution time.
 
 ## User-owned connection configuration
 
@@ -75,7 +81,8 @@ Date: 2026-07-14
 - Conversations may store `contextSummaries[]` plus `activeContextSummaryId`. The current implementation still manages one active rolling summary, but each record already keeps kind, status, boundary message ID, covered message count, retained raw tail count, framework snapshot, context configuration snapshot, update time, and summary-assistant/model source snapshot.
 - During rapid iteration, persistence accepts only the current MobileChatDB record shape. Older fields are not translated into current configuration; users may reconfigure local profiles/assistants if a breaking schema change lands before the stable version.
 - UI edits update memory immediately and are autosaved after a short debounce. Settings close and page visibility changes flush the latest snapshot.
-- Settings persist the selected theme and whether Responses streaming is enabled.
+- Top-level settings list order is explicit state. `apiProfileOrder` and `assistantOrder` are stored in settings and used to re-sort records after IndexedDB `getAll()`, because object stores return primary-key order rather than last UI display order.
+- Settings persist the selected theme, layout mode, composer shortcut mode, context-summary raw-tail retention count, automatic summary interval, and whether Responses streaming is enabled.
 - The current implementation persists normalized full snapshots. This is acceptable for the current small prototype; future large histories should move to dirty-record writes as specified in the architecture document.
 - `.mobilechat` archives contain `manifest.json`, `records.json`, and `checksums.json`.
 - The current export path is credential-free: connection metadata and model definitions are exported, but `apiKey` is cleared.
@@ -98,6 +105,7 @@ Date: 2026-07-14
 - Enabling web access can legitimately increase response latency because the provider or relay may perform hosted search/tool execution before producing the final assistant text. Successful searched responses are therefore not treated as an implementation error solely because they are slower than non-search turns.
 - Debug diagnostics fold current-turn options into the pre-send budget card, for example `模型名 · 联网 · 仅文本`, instead of rendering a separate transient-options card.
 - When a valid `contextSummary` exists, the debug input estimate is based on the projected request (`contextSummary` plus raw tail) rather than the full visible message list.
+- Conversation titles are request metadata and are not semantic memory. Summary requests may receive the title/list summary as positioning context, but the prompt explicitly tells the summary assistant not to write them into the summary body unless the user is discussing those fields as business facts.
 
 ## Verification
 

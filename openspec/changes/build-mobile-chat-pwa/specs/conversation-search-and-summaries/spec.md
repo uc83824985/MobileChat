@@ -25,6 +25,28 @@ The system SHALL support lightweight per-conversation `ContextSummary` records t
 - **WHEN** debug mode is enabled and the user invokes the manual context-summary action
 - **THEN** the system calls the global utility assistant referenced by the context-summary feature setting in the foreground, applies the active chat assistant's Context Profile, stores the resulting active rolling summary in `contextSummaries[]` with boundary, count, timestamp, framework snapshot, Context Profile snapshot, and source snapshot metadata, and does not append a visible chat message
 
+#### Scenario: Configure raw tail retention
+- **WHEN** the user changes the context-summary raw-tail retention setting
+- **THEN** future context-summary records use that local setting to decide how many newest raw messages remain outside the summary boundary
+- **AND** the setting defaults to 8 and is clamped to a small non-negative range suitable for local context projection
+
+#### Scenario: Generate a debug summary below the raw-tail threshold
+- **WHEN** debug mode is enabled and the conversation has at least one completed text message but fewer messages than the normal raw-tail retention threshold
+- **THEN** the manual context-summary action still executes after showing a local warning/status instead of being blocked by the threshold
+
+#### Scenario: Auto summarize after a completed-message interval
+- **WHEN** automatic context summary is enabled with a positive message interval
+- **AND** a chat, retry, or regenerate response completes with at least that many completed text messages after the active summary boundary
+- **THEN** the system starts a non-blocking context-summary job using the trigger-time message snapshot
+- **AND** the visible conversation remains unchanged and the user may continue chatting while the summary job is running
+- **AND** messages added after the trigger snapshot remain unsummarized raw tail until a later trigger
+
+#### Scenario: Auto summary reuses the previous rolling summary
+- **WHEN** a valid active `ContextSummary` exists and its boundary message is still present
+- **AND** a later automatic or manual summary advances the boundary
+- **THEN** the summary request includes the previous summary plus only raw messages after the previous boundary up to the new trigger boundary
+- **AND** the resulting active rolling summary stores the previous summary ID for provenance
+
 #### Scenario: Configure summary framework sections
 - **WHEN** the system calls a context-summary utility assistant
 - **THEN** the request includes the locally configured summary framework, including section names and instructions, so the assistant fills a stable structure rather than inventing categories
@@ -53,9 +75,19 @@ The system SHALL support lightweight per-conversation `ContextSummary` records t
 - **WHEN** a valid `ContextSummary` exists and debug mode is enabled
 - **THEN** the system provides a local preview action that displays the stored summary without making a provider request
 
+#### Scenario: Inspect summary projection diff
+- **WHEN** debug mode is enabled and the user opens the read-only data inspector
+- **THEN** the system displays the active conversation record, current summary metadata, messages covered by the summary boundary, retained raw tail messages, next-request projected messages, and read-only JSON data
+- **AND** the inspector does not mutate conversations, messages, settings, or IndexedDB records
+
 #### Scenario: Use summary in the next request
 - **WHEN** a valid `ContextSummary` covers older messages
 - **THEN** the next assistant request includes the summary plus recent raw tail messages instead of sending both the summary and all covered raw messages
+
+#### Scenario: Keep title out of semantic summary
+- **WHEN** the system asks the context-summary utility assistant to summarize a conversation
+- **THEN** the request may include the title and list summary only as positioning metadata
+- **AND** the prompt instructs the utility assistant not to write those metadata fields into the semantic summary body unless the user explicitly discusses the metadata itself as a business fact
 
 #### Scenario: Covered message is deleted
 - **WHEN** the user deletes a message that is inside the current summary boundary
