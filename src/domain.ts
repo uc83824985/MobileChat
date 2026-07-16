@@ -95,8 +95,10 @@ export type Message = {
 };
 
 export type AssistantKind = "chat" | "utility";
+export type UtilityAssistantModelStrategy = "follow-conversation" | "fixed";
 export type ThemeMode = "system" | "light" | "dark";
 export type LayoutMode = "auto" | "mobile" | "desktop";
+export type ComposerSubmitMode = "enter-send" | "ctrl-enter-send";
 export type ApiProtocol = "openai-responses" | "openai-chat-completions";
 
 export type UtilityAssistantFeatureRefs = {
@@ -141,6 +143,7 @@ export type Assistant = {
   name: string;
   description: string;
   kind: AssistantKind;
+  utilityModelStrategy?: UtilityAssistantModelStrategy;
   modelBindings: AssistantModelBinding[];
   contextProfileId?: string;
   prompt: string;
@@ -170,7 +173,12 @@ export type AppSettings = {
   themeMode: ThemeMode;
   layoutMode: LayoutMode;
   streamingEnabled: boolean;
+  composerSubmitMode: ComposerSubmitMode;
+  contextSummaryRawTailMessages: number;
+  contextSummaryAutoMessageInterval: number;
   debugEnabled: boolean;
+  apiProfileOrder: string[];
+  assistantOrder: string[];
   utilityAssistantRefs: UtilityAssistantFeatureRefs;
   contextSummaryFramework: ContextSummaryFramework;
   contextProfiles: ContextProfile[];
@@ -206,6 +214,8 @@ export const CONTEXT_SUMMARY_ASSISTANT_ID = "context-summary-gpt54";
 export const CONTEXT_COMPRESSION_ASSISTANT_ID = "compact";
 export const DEFAULT_CONTEXT_SUMMARY_FRAMEWORK_ID = "default-context-summary";
 export const DEFAULT_CONTEXT_PROFILE_ID = "general-context";
+export const DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES = 8;
+export const DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL = 8;
 export const DEFAULT_MODEL_REF: ModelRef = {
   apiProfileId: DEFAULT_PROFILE_ID,
   modelId: DEFAULT_MODEL_ID,
@@ -328,6 +338,7 @@ export const contextSummaryAssistant: Assistant = {
   description:
     "内置功能助手预设：为单个对话生成可继续使用的上下文总结，不参与普通聊天。",
   kind: "utility",
+  utilityModelStrategy: "follow-conversation",
   modelBindings: [defaultBinding(true)],
   contextProfileId: DEFAULT_CONTEXT_PROFILE_ID,
   prompt:
@@ -354,6 +365,7 @@ export const initialAssistants: Assistant[] = [
     name: "压缩助手",
     description: "功能助手，用于后续 /compact 风格上下文压缩。",
     kind: "utility",
+    utilityModelStrategy: "follow-conversation",
     modelBindings: [defaultBinding(true)],
     contextProfileId: DEFAULT_CONTEXT_PROFILE_ID,
     prompt: "你只输出结构化压缩结果，不参与普通聊天。",
@@ -420,7 +432,13 @@ export const createInitialSettings = (
   themeMode: "system",
   layoutMode: "auto",
   streamingEnabled: true,
+  composerSubmitMode: "enter-send",
+  contextSummaryRawTailMessages: DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
+  contextSummaryAutoMessageInterval:
+    DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL,
   debugEnabled: true,
+  apiProfileOrder: initialApiProfiles.map((profile) => profile.id),
+  assistantOrder: initialAssistants.map((assistant) => assistant.id),
   utilityAssistantRefs: defaultUtilityAssistantRefs,
   contextSummaryFramework: defaultContextSummaryFramework,
   contextProfiles: [defaultContextProfile],

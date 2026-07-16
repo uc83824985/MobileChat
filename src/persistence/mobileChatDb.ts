@@ -9,6 +9,8 @@ import {
   defaultContextProfile,
   defaultContextSummaryFramework,
   defaultUtilityAssistantRefs,
+  DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL,
+  DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
   DEFAULT_MODEL_REF,
   initialApiProfiles,
   type LocalDataSnapshot,
@@ -160,6 +162,36 @@ const findModelInProfiles = (apiProfiles: ApiProfile[], ref: ModelRef) => {
   return { apiProfile, model };
 };
 
+const sortRecordsByStoredOrder = <T extends { id: string }>(
+  records: T[],
+  order?: string[],
+): T[] => {
+  if (!Array.isArray(order) || order.length === 0) {
+    return records;
+  }
+
+  const orderIndex = new Map(order.map((id, index) => [id, index]));
+
+  return records
+    .map((record, originalIndex) => ({ record, originalIndex }))
+    .toSorted((left, right) => {
+      const leftIndex = orderIndex.get(left.record.id);
+      const rightIndex = orderIndex.get(right.record.id);
+
+      if (leftIndex !== undefined && rightIndex !== undefined) {
+        return leftIndex - rightIndex;
+      }
+      if (leftIndex !== undefined) {
+        return -1;
+      }
+      if (rightIndex !== undefined) {
+        return 1;
+      }
+      return left.originalIndex - right.originalIndex;
+    })
+    .map(({ record }) => record);
+};
+
 const normalizeAssistant = (
   assistant: Assistant,
   apiProfiles: ApiProfile[],
@@ -180,6 +212,14 @@ const normalizeAssistant = (
     name: assistant.name,
     description: assistant.description ?? "",
     kind: assistant.kind ?? "chat",
+    ...(assistant.kind === "utility"
+      ? {
+          utilityModelStrategy:
+            assistant.utilityModelStrategy === "fixed"
+              ? "fixed"
+              : "follow-conversation",
+        }
+      : {}),
     modelBindings: modelBindings.map((binding, index) => {
       const { apiProfile, model } = findModelInProfiles(apiProfiles, binding);
       return {
@@ -209,6 +249,22 @@ const normalizeMessages = (messages: Message[], now: string): Message[] =>
     ...message,
     createdAt: message.createdAt ?? now,
   }));
+
+const normalizeContextSummaryRawTailMessages = (value: unknown) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES;
+  }
+
+  return Math.max(0, Math.min(50, Math.trunc(value)));
+};
+
+const normalizeContextSummaryAutoMessageInterval = (value: unknown) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL;
+  }
+
+  return Math.max(0, Math.min(100, Math.trunc(value)));
+};
 
 const normalizeContextSummaryFramework = (
   framework?: Partial<ContextSummaryFramework>,
@@ -285,18 +341,24 @@ export const normalizeSnapshot = (
 ): LocalDataSnapshot => {
   const initialSnapshot = createInitialSnapshot();
   const now = new Date().toISOString();
-  const apiProfiles = snapshot.apiProfiles
-    ? cloneApiProfiles(snapshot.apiProfiles)
-    : cloneInitialApiProfiles();
   const settings: PartialSettings = snapshot.settings ?? {};
+  const apiProfiles = sortRecordsByStoredOrder(
+    snapshot.apiProfiles
+      ? cloneApiProfiles(snapshot.apiProfiles)
+      : cloneInitialApiProfiles(),
+    settings.apiProfileOrder,
+  );
   const contextProfiles = normalizeContextProfiles(settings.contextProfiles);
-  const assistants = snapshot.assistants
-    ? snapshot.assistants.map((assistant) =>
-        normalizeAssistant(assistant, apiProfiles, contextProfiles),
-      )
-    : initialSnapshot.assistants.map((assistant) =>
-        normalizeAssistant(assistant, apiProfiles, contextProfiles),
-      );
+  const assistants = sortRecordsByStoredOrder(
+    snapshot.assistants
+      ? snapshot.assistants.map((assistant) =>
+          normalizeAssistant(assistant, apiProfiles, contextProfiles),
+        )
+      : initialSnapshot.assistants.map((assistant) =>
+          normalizeAssistant(assistant, apiProfiles, contextProfiles),
+        ),
+    settings.assistantOrder,
+  );
   const conversations = snapshot.conversations
     ? snapshot.conversations.map((conversation) =>
         normalizeConversation(conversation),
@@ -332,8 +394,20 @@ export const normalizeSnapshot = (
       layoutMode: settings.layoutMode ?? initialSnapshot.settings.layoutMode,
       streamingEnabled:
         settings.streamingEnabled ?? initialSnapshot.settings.streamingEnabled,
+      composerSubmitMode:
+        settings.composerSubmitMode ??
+        initialSnapshot.settings.composerSubmitMode,
+      contextSummaryRawTailMessages: normalizeContextSummaryRawTailMessages(
+        settings.contextSummaryRawTailMessages,
+      ),
+      contextSummaryAutoMessageInterval:
+        normalizeContextSummaryAutoMessageInterval(
+          settings.contextSummaryAutoMessageInterval,
+        ),
       debugEnabled:
         settings.debugEnabled ?? initialSnapshot.settings.debugEnabled,
+      apiProfileOrder: apiProfiles.map((profile) => profile.id),
+      assistantOrder: assistants.map((assistant) => assistant.id),
       utilityAssistantRefs: {
         ...defaultUtilityAssistantRefs,
         ...settings.utilityAssistantRefs,

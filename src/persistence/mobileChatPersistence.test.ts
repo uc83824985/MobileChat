@@ -31,6 +31,9 @@ describe("MobileChat persistence", () => {
     expect(snapshot.settings.themeMode).toBe("system");
     expect(snapshot.settings.layoutMode).toBe("auto");
     expect(snapshot.settings.streamingEnabled).toBe(true);
+    expect(snapshot.settings.composerSubmitMode).toBe("enter-send");
+    expect(snapshot.settings.contextSummaryRawTailMessages).toBe(8);
+    expect(snapshot.settings.contextSummaryAutoMessageInterval).toBe(8);
     expect(snapshot.settings.utilityAssistantRefs).toEqual(
       defaultUtilityAssistantRefs,
     );
@@ -200,6 +203,43 @@ describe("MobileChat persistence", () => {
     ).toBe(profile.id);
   });
 
+  it("persists explicit display order for top-level settings stores", async () => {
+    const snapshot = createInitialSnapshot();
+    const secondProfile = {
+      ...snapshot.apiProfiles[0]!,
+      id: "z-connection",
+      name: "Z 连接",
+      models: snapshot.apiProfiles[0]!.models.map((model) => ({ ...model })),
+    };
+    const assistantOrder = [
+      CONTEXT_SUMMARY_ASSISTANT_ID,
+      "compact",
+      "architect",
+    ];
+    const apiProfileOrder = ["z-connection", "default-profile"];
+
+    await saveSnapshot({
+      ...snapshot,
+      settings: {
+        ...snapshot.settings,
+        assistantOrder,
+        apiProfileOrder,
+      },
+      apiProfiles: [snapshot.apiProfiles[0]!, secondProfile],
+    });
+
+    const restored = await loadSnapshot();
+
+    expect(restored.settings.assistantOrder).toEqual(assistantOrder);
+    expect(restored.assistants.map((assistant) => assistant.id)).toEqual(
+      assistantOrder,
+    );
+    expect(restored.settings.apiProfileOrder).toEqual(apiProfileOrder);
+    expect(restored.apiProfiles.map((profile) => profile.id)).toEqual(
+      apiProfileOrder,
+    );
+  });
+
   it("does not append missing built-in assistants based on old schema versions", async () => {
     const snapshot = createInitialSnapshot();
     const snapshotWithoutSummaryAssistant = {
@@ -231,6 +271,8 @@ describe("MobileChat persistence", () => {
         themeMode: "light",
         layoutMode: "desktop",
         streamingEnabled: false,
+        composerSubmitMode: "ctrl-enter-send",
+        contextSummaryRawTailMessages: 3,
         activeModelRef: {
           apiProfileId: "default-profile",
           modelId: "default-model",
@@ -266,6 +308,8 @@ describe("MobileChat persistence", () => {
     expect(restored.settings.themeMode).toBe("light");
     expect(restored.settings.layoutMode).toBe("desktop");
     expect(restored.settings.streamingEnabled).toBe(false);
+    expect(restored.settings.composerSubmitMode).toBe("ctrl-enter-send");
+    expect(restored.settings.contextSummaryRawTailMessages).toBe(3);
     expect(restored.settings.activeModelRef.modelId).toBe("default-model");
     expect(restored.apiProfiles[0]?.apiKey).toBe("local-only-key");
     const restoredModel = restored.apiProfiles[0]?.models.find(
