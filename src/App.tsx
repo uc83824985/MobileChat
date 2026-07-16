@@ -42,6 +42,7 @@ import {
   type AssistantFieldKey,
   type AssistantModelBinding,
   assistantFields,
+  type ComposerSubmitMode,
   type Conversation,
   type ContextProfile,
   type ContextProfileDimensionOverride,
@@ -52,6 +53,8 @@ import {
   createInitialSnapshot,
   defaultContextProfile,
   defaultContextSummaryFramework,
+  DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL,
+  DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
   DEFAULT_MODEL_REF,
   defaultAssistant,
   type LocalDataSnapshot,
@@ -65,6 +68,7 @@ import {
   type SaveStatus,
   type StorageInfo,
   type ThemeMode,
+  type UtilityAssistantModelStrategy,
 } from "./domain";
 import {
   createArchiveDownloadName,
@@ -96,7 +100,7 @@ type ResolvedModel = {
 const UI_PREFERENCES_STORAGE_KEY = "mobilechat:ui-preferences";
 const AUTOSAVE_DELAY_MS = 400;
 const SCROLL_EDGE_THRESHOLD_PX = 12;
-const CONTEXT_SUMMARY_RAW_TAIL_MESSAGES = 8;
+const COMPOSER_MAX_HEIGHT_PX = 220;
 
 const isThemeMode = (value: unknown): value is ThemeMode =>
   value === "system" || value === "light" || value === "dark";
@@ -363,6 +367,21 @@ const layoutLabels: Record<LayoutMode, string> = {
   desktop: "电脑端",
 };
 
+const composerSubmitModeLabels: Record<ComposerSubmitMode, string> = {
+  "enter-send": "Enter 发送，Shift+Enter 换行",
+  "ctrl-enter-send": "Enter 换行，Ctrl+Enter 发送",
+};
+
+const normalizeContextSummaryRawTailMessages = (value: number) =>
+  Number.isFinite(value)
+    ? Math.max(0, Math.min(50, Math.trunc(value)))
+    : DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES;
+
+const normalizeContextSummaryAutoMessageInterval = (value: number) =>
+  Number.isFinite(value)
+    ? Math.max(0, Math.min(100, Math.trunc(value)))
+    : DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL;
+
 const saveStatusLabels: Record<SaveStatus, string> = {
   loading: "加载中",
   unsaved: "未保存",
@@ -485,6 +504,23 @@ const resolveAssistantDefaultModel = (
   return listAssistantModels(assistant, apiProfiles)[0];
 };
 
+const getUtilityAssistantModelStrategy = (assistant: Assistant) =>
+  assistant.kind === "utility"
+    ? (assistant.utilityModelStrategy ?? "follow-conversation")
+    : "fixed";
+
+const resolveUtilityAssistantModel = (
+  assistant: Assistant,
+  activeModel: ResolvedModel | undefined,
+  apiProfiles: ApiProfile[],
+) => {
+  if (getUtilityAssistantModelStrategy(assistant) === "fixed") {
+    return resolveAssistantDefaultModel(assistant, apiProfiles);
+  }
+
+  return activeModel;
+};
+
 const estimateTokenCount = (messages: Message[], draft = "") => {
   const textLength =
     messages.reduce((sum, message) => sum + message.text.length, 0) +
@@ -541,6 +577,8 @@ const formatTranscriptMessage = (message: Message, index: number) => {
     message.text.trim() || "[空消息]"
   }`;
 };
+
+const formatInspectorJson = (value: unknown) => JSON.stringify(value, null, 2);
 
 const formatContextSummaryFramework = (framework: ContextSummaryFramework) =>
   framework.sections
@@ -663,6 +701,7 @@ const buildContextSummaryPrompt = ({
 - 只总结对后续继续对话有用的信息，不要生成普通聊天回复。
 - 保留用户目标、明确决策、技术约束、已完成修改、待验证问题、重要路径/配置/错误信息。
 - 不要臆测，不要补充消息中没有的事实。
+- 对话标题和列表摘要只作为定位参考，不要把它们写进总结正文；除非用户明确把标题或摘要本身当作业务事实讨论。
 - 如果已有旧总结，请把新增消息合并进去，输出一份完整的新总结。
 - 必须使用下面的总结框架作为 Markdown 二级标题；没有内容的可写“无”。
 - 输出中文 Markdown，尽量紧凑，优先结构化。
@@ -678,8 +717,9 @@ ${contextProfile.description || "无说明"}
 配置维度重载：
 ${formattedProfile || "当前上下文配置未启用任何上下文维度。"}
 
-对话标题：${conversation.title}
-列表摘要：${conversation.summary || "无"}
+定位信息（仅供理解，不要写入总结正文）：
+- 对话标题：${conversation.title}
+- 列表摘要：${conversation.summary || "无"}
 
 旧上下文总结：
 ${previousSummary?.trim() || "无"}
@@ -896,6 +936,14 @@ function App() {
   const [streamingEnabled, setStreamingEnabled] = useState(
     bootSnapshot.settings.streamingEnabled,
   );
+  const [composerSubmitMode, setComposerSubmitMode] =
+    useState<ComposerSubmitMode>(bootSnapshot.settings.composerSubmitMode);
+  const [contextSummaryRawTailMessages, setContextSummaryRawTailMessages] =
+    useState(bootSnapshot.settings.contextSummaryRawTailMessages);
+  const [
+    contextSummaryAutoMessageInterval,
+    setContextSummaryAutoMessageInterval,
+  ] = useState(bootSnapshot.settings.contextSummaryAutoMessageInterval);
   const [utilityAssistantRefs, setUtilityAssistantRefs] = useState(
     bootSnapshot.settings.utilityAssistantRefs,
   );
@@ -914,6 +962,7 @@ function App() {
     useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [dataInspectorOpen, setDataInspectorOpen] = useState(false);
   const [debugEnabled, setDebugEnabled] = useState(
     bootSnapshot.settings.debugEnabled,
   );
@@ -953,8 +1002,32 @@ function App() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const latestSnapshotRef = useRef<LocalDataSnapshot>(bootSnapshot);
+  const contextSummaryJobRunningRef = useRef(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const messageThreadRef = useRef<HTMLDivElement | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const resizeComposerInput = useCallback(() => {
+    const input = composerInputRef.current;
+    if (!input) {
+      return;
+    }
+
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, COMPOSER_MAX_HEIGHT_PX)}px`;
+    input.style.overflowY =
+      input.scrollHeight > COMPOSER_MAX_HEIGHT_PX ? "auto" : "hidden";
+  }, []);
+
+  useEffect(() => {
+    resizeComposerInput();
+  }, [draft, resizeComposerInput]);
+
+  useEffect(() => {
+    if (!debugEnabled) {
+      setDataInspectorOpen(false);
+    }
+  }, [debugEnabled]);
 
   const updateScrollShortcutTarget = useCallback(() => {
     const thread = messageThreadRef.current;
@@ -991,7 +1064,14 @@ function App() {
 
   const activeAssistant = useMemo(
     () =>
-      assistants.find((assistant) => assistant.id === activeAssistantId) ??
+      assistants.find(
+        (assistant) =>
+          assistant.id === activeAssistantId && assistant.kind === "chat",
+      ) ??
+      assistants.find(
+        (assistant) => assistant.kind === "chat" && assistant.enabled,
+      ) ??
+      assistants.find((assistant) => assistant.kind === "chat") ??
       assistants[0] ??
       defaultAssistant,
     [activeAssistantId, assistants],
@@ -1076,9 +1156,13 @@ function App() {
   const contextSummaryResolvedModel = useMemo(
     () =>
       contextSummaryAssistant
-        ? resolveAssistantDefaultModel(contextSummaryAssistant, apiProfiles)
+        ? resolveUtilityAssistantModel(
+            contextSummaryAssistant,
+            activeResolvedModel,
+            apiProfiles,
+          )
         : undefined,
-    [apiProfiles, contextSummaryAssistant],
+    [activeResolvedModel, apiProfiles, contextSummaryAssistant],
   );
   const assistantModelOptions = useMemo(
     () => listAssistantModels(activeAssistant, apiProfiles),
@@ -1087,6 +1171,16 @@ function App() {
   const allModelOptions = useMemo(
     () => listAllModels(apiProfiles),
     [apiProfiles],
+  );
+  const editingAssistantModelStrategy =
+    getUtilityAssistantModelStrategy(editingAssistant);
+  const editingAssistantResolvedModelOptions = useMemo(
+    () => listAssistantModels(editingAssistant, apiProfiles),
+    [apiProfiles, editingAssistant],
+  );
+  const editingAssistantDefaultResolvedModel = useMemo(
+    () => resolveAssistantDefaultModel(editingAssistant, apiProfiles),
+    [apiProfiles, editingAssistant],
   );
   const activeConversations = useMemo(
     () => conversations.filter((conversation) => !conversation.archived),
@@ -1120,6 +1214,123 @@ function App() {
   const activeContextSummary = useMemo(
     () => getActiveContextSummaryRecord(activeConversation),
     [activeConversation],
+  );
+  const activeContextSummaryBoundaryIndex = useMemo(() => {
+    if (!activeContextSummary?.boundaryMessageId) {
+      return -1;
+    }
+
+    return activeMessages.findIndex(
+      (message) => message.id === activeContextSummary.boundaryMessageId,
+    );
+  }, [activeContextSummary, activeMessages]);
+  const activeContextSummaryCoveredMessages = useMemo(
+    () =>
+      activeContextSummaryBoundaryIndex >= 0
+        ? activeMessages.slice(0, activeContextSummaryBoundaryIndex + 1)
+        : [],
+    [activeContextSummaryBoundaryIndex, activeMessages],
+  );
+  const activeContextSummaryRetainedMessages = useMemo(() => {
+    if (!activeContextSummary) {
+      return activeMessages;
+    }
+
+    return activeContextSummaryBoundaryIndex >= 0
+      ? activeMessages.slice(activeContextSummaryBoundaryIndex + 1)
+      : activeMessages;
+  }, [activeContextSummary, activeContextSummaryBoundaryIndex, activeMessages]);
+  const dataInspectorOverview = useMemo(
+    () => ({
+      conversations: conversations.length,
+      activeConversations: activeConversations.length,
+      archivedConversations: archivedConversations.length,
+      messages: messages.length,
+      connections: apiProfiles.length,
+      models: apiProfiles.reduce(
+        (total, profile) => total + profile.models.length,
+        0,
+      ),
+      chatAssistants: assistants.filter(
+        (assistant) => assistant.kind === "chat",
+      ).length,
+      utilityAssistants: assistants.filter(
+        (assistant) => assistant.kind === "utility",
+      ).length,
+      contextProfiles: contextProfiles.length,
+      contextSummaryRecords: conversations.reduce(
+        (total, conversation) =>
+          total + (conversation.contextSummaries?.length ?? 0),
+        0,
+      ),
+      rawTailMessages: contextSummaryRawTailMessages,
+      autoSummaryInterval: contextSummaryAutoMessageInterval,
+    }),
+    [
+      activeConversations.length,
+      apiProfiles,
+      archivedConversations.length,
+      assistants,
+      contextProfiles.length,
+      contextSummaryAutoMessageInterval,
+      contextSummaryRawTailMessages,
+      conversations,
+      messages.length,
+    ],
+  );
+  const dataInspectorConversation = useMemo(
+    () =>
+      activeConversation
+        ? {
+            id: activeConversation.id,
+            title: activeConversation.title,
+            summary: activeConversation.summary,
+            archived: Boolean(activeConversation.archived),
+            messageCount: activeMessages.length,
+            activeContextSummaryId:
+              activeConversation.activeContextSummaryId ?? null,
+            contextSummaryCount:
+              activeConversation.contextSummaries?.length ?? 0,
+          }
+        : null,
+    [activeConversation, activeMessages.length],
+  );
+  const dataInspectorSummaryDiff = useMemo(
+    () => ({
+      hasActiveSummary: Boolean(activeContextSummary?.text.trim()),
+      summaryId: activeContextSummary?.id ?? null,
+      boundaryMessageId: activeContextSummary?.boundaryMessageId ?? null,
+      boundaryFound: activeContextSummaryBoundaryIndex >= 0,
+      boundaryIndex: activeContextSummaryBoundaryIndex,
+      coveredMessagesInRecord:
+        activeContextSummary?.coveredMessageCount ?? null,
+      coveredMessagesResolved: activeContextSummaryCoveredMessages.length,
+      retainedRawMessagesInRecord:
+        activeContextSummary?.retainedRawMessageCount ?? null,
+      retainedRawMessagesResolved: activeContextSummaryRetainedMessages.length,
+      projectedRequestMessages: activeProjectedMessages.length,
+      source: activeContextSummary?.source ?? null,
+      framework: activeContextSummary
+        ? {
+            id: activeContextSummary.frameworkId,
+            name: activeContextSummary.frameworkNameSnapshot,
+            schemaVersion: activeContextSummary.schemaVersion,
+          }
+        : null,
+      contextProfile: activeContextSummary
+        ? {
+            id: activeContextSummary.contextProfileId ?? null,
+            name: activeContextSummary.contextProfileNameSnapshot ?? null,
+          }
+        : null,
+    }),
+    [
+      activeContextSummary,
+      activeContextSummaryBoundaryIndex,
+      activeContextSummaryCoveredMessages.length,
+      activeContextSummaryRetainedMessages.length,
+      activeProjectedMessages.length,
+    ],
   );
 
   const chatAssistants = useMemo(
@@ -1179,7 +1390,12 @@ function App() {
       themeMode,
       layoutMode,
       streamingEnabled,
+      composerSubmitMode,
+      contextSummaryRawTailMessages,
+      contextSummaryAutoMessageInterval,
       debugEnabled,
+      apiProfileOrder: apiProfiles.map((profile) => profile.id),
+      assistantOrder: assistants.map((assistant) => assistant.id),
       utilityAssistantRefs,
       contextSummaryFramework,
       contextProfiles,
@@ -1193,6 +1409,11 @@ function App() {
       activeAssistantId,
       activeConversationId,
       activeModelRef,
+      apiProfiles,
+      assistants,
+      composerSubmitMode,
+      contextSummaryAutoMessageInterval,
+      contextSummaryRawTailMessages,
       contextSummaryFramework,
       contextProfiles,
       debugEnabled,
@@ -1237,6 +1458,13 @@ function App() {
     setThemeMode(snapshot.settings.themeMode);
     setLayoutMode(snapshot.settings.layoutMode);
     setStreamingEnabled(snapshot.settings.streamingEnabled);
+    setComposerSubmitMode(snapshot.settings.composerSubmitMode);
+    setContextSummaryRawTailMessages(
+      snapshot.settings.contextSummaryRawTailMessages,
+    );
+    setContextSummaryAutoMessageInterval(
+      snapshot.settings.contextSummaryAutoMessageInterval,
+    );
     setDebugEnabled(snapshot.settings.debugEnabled);
     setUtilityAssistantRefs(snapshot.settings.utilityAssistantRefs);
     setContextSummaryFramework(snapshot.settings.contextSummaryFramework);
@@ -1393,6 +1621,11 @@ function App() {
   }, [currentSnapshot, hydrated, saveCurrentSnapshot]);
 
   useEffect(() => {
+    if (activeAssistant.id !== activeAssistantId) {
+      setActiveAssistantId(activeAssistant.id);
+      return;
+    }
+
     const selectedRef = chooseModelForAssistant(
       activeAssistant,
       activeModelRef,
@@ -1401,7 +1634,7 @@ function App() {
     if (modelRefKey(selectedRef) !== modelRefKey(activeModelRef)) {
       setActiveModelRef(selectedRef);
     }
-  }, [activeAssistant, activeModelRef, apiProfiles]);
+  }, [activeAssistant, activeAssistantId, activeModelRef, apiProfiles]);
 
   useEffect(() => {
     if (!editingApiProfile && apiProfiles[0]) {
@@ -1488,8 +1721,10 @@ function App() {
 
   const activateAssistant = (assistantId: string) => {
     const nextAssistant =
-      assistants.find((assistant) => assistant.id === assistantId) ??
-      activeAssistant;
+      assistants.find(
+        (assistant) =>
+          assistant.id === assistantId && assistant.kind === "chat",
+      ) ?? activeAssistant;
     setActiveAssistantId(nextAssistant.id);
     setEditingAssistantId(nextAssistant.id);
     setActiveModelRef(
@@ -1824,6 +2059,43 @@ function App() {
           ? { ...assistant, contextProfileId }
           : assistant,
       ),
+    );
+  };
+
+  const updateUtilityAssistantModelStrategy = (
+    assistantId: string,
+    utilityModelStrategy: UtilityAssistantModelStrategy,
+  ) => {
+    const fallbackModel = activeResolvedModel ?? allModelOptions[0];
+
+    setAssistants((current) =>
+      current.map((assistant) => {
+        if (assistant.id !== assistantId) {
+          return assistant;
+        }
+
+        const hasOnlyDefaultPlaceholderBinding =
+          assistant.modelBindings.length <= 1 &&
+          assistant.modelBindings.every(
+            (binding) =>
+              modelRefKey(binding) === modelRefKey(DEFAULT_MODEL_REF),
+          );
+        const seededFixedBinding =
+          utilityModelStrategy === "fixed" &&
+          (assistant.modelBindings.length === 0 ||
+            hasOnlyDefaultPlaceholderBinding) &&
+          fallbackModel
+            ? createBinding(fallbackModel.apiProfile, fallbackModel.model, true)
+            : undefined;
+
+        return {
+          ...assistant,
+          utilityModelStrategy,
+          modelBindings: seededFixedBinding
+            ? [seededFixedBinding]
+            : assistant.modelBindings,
+        };
+      }),
     );
   };
 
@@ -2458,6 +2730,172 @@ function App() {
     }
   };
 
+  const runContextSummaryJob = async ({
+    conversation,
+    triggerSummarizableMessages,
+    messagesToSummarize,
+    boundaryMessage,
+    nextBoundaryIndex,
+    previousSummary,
+    canReusePreviousSummary,
+    summaryAssistant,
+    summaryResolvedModel,
+    contextProfile,
+    trigger,
+    statusText,
+  }: {
+    conversation: Conversation;
+    triggerSummarizableMessages: Message[];
+    messagesToSummarize: Message[];
+    boundaryMessage: Message;
+    nextBoundaryIndex: number;
+    previousSummary?: ContextSummaryRecord;
+    canReusePreviousSummary: boolean;
+    summaryAssistant: Assistant;
+    summaryResolvedModel: ResolvedModel;
+    contextProfile: ContextProfile;
+    trigger: "manual" | "auto";
+    statusText: string;
+  }) => {
+    if (contextSummaryJobRunningRef.current) {
+      return false;
+    }
+
+    contextSummaryJobRunningRef.current = true;
+    setContextSummaryPending(true);
+    setContextSummaryStatus(statusText);
+
+    const now = new Date().toISOString();
+    const summaryRequestMessage: Message = {
+      id: createId("summary-request"),
+      conversationId: conversation.id,
+      role: "user",
+      label: "上下文总结请求",
+      text: buildContextSummaryPrompt({
+        conversation,
+        previousSummary: canReusePreviousSummary
+          ? previousSummary?.text
+          : undefined,
+        messages: messagesToSummarize,
+        framework: contextSummaryFramework,
+        contextProfile,
+      }),
+      createdAt: now,
+      status: "complete",
+    };
+    const controller = new AbortController();
+
+    try {
+      const result = await requestResponsesChat({
+        apiProfile: summaryResolvedModel.apiProfile,
+        assistant: summaryAssistant,
+        conversation,
+        model: summaryResolvedModel.model,
+        messages: [summaryRequestMessage],
+        signal: controller.signal,
+        stream: false,
+        webSearchEnabled: false,
+      });
+      const contextSummary = result.text.trim();
+
+      if (!contextSummary) {
+        throw new Error("总结助手未返回文本。");
+      }
+
+      const latestConversationMessages = latestSnapshotRef.current.messages
+        .filter((message) => message.conversationId === conversation.id)
+        .toSorted(compareMessagesByCreatedAt);
+      const latestSummarizableMessages = latestConversationMessages.filter(
+        (message) => message.status !== "streaming" && message.text.trim(),
+      );
+      let latestBoundaryIndex = latestSummarizableMessages.findIndex(
+        (message) => message.id === boundaryMessage.id,
+      );
+      const effectiveSummarizableMessages =
+        latestBoundaryIndex >= 0
+          ? latestSummarizableMessages
+          : triggerSummarizableMessages;
+      latestBoundaryIndex = effectiveSummarizableMessages.findIndex(
+        (message) => message.id === boundaryMessage.id,
+      );
+
+      if (latestBoundaryIndex < 0) {
+        throw new Error("总结边界消息已被删除或失效，已放弃写入。");
+      }
+
+      const updatedAt = new Date().toISOString();
+      const coveredMessageCount = nextBoundaryIndex + 1;
+      const retainedRawMessages = Math.max(
+        0,
+        effectiveSummarizableMessages.length - coveredMessageCount,
+      );
+      const source = createSourceSnapshot(
+        summaryAssistant,
+        summaryResolvedModel,
+      );
+      const summaryRecord: ContextSummaryRecord = {
+        id: createId("context-summary"),
+        kind: "rolling",
+        status: "active",
+        schemaVersion: contextSummaryFramework.schemaVersion,
+        text: contextSummary,
+        boundaryMessageId: boundaryMessage.id,
+        coveredMessageCount,
+        retainedRawMessageCount: retainedRawMessages,
+        createdAt: updatedAt,
+        updatedAt,
+        previousSummaryId: previousSummary?.id,
+        source,
+        frameworkId: contextSummaryFramework.id,
+        frameworkNameSnapshot: contextSummaryFramework.name,
+        frameworkSectionsSnapshot: createEffectiveContextSummarySections(
+          contextSummaryFramework,
+          contextProfile,
+        ),
+        contextProfileId: contextProfile.id,
+        contextProfileNameSnapshot: contextProfile.name,
+        contextProfileDimensionOverridesSnapshot:
+          contextProfile.dimensionOverrides,
+      };
+
+      setConversations((current) =>
+        current.map((candidate) =>
+          candidate.id === conversation.id
+            ? {
+                ...candidate,
+                contextSummaries: [summaryRecord],
+                activeContextSummaryId: summaryRecord.id,
+              }
+            : candidate,
+        ),
+      );
+      setContextSummaryStatus(
+        trigger === "auto"
+          ? `后台已总结到 ${coveredMessageCount} 条，当前还有 ${retainedRawMessages} 条未总结 · ${formatMessageTime(
+              updatedAt,
+            )}`
+          : `已总结 ${coveredMessageCount} 条历史消息，保留最近 ${retainedRawMessages} 条原文 · ${formatMessageTime(
+              updatedAt,
+            )}`,
+      );
+      return true;
+    } catch (error) {
+      setContextSummaryStatus(
+        error instanceof Error
+          ? `${
+              trigger === "auto" ? "自动上下文总结" : "上下文总结"
+            }失败：${error.message}`
+          : `${
+              trigger === "auto" ? "自动上下文总结" : "上下文总结"
+            }失败，请检查总结助手配置。`,
+      );
+      return false;
+    } finally {
+      contextSummaryJobRunningRef.current = false;
+      setContextSummaryPending(false);
+    }
+  };
+
   const summarizeActiveConversation = async () => {
     if (
       !activeConversation ||
@@ -2475,7 +2913,9 @@ function App() {
 
     if (!contextSummaryResolvedModel) {
       setContextSummaryStatus(
-        "总结助手没有可用模型。请在设置页为当前上下文总结助手绑定模型。",
+        getUtilityAssistantModelStrategy(contextSummaryAssistant) === "fixed"
+          ? "总结助手指定模型不可用。请在设置页为当前上下文总结助手绑定可用模型，或改为跟随当前对话模型。"
+          : "当前对话没有可用模型，无法执行上下文总结。",
       );
       return;
     }
@@ -2493,15 +2933,17 @@ function App() {
     const summarizableMessages = activeMessages.filter(
       (message) => message.status !== "streaming" && message.text.trim(),
     );
-    const nextBoundaryIndex =
-      summarizableMessages.length - CONTEXT_SUMMARY_RAW_TAIL_MESSAGES - 1;
-
-    if (nextBoundaryIndex < 0) {
-      setContextSummaryStatus(
-        `消息数量不足：当前会保留最近 ${CONTEXT_SUMMARY_RAW_TAIL_MESSAGES} 条原文，暂不需要总结。`,
-      );
+    if (summarizableMessages.length === 0) {
+      setContextSummaryStatus("当前没有可总结的已完成消息。");
       return;
     }
+
+    const rawTailMessages = contextSummaryRawTailMessages;
+    const usesShortConversationOverride =
+      rawTailMessages > 0 && summarizableMessages.length <= rawTailMessages;
+    const nextBoundaryIndex = usesShortConversationOverride
+      ? summarizableMessages.length - 1
+      : summarizableMessages.length - rawTailMessages - 1;
 
     const previousBoundaryIndex = summarizableMessages.findIndex(
       (message) => message.id === activeContextSummary?.boundaryMessageId,
@@ -2521,106 +2963,113 @@ function App() {
       return;
     }
 
-    const now = new Date().toISOString();
-    const summaryRequestMessage: Message = {
-      id: createId("summary-request"),
-      conversationId: activeConversation.id,
-      role: "user",
-      label: "上下文总结请求",
-      text: buildContextSummaryPrompt({
-        conversation: activeConversation,
-        previousSummary: canReusePreviousSummary
-          ? activeContextSummary?.text
-          : undefined,
-        messages: messagesToSummarize,
-        framework: contextSummaryFramework,
-        contextProfile: activeContextProfile,
-      }),
-      createdAt: now,
-      status: "complete",
-    };
-    const controller = new AbortController();
+    await runContextSummaryJob({
+      conversation: activeConversation,
+      triggerSummarizableMessages: summarizableMessages,
+      messagesToSummarize,
+      boundaryMessage,
+      nextBoundaryIndex,
+      previousSummary: activeContextSummary,
+      canReusePreviousSummary,
+      summaryAssistant: contextSummaryAssistant,
+      summaryResolvedModel: contextSummaryResolvedModel,
+      contextProfile: activeContextProfile,
+      trigger: "manual",
+      statusText: usesShortConversationOverride
+        ? `正在总结 ${messagesToSummarize.length} 条旧消息；消息少于尾部保留 ${rawTailMessages} 条，按调试操作执行。`
+        : `正在总结 ${messagesToSummarize.length} 条旧消息，前台消息不会刷新。`,
+    });
+  };
 
-    setContextSummaryPending(true);
-    setContextSummaryStatus(
-      `正在总结 ${messagesToSummarize.length} 条旧消息，前台消息不会刷新。`,
+  const maybeStartAutoContextSummary = ({
+    conversation,
+    messageSnapshot,
+    chatResolvedModel,
+    contextProfile,
+  }: {
+    conversation: Conversation;
+    messageSnapshot: Message[];
+    chatResolvedModel: ResolvedModel;
+    contextProfile: ContextProfile;
+  }) => {
+    if (
+      conversation.archived ||
+      contextSummaryAutoMessageInterval <= 0 ||
+      contextSummaryJobRunningRef.current ||
+      !contextSummaryAssistant
+    ) {
+      return;
+    }
+
+    const summaryResolvedModel = resolveUtilityAssistantModel(
+      contextSummaryAssistant,
+      chatResolvedModel,
+      apiProfiles,
     );
 
-    try {
-      const result = await requestResponsesChat({
-        apiProfile: contextSummaryResolvedModel.apiProfile,
-        assistant: contextSummaryAssistant,
-        conversation: activeConversation,
-        model: contextSummaryResolvedModel.model,
-        messages: [summaryRequestMessage],
-        signal: controller.signal,
-        stream: false,
-        webSearchEnabled: false,
-      });
-      const contextSummary = result.text.trim();
-
-      if (!contextSummary) {
-        throw new Error("总结助手未返回文本。");
-      }
-
-      const updatedAt = new Date().toISOString();
-      const coveredMessageCount = nextBoundaryIndex + 1;
-      const retainedRawMessages =
-        summarizableMessages.length - coveredMessageCount;
-      const source = createSourceSnapshot(
-        contextSummaryAssistant,
-        contextSummaryResolvedModel,
-      );
-      const summaryRecord: ContextSummaryRecord = {
-        id: createId("context-summary"),
-        kind: "rolling",
-        status: "active",
-        schemaVersion: contextSummaryFramework.schemaVersion,
-        text: contextSummary,
-        boundaryMessageId: boundaryMessage.id,
-        coveredMessageCount,
-        retainedRawMessageCount: retainedRawMessages,
-        createdAt: updatedAt,
-        updatedAt,
-        previousSummaryId: activeContextSummary?.id,
-        source,
-        frameworkId: contextSummaryFramework.id,
-        frameworkNameSnapshot: contextSummaryFramework.name,
-        frameworkSectionsSnapshot: createEffectiveContextSummarySections(
-          contextSummaryFramework,
-          activeContextProfile,
-        ),
-        contextProfileId: activeContextProfile.id,
-        contextProfileNameSnapshot: activeContextProfile.name,
-        contextProfileDimensionOverridesSnapshot:
-          activeContextProfile.dimensionOverrides,
-      };
-
-      setConversations((current) =>
-        current.map((conversation) =>
-          conversation.id === activeConversation.id
-            ? {
-                ...conversation,
-                contextSummaries: [summaryRecord],
-                activeContextSummaryId: summaryRecord.id,
-              }
-            : conversation,
-        ),
-      );
-      setContextSummaryStatus(
-        `已总结 ${coveredMessageCount} 条历史消息，保留最近 ${retainedRawMessages} 条原文 · ${formatMessageTime(
-          updatedAt,
-        )}`,
-      );
-    } catch (error) {
-      setContextSummaryStatus(
-        error instanceof Error
-          ? `上下文总结失败：${error.message}`
-          : "上下文总结失败，请检查总结助手配置。",
-      );
-    } finally {
-      setContextSummaryPending(false);
+    if (!summaryResolvedModel) {
+      return;
     }
+
+    if (
+      createEffectiveContextSummarySections(
+        contextSummaryFramework,
+        contextProfile,
+      ).length === 0
+    ) {
+      return;
+    }
+
+    const summarizableMessages = messageSnapshot
+      .filter(
+        (message) => message.status !== "streaming" && message.text.trim(),
+      )
+      .toSorted(compareMessagesByCreatedAt);
+    if (summarizableMessages.length === 0) {
+      return;
+    }
+
+    const previousSummary = getActiveContextSummaryRecord(conversation);
+    const previousBoundaryIndex = summarizableMessages.findIndex(
+      (message) => message.id === previousSummary?.boundaryMessageId,
+    );
+    const canReusePreviousSummary =
+      Boolean(previousSummary?.text.trim()) && previousBoundaryIndex >= 0;
+    const summarizedMessageCount = canReusePreviousSummary
+      ? previousBoundaryIndex + 1
+      : 0;
+    const pendingMessageCount =
+      summarizableMessages.length - summarizedMessageCount;
+
+    if (pendingMessageCount < contextSummaryAutoMessageInterval) {
+      return;
+    }
+
+    const nextBoundaryIndex = summarizableMessages.length - 1;
+    const boundaryMessage = summarizableMessages[nextBoundaryIndex];
+    const messagesToSummarize = summarizableMessages.slice(
+      canReusePreviousSummary ? previousBoundaryIndex + 1 : 0,
+      nextBoundaryIndex + 1,
+    );
+
+    if (!boundaryMessage || messagesToSummarize.length === 0) {
+      return;
+    }
+
+    void runContextSummaryJob({
+      conversation,
+      triggerSummarizableMessages: summarizableMessages,
+      messagesToSummarize,
+      boundaryMessage,
+      nextBoundaryIndex,
+      previousSummary,
+      canReusePreviousSummary,
+      summaryAssistant: contextSummaryAssistant,
+      summaryResolvedModel,
+      contextProfile,
+      trigger: "auto",
+      statusText: `后台总结中：触发点 ${nextBoundaryIndex + 1} 条，前台对话不受影响。`,
+    });
   };
 
   const retryAssistantMessage = async (messageId: string) => {
@@ -2739,20 +3188,27 @@ function App() {
 
       setLastObservedUsage(result.usage);
       const completionTiming = createCompletionTiming(requestStartedAt);
+      const completedAssistantMessage: Message = {
+        ...assistantMessage,
+        status: "complete",
+        ...completionTiming,
+        text: result.text || streamedText || "模型未返回文本内容。",
+        providerResponseId: result.providerResponseId,
+        usage: result.usage,
+      };
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
-            ? {
-                ...message,
-                status: "complete",
-                ...completionTiming,
-                text: result.text || streamedText || "模型未返回文本内容。",
-                providerResponseId: result.providerResponseId,
-                usage: result.usage,
-              }
+            ? completedAssistantMessage
             : message,
         ),
       );
+      maybeStartAutoContextSummary({
+        conversation: activeConversation,
+        messageSnapshot: [...requestMessages, completedAssistantMessage],
+        chatResolvedModel: resolvedModel,
+        contextProfile: activeContextProfile,
+      });
     } catch (error) {
       if (controller.signal.aborted) {
         return;
@@ -2893,20 +3349,27 @@ function App() {
 
       setLastObservedUsage(result.usage);
       const completionTiming = createCompletionTiming(requestStartedAt);
+      const completedAssistantMessage: Message = {
+        ...assistantMessage,
+        status: "complete",
+        ...completionTiming,
+        text: result.text || streamedText || "模型未返回文本内容。",
+        providerResponseId: result.providerResponseId,
+        usage: result.usage,
+      };
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
-            ? {
-                ...message,
-                status: "complete",
-                ...completionTiming,
-                text: result.text || streamedText || "模型未返回文本内容。",
-                providerResponseId: result.providerResponseId,
-                usage: result.usage,
-              }
+            ? completedAssistantMessage
             : message,
         ),
       );
+      maybeStartAutoContextSummary({
+        conversation: activeConversation,
+        messageSnapshot: [...requestMessages, completedAssistantMessage],
+        chatResolvedModel: resolvedModel,
+        contextProfile: activeContextProfile,
+      });
     } catch (error) {
       if (controller.signal.aborted) {
         return;
@@ -3048,20 +3511,31 @@ function App() {
 
       setLastObservedUsage(result.usage);
       const completionTiming = createCompletionTiming(requestStartedAt);
+      const completedAssistantMessage: Message = {
+        ...assistantMessage,
+        status: "complete",
+        ...completionTiming,
+        text: result.text || streamedText || "模型未返回文本内容。",
+        providerResponseId: result.providerResponseId,
+        usage: result.usage,
+      };
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
-            ? {
-                ...message,
-                status: "complete",
-                ...completionTiming,
-                text: result.text || streamedText || "模型未返回文本内容。",
-                providerResponseId: result.providerResponseId,
-                usage: result.usage,
-              }
+            ? completedAssistantMessage
             : message,
         ),
       );
+      maybeStartAutoContextSummary({
+        conversation: activeConversation,
+        messageSnapshot: [
+          ...activeMessages,
+          userMessage,
+          completedAssistantMessage,
+        ],
+        chatResolvedModel: resolvedModel,
+        contextProfile: activeContextProfile,
+      });
     } catch (error) {
       if (controller.signal.aborted) {
         return;
@@ -3093,8 +3567,58 @@ function App() {
     }
   };
 
+  const insertComposerNewline = () => {
+    const input = composerInputRef.current;
+    const selectionStart = input?.selectionStart ?? draft.length;
+    const selectionEnd = input?.selectionEnd ?? draft.length;
+    const nextDraft = `${draft.slice(0, selectionStart)}\n${draft.slice(
+      selectionEnd,
+    )}`;
+
+    setDraft(nextDraft);
+    window.requestAnimationFrame(() => {
+      const nextInput = composerInputRef.current;
+      if (!nextInput) {
+        return;
+      }
+
+      const cursor = selectionStart + 1;
+      nextInput.selectionStart = cursor;
+      nextInput.selectionEnd = cursor;
+      resizeComposerInput();
+    });
+  };
+
   const sendOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.shiftKey) {
+    const nativeEvent = event.nativeEvent;
+    if ("isComposing" in nativeEvent && nativeEvent.isComposing) {
+      return;
+    }
+
+    if (event.ctrlKey && !event.altKey && !event.metaKey) {
+      const key = event.key.toLocaleLowerCase();
+      if (key === "j") {
+        event.preventDefault();
+        insertComposerNewline();
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void sendMessage();
+        return;
+      }
+    }
+
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    if (composerSubmitMode === "ctrl-enter-send") {
+      return;
+    }
+
+    if (event.shiftKey || event.altKey || event.metaKey) {
       return;
     }
 
@@ -3113,6 +3637,53 @@ function App() {
     thread?.scrollTo({ top: thread.scrollHeight, behavior: "smooth" });
     window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
   };
+
+  const renderInspectorMessageList = (
+    title: string,
+    list: Message[],
+    emptyText: string,
+  ) => (
+    <section className="inspector-card">
+      <h3>
+        <span>{title}</span>
+        <small>{list.length} 条</small>
+      </h3>
+      {list.length > 0 ? (
+        <div className="inspector-message-list">
+          {list.map((message) => {
+            const absoluteIndex =
+              activeMessages.findIndex((item) => item.id === message.id) + 1;
+            const source = message.source
+              ? `${message.source.assistantName} / ${message.source.modelName}`
+              : "";
+
+            return (
+              <article className="inspector-message" key={message.id}>
+                <header>
+                  <strong>
+                    {absoluteIndex > 0 ? `#${absoluteIndex} · ` : ""}
+                    {message.label ||
+                      (message.role === "user" ? "用户" : "助手")}
+                  </strong>
+                  <span>
+                    {message.role}
+                    {message.status ? ` · ${message.status}` : ""}
+                    {source ? ` · ${source}` : ""}
+                    {formatMessageTime(message.createdAt)
+                      ? ` · ${formatMessageTime(message.createdAt)}`
+                      : ""}
+                  </span>
+                </header>
+                <p>{message.text.trim() || "[空消息]"}</p>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="inspector-empty">{emptyText}</p>
+      )}
+    </section>
+  );
 
   return (
     <main
@@ -3156,25 +3727,15 @@ function App() {
       ) : null}
 
       {!drawerOpen ? (
-        <div className="floating-actions" aria-label="快捷操作">
+        <div className="floating-actions mobile-only" aria-label="快捷操作">
           <button
-            className="floating-action mobile-only"
+            className="floating-action"
             type="button"
             aria-label="悬浮对话入口"
             onClick={() => setDrawerOpen(true)}
           >
             <PanelLeft size={18} />
             对话
-          </button>
-          <button
-            className="floating-action"
-            type="button"
-            aria-label={
-              scrollShortcutTarget === "top" ? "回到消息顶部" : "回到消息底部"
-            }
-            onClick={scrollMessageThreadToEdge}
-          >
-            {scrollShortcutTarget === "top" ? "↑ 顶部" : "↓ 底部"}
           </button>
         </div>
       ) : null}
@@ -3342,7 +3903,7 @@ function App() {
               <CustomSelect
                 label="选择助手"
                 value={activeAssistant.id}
-                options={assistants.map((assistant) => ({
+                options={chatAssistants.map((assistant) => ({
                   value: assistant.id,
                   label: assistant.name,
                 }))}
@@ -3372,86 +3933,103 @@ function App() {
           </div>
         </header>
 
-        <div
-          className="message-thread"
-          aria-label="消息列表"
-          ref={messageThreadRef}
-          onScroll={updateScrollShortcutTarget}
-        >
-          {activeMessages.length > 0 ? (
-            activeMessages.map((message) => {
-              const createdTime = formatMessageTime(message.createdAt);
-              const completedTime = formatMessageTime(message.completedAt);
-              const elapsedText = formatElapsedMs(message.elapsedMs);
+        <div className="message-thread-shell">
+          <div
+            className="message-thread"
+            aria-label="消息列表"
+            ref={messageThreadRef}
+            onScroll={updateScrollShortcutTarget}
+          >
+            {activeMessages.length > 0 ? (
+              activeMessages.map((message) => {
+                const createdTime = formatMessageTime(message.createdAt);
+                const completedTime = formatMessageTime(message.completedAt);
+                const elapsedText = formatElapsedMs(message.elapsedMs);
 
-              return (
-                <article className={`message ${message.role}`} key={message.id}>
-                  <div className="message-label">
-                    {message.label}
-                    {createdTime ? ` · ${createdTime}` : ""}
-                    {message.status === "streaming" ? " · 生成中" : ""}
-                    {message.status === "stopped" ? " · 已停止" : ""}
-                    {message.status === "error" ? " · 错误" : ""}
-                  </div>
-                  <p>{message.text}</p>
-                  {completedTime || elapsedText ? (
-                    <div className="message-meta">
-                      {completedTime ? <span>完成 {completedTime}</span> : null}
-                      {elapsedText ? <span>用时 {elapsedText}</span> : null}
+                return (
+                  <article
+                    className={`message ${message.role}`}
+                    key={message.id}
+                  >
+                    <div className="message-label">
+                      {message.label}
+                      {createdTime ? ` · ${createdTime}` : ""}
+                      {message.status === "streaming" ? " · 生成中" : ""}
+                      {message.status === "stopped" ? " · 已停止" : ""}
+                      {message.status === "error" ? " · 错误" : ""}
                     </div>
-                  ) : null}
-                  <div className="message-actions">
-                    {message.role === "assistant" ? (
+                    <p>{message.text}</p>
+                    {completedTime || elapsedText ? (
+                      <div className="message-meta">
+                        {completedTime ? (
+                          <span>完成 {completedTime}</span>
+                        ) : null}
+                        {elapsedText ? <span>用时 {elapsedText}</span> : null}
+                      </div>
+                    ) : null}
+                    <div className="message-actions">
+                      {message.role === "assistant" ? (
+                        <button
+                          type="button"
+                          aria-label="重试回复"
+                          disabled={
+                            activeConversationReadOnly ||
+                            Boolean(pendingMessageId)
+                          }
+                          onClick={() => void retryAssistantMessage(message.id)}
+                        >
+                          <RotateCcw size={14} />
+                          重试
+                        </button>
+                      ) : null}
+                      {message.role === "user" ? (
+                        <button
+                          type="button"
+                          aria-label="重答消息"
+                          disabled={
+                            activeConversationReadOnly ||
+                            Boolean(pendingMessageId)
+                          }
+                          onClick={() =>
+                            void regenerateFromUserMessage(message.id)
+                          }
+                        >
+                          <RotateCcw size={14} />
+                          重答
+                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        aria-label="重试回复"
-                        disabled={
-                          activeConversationReadOnly ||
-                          Boolean(pendingMessageId)
-                        }
-                        onClick={() => void retryAssistantMessage(message.id)}
+                        aria-label="删除消息"
+                        onClick={() => deleteMessage(message.id)}
                       >
-                        <RotateCcw size={14} />
-                        重试
+                        <Trash2 size={14} />
+                        删除
                       </button>
-                    ) : null}
-                    {message.role === "user" ? (
-                      <button
-                        type="button"
-                        aria-label="重答消息"
-                        disabled={
-                          activeConversationReadOnly ||
-                          Boolean(pendingMessageId)
-                        }
-                        onClick={() =>
-                          void regenerateFromUserMessage(message.id)
-                        }
-                      >
-                        <RotateCcw size={14} />
-                        重答
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      aria-label="删除消息"
-                      onClick={() => deleteMessage(message.id)}
-                    >
-                      <Trash2 size={14} />
-                      删除
-                    </button>
-                  </div>
-                </article>
-              );
-            })
-          ) : (
-            <section className="empty-thread">
-              <h2>开始一个新对话</h2>
-              <p>
-                当前已接入最小 Responses 请求循环；请先在设置页填写本地 API
-                key。
-              </p>
-            </section>
-          )}
+                    </div>
+                  </article>
+                );
+              })
+            ) : (
+              <section className="empty-thread">
+                <h2>开始一个新对话</h2>
+                <p>
+                  当前已接入最小 Responses 请求循环；请先在设置页填写本地 API
+                  key。
+                </p>
+              </section>
+            )}
+          </div>
+          <button
+            className="message-scroll-action"
+            type="button"
+            aria-label={
+              scrollShortcutTarget === "top" ? "回到消息顶部" : "回到消息底部"
+            }
+            onClick={scrollMessageThreadToEdge}
+          >
+            {scrollShortcutTarget === "top" ? "↑ 顶部" : "↓ 底部"}
+          </button>
         </div>
 
         {debugEnabled ? (
@@ -3489,6 +4067,13 @@ function App() {
               >
                 {contextSummaryPreviewOpen ? "隐藏总结" : "显示总结"}
               </button>
+              <button
+                type="button"
+                disabled={!activeConversation}
+                onClick={() => setDataInspectorOpen(true)}
+              >
+                数据检查器
+              </button>
               <span>
                 {contextSummaryStatus ||
                   (activeContextSummary?.updatedAt
@@ -3521,7 +4106,8 @@ function App() {
           </button>
           <div className="composer-stack">
             <textarea
-              rows={1}
+              ref={composerInputRef}
+              rows={2}
               placeholder={
                 activeConversationReadOnly
                   ? "归档对话仅浏览，恢复后可继续"
@@ -3587,6 +4173,133 @@ function App() {
           </button>
         </footer>
       </section>
+
+      {dataInspectorOpen ? (
+        <div
+          className="modal-backdrop data-inspector-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setDataInspectorOpen(false);
+            }
+          }}
+        >
+          <section
+            className="data-inspector-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="data-inspector-title"
+          >
+            <header>
+              <div>
+                <p className="eyebrow">Read only</p>
+                <h2 id="data-inspector-title">数据检查器</h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="关闭数据检查器"
+                onClick={() => setDataInspectorOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <p className="inspector-note">
+              只读取当前前端状态，用于验证 MobileChatDB 记录、当前对话 summary
+              diff 和下一次请求投影；不会写回数据。
+            </p>
+
+            <div className="inspector-kpi-grid" aria-label="数据检查概览">
+              <div>
+                <span>当前对话消息</span>
+                <strong>{activeMessages.length}</strong>
+              </div>
+              <div>
+                <span>Summary 覆盖</span>
+                <strong>
+                  {activeContextSummaryCoveredMessages.length}
+                  {activeContextSummary && activeContextSummaryBoundaryIndex < 0
+                    ? " · 边界丢失"
+                    : ""}
+                </strong>
+              </div>
+              <div>
+                <span>保留 tail</span>
+                <strong>{activeContextSummaryRetainedMessages.length}</strong>
+              </div>
+              <div>
+                <span>请求投影</span>
+                <strong>{activeProjectedMessages.length}</strong>
+              </div>
+            </div>
+
+            <div className="inspector-grid">
+              <section className="inspector-card">
+                <h3>数据库概览</h3>
+                <pre>{formatInspectorJson(dataInspectorOverview)}</pre>
+              </section>
+              <section className="inspector-card">
+                <h3>当前对话</h3>
+                <pre>{formatInspectorJson(dataInspectorConversation)}</pre>
+              </section>
+              <section className="inspector-card">
+                <h3>Summary diff</h3>
+                <pre>{formatInspectorJson(dataInspectorSummaryDiff)}</pre>
+              </section>
+              <section className="inspector-card">
+                <h3>当前 Summary</h3>
+                <pre>
+                  {activeContextSummary?.text.trim() ||
+                    "当前对话没有 active summary。"}
+                </pre>
+              </section>
+            </div>
+
+            <div className="inspector-message-grid">
+              {renderInspectorMessageList(
+                "覆盖原文",
+                activeContextSummaryCoveredMessages,
+                activeContextSummary
+                  ? "未找到 summary 边界，无法解析覆盖原文。"
+                  : "当前对话没有 active summary。",
+              )}
+              {renderInspectorMessageList(
+                "保留 tail",
+                activeContextSummaryRetainedMessages,
+                activeContextSummary
+                  ? "summary 已覆盖到最后一条消息。"
+                  : "无 active summary 时，所有消息都会按原文投影。",
+              )}
+              {renderInspectorMessageList(
+                "请求投影",
+                activeProjectedMessages,
+                "当前没有可投影消息。",
+              )}
+            </div>
+
+            <section className="inspector-card inspector-full">
+              <h3>只读 JSON</h3>
+              <details>
+                <summary>当前对话 JSON</summary>
+                <pre>{formatInspectorJson(activeConversation ?? null)}</pre>
+              </details>
+              <details>
+                <summary>当前对话消息 JSON</summary>
+                <pre>{formatInspectorJson(activeMessages)}</pre>
+              </details>
+              <details>
+                <summary>请求投影 JSON</summary>
+                <pre>{formatInspectorJson(activeProjectedMessages)}</pre>
+              </details>
+              <details>
+                <summary>当前设置 JSON</summary>
+                <pre>{formatInspectorJson(appSettings)}</pre>
+              </details>
+            </section>
+          </section>
+        </div>
+      ) : null}
 
       {settingsOpen ? (
         <div
@@ -3665,6 +4378,59 @@ function App() {
                   />
                   <span />
                 </label>
+              </div>
+              <div className="settings-row compact number-setting">
+                <span>总结保留原文</span>
+                <input
+                  aria-label="总结保留原文条数"
+                  max={50}
+                  min={0}
+                  type="number"
+                  value={contextSummaryRawTailMessages}
+                  onChange={(event) =>
+                    setContextSummaryRawTailMessages(
+                      normalizeContextSummaryRawTailMessages(
+                        Number(event.target.value),
+                      ),
+                    )
+                  }
+                />
+              </div>
+              <div className="settings-row compact number-setting">
+                <span>自动总结间隔</span>
+                <input
+                  aria-label="自动总结间隔条数"
+                  max={100}
+                  min={0}
+                  type="number"
+                  value={contextSummaryAutoMessageInterval}
+                  onChange={(event) =>
+                    setContextSummaryAutoMessageInterval(
+                      normalizeContextSummaryAutoMessageInterval(
+                        Number(event.target.value),
+                      ),
+                    )
+                  }
+                />
+              </div>
+              <div className="settings-row compact theme-select wide-setting">
+                <span>输入快捷键</span>
+                <div className="setting-control-stack">
+                  <CustomSelect
+                    label="输入快捷键"
+                    value={composerSubmitMode}
+                    options={Object.entries(composerSubmitModeLabels).map(
+                      ([optionValue, optionLabel]) => ({
+                        value: optionValue,
+                        label: optionLabel,
+                      }),
+                    )}
+                    onChange={(nextValue) =>
+                      setComposerSubmitMode(nextValue as ComposerSubmitMode)
+                    }
+                  />
+                  <small>Ctrl+J 始终插入换行。</small>
+                </div>
               </div>
               <div className="settings-row compact theme-select">
                 <span>布局模式</span>
@@ -4480,10 +5246,23 @@ function App() {
                       </header>
                       <div className="assistant-card-list">
                         {section.items.map((assistant, index) => {
-                          const defaultBinding =
-                            assistant.modelBindings.find(
-                              (binding) => binding.isDefault,
-                            ) ?? assistant.modelBindings[0];
+                          const assistantModelStrategy =
+                            getUtilityAssistantModelStrategy(assistant);
+                          const assistantResolvedDefaultModel =
+                            assistantModelStrategy === "fixed"
+                              ? resolveAssistantDefaultModel(
+                                  assistant,
+                                  apiProfiles,
+                                )
+                              : undefined;
+                          const assistantModelLabel =
+                            assistant.kind === "utility" &&
+                            assistantModelStrategy === "follow-conversation"
+                              ? "跟随对话模型"
+                              : assistantResolvedDefaultModel
+                                ? assistantResolvedDefaultModel.model.name
+                                : "未绑定模型";
+
                           return (
                             <div
                               className="sortable-card-row"
@@ -4501,10 +5280,7 @@ function App() {
                                 }
                               >
                                 <span>{assistant.name}</span>
-                                <small>
-                                  {defaultBinding?.modelNameSnapshot ??
-                                    "未绑定模型"}
-                                </small>
+                                <small>{assistantModelLabel}</small>
                               </button>
                               <ReorderControls
                                 itemName={`${section.title} ${assistant.name}`}
@@ -4533,6 +5309,7 @@ function App() {
                   <div className="header-actions">
                     <button
                       type="button"
+                      disabled={editingAssistant.kind !== "chat"}
                       onClick={() => activateAssistant(editingAssistant.id)}
                     >
                       设为当前
@@ -4683,66 +5460,124 @@ function App() {
                   </section>
                 ) : null}
 
-                <section className="model-bindings" aria-label="助手允许模型">
-                  <header>
-                    <div>
-                      <p className="eyebrow">Model access</p>
-                      <h3>助手允许模型</h3>
+                {editingAssistant.kind === "utility" ? (
+                  <section
+                    className="model-bindings"
+                    aria-label="功能助手模型策略"
+                  >
+                    <header>
+                      <div>
+                        <p className="eyebrow">Model strategy</p>
+                        <h3>功能助手模型策略</h3>
+                      </div>
+                    </header>
+                    <div className="assistant-config-select">
+                      <span>模型策略</span>
+                      <CustomSelect
+                        label="功能助手模型策略"
+                        value={editingAssistantModelStrategy}
+                        options={[
+                          {
+                            value: "follow-conversation",
+                            label: "跟随当前对话模型",
+                          },
+                          {
+                            value: "fixed",
+                            label: "指定模型",
+                          },
+                        ]}
+                        onChange={(nextValue) =>
+                          updateUtilityAssistantModelStrategy(
+                            editingAssistant.id,
+                            nextValue as UtilityAssistantModelStrategy,
+                          )
+                        }
+                      />
+                      <small>
+                        跟随当前对话模型时，该功能助手不需要单独维护允许模型；指定模型后才启用下方模型配置。
+                      </small>
                     </div>
-                  </header>
-                  <div className="assistant-config-select">
-                    <span>默认模型</span>
-                    <CustomSelect
-                      label="助手默认模型"
-                      value={modelRefKey(
-                        editingAssistant.modelBindings.find(
-                          (binding) => binding.isDefault,
-                        ) ??
-                          editingAssistant.modelBindings[0] ??
-                          DEFAULT_MODEL_REF,
-                      )}
-                      options={editingAssistant.modelBindings.map(
-                        (binding) => ({
-                          value: modelRefKey(binding),
-                          label: `${binding.apiProfileNameSnapshot} / ${binding.modelNameSnapshot}`,
-                        }),
-                      )}
-                      onChange={(nextValue) =>
-                        setAssistantDefaultModel(editingAssistant.id, nextValue)
-                      }
-                    />
-                  </div>
+                    <div className="assistant-config-select">
+                      <span>当前执行模型</span>
+                      <strong>
+                        {editingAssistantModelStrategy === "fixed"
+                          ? editingAssistantDefaultResolvedModel
+                            ? `${editingAssistantDefaultResolvedModel.apiProfile.name} / ${editingAssistantDefaultResolvedModel.model.name}`
+                            : "未指定可用模型"
+                          : activeResolvedModel
+                            ? `${activeResolvedModel.apiProfile.name} / ${activeResolvedModel.model.name}`
+                            : "当前对话没有可用模型"}
+                      </strong>
+                    </div>
+                  </section>
+                ) : null}
 
-                  <div className="binding-list">
-                    {allModelOptions.map((option) => {
-                      const checked = editingAssistant.modelBindings.some(
-                        (binding) => modelRefKey(binding) === option.key,
-                      );
-                      return (
-                        <label className="binding-row" key={option.key}>
-                          <input
-                            aria-label={`允许模型 ${option.apiProfile.name} ${option.model.name}`}
-                            checked={checked}
-                            type="checkbox"
-                            onChange={(event) =>
-                              toggleAssistantModelBinding(
-                                editingAssistant.id,
-                                option,
-                                event.target.checked,
-                              )
-                            }
-                          />
-                          <span>
-                            <strong>
-                              {option.apiProfile.name} / {option.model.name}
-                            </strong>
-                            <small>{option.model.description}</small>
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </section>
+                {editingAssistant.kind === "chat" ||
+                editingAssistantModelStrategy === "fixed" ? (
+                  <section className="model-bindings" aria-label="助手允许模型">
+                    <header>
+                      <div>
+                        <p className="eyebrow">Model access</p>
+                        <h3>助手允许模型</h3>
+                      </div>
+                    </header>
+                    <div className="assistant-config-select">
+                      <span>该助手默认模型</span>
+                      <CustomSelect
+                        label="该助手默认模型"
+                        value={editingAssistantDefaultResolvedModel?.key ?? ""}
+                        options={editingAssistantResolvedModelOptions.map(
+                          (option) => ({
+                            value: option.key,
+                            label: `${option.apiProfile.name} / ${option.model.name}`,
+                          }),
+                        )}
+                        disabled={
+                          editingAssistantResolvedModelOptions.length === 0
+                        }
+                        onChange={(nextValue) =>
+                          setAssistantDefaultModel(
+                            editingAssistant.id,
+                            nextValue,
+                          )
+                        }
+                      />
+                      <small>
+                        默认模型只能从下方已勾选且仍可用的允许模型中选择。
+                      </small>
+                    </div>
+
+                    <div className="binding-list">
+                      {allModelOptions.map((option) => {
+                        const checked = editingAssistant.modelBindings.some(
+                          (binding) => modelRefKey(binding) === option.key,
+                        );
+                        return (
+                          <label className="binding-row" key={option.key}>
+                            <input
+                              aria-label={`允许模型 ${option.apiProfile.name} ${option.model.name}`}
+                              checked={checked}
+                              type="checkbox"
+                              onChange={(event) =>
+                                toggleAssistantModelBinding(
+                                  editingAssistant.id,
+                                  option,
+                                  event.target.checked,
+                                )
+                              }
+                            />
+                            <span>
+                              <strong>
+                                {option.apiProfile.name} / {option.model.name}
+                              </strong>
+                              <small>{option.model.description}</small>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ) : null}
               </section>
             </section>
           </section>

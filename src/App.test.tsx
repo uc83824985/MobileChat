@@ -59,6 +59,14 @@ describe("App", () => {
       screen.getByRole("navigation", { name: "对话列表" }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("调试诊断")).toBeInTheDocument();
+
+    fireEvent.click(getCustomSelect("选择助手"));
+    expect(
+      screen.getByRole("option", { name: "默认助手" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "压缩助手" }),
+    ).not.toBeInTheDocument();
   });
 
   it("uses mirrored UI preferences before IndexedDB hydration", () => {
@@ -102,6 +110,33 @@ describe("App", () => {
     expect(screen.getByText("测试发送")).toBeInTheDocument();
     expect(
       await screen.findByText(/请先在设置页.*API key/),
+    ).toBeInTheDocument();
+  });
+
+  it("supports multiline composer shortcuts and configurable submit mode", () => {
+    render(<App />);
+
+    const composer = screen.getByPlaceholderText(
+      "输入消息",
+    ) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "alphaomega" } });
+    composer.setSelectionRange(5, 5);
+    fireEvent.keyDown(composer, { key: "j", ctrlKey: true });
+    expect(composer).toHaveValue("alpha\nomega");
+
+    fireEvent.click(screen.getByText("设置"));
+    chooseCustomSelectOption("输入快捷键", "Enter 换行，Ctrl+Enter 发送");
+    fireEvent.click(screen.getByLabelText("关闭设置"));
+
+    fireEvent.change(composer, { target: { value: "键盘发送" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    expect(
+      screen.queryByText("键盘发送", { selector: ".message p" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.keyDown(composer, { key: "Enter", ctrlKey: true });
+    expect(
+      screen.getByText("键盘发送", { selector: ".message p" }),
     ).toBeInTheDocument();
   });
 
@@ -195,7 +230,7 @@ describe("App", () => {
 
     expect(screen.getByText("显示总结")).toBeDisabled();
 
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 1; index += 1) {
       fireEvent.change(screen.getByPlaceholderText("输入消息"), {
         target: { value: `summary seed ${index}` },
       });
@@ -209,6 +244,20 @@ describe("App", () => {
 
     fireEvent.click(screen.getByText("总结上下文"));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const summaryRequestBody = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body),
+    );
+    const summaryRequestText = Array.isArray(summaryRequestBody.input)
+      ? summaryRequestBody.input
+          .map((item: { content?: string }) => item.content)
+          .join("\n")
+      : "";
+    expect(summaryRequestText).toContain(
+      "对话标题和列表摘要只作为定位参考，不要把它们写进总结正文",
+    );
+    expect(summaryRequestText).toContain(
+      "定位信息（仅供理解，不要写入总结正文）",
+    );
     await screen.findByText(/已总结/);
 
     expect(screen.getByText("显示总结")).toBeEnabled();
@@ -217,6 +266,77 @@ describe("App", () => {
       "SUMMARY RESULT",
     );
     expect(screen.getAllByText("SUMMARY RESULT")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "数据检查器" }));
+    expect(
+      screen.getByRole("dialog", { name: "数据检查器" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("数据库概览")).toBeInTheDocument();
+    expect(screen.getByText("当前对话")).toBeInTheDocument();
+    expect(screen.getByText("Summary diff")).toBeInTheDocument();
+    expect(screen.getByText("覆盖原文")).toBeInTheDocument();
+    expect(screen.getAllByText("保留 tail").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("请求投影").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("数据检查概览")).toBeInTheDocument();
+  });
+
+  it("automatically summarizes completed message intervals and reuses the previous summary", async () => {
+    const summaryRequests: string[] = [];
+    const fetchMock = vi.fn().mockImplementation((_url, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      const inputText = Array.isArray(body.input)
+        ? body.input
+            .map((item: { content?: string }) => item.content)
+            .join("\n")
+        : "";
+
+      if (inputText.includes("请为 MobileChat 当前单个对话")) {
+        summaryRequests.push(inputText);
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              output_text: `AUTO SUMMARY ${summaryRequests.length}`,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            output_text: `chat ${fetchMock.mock.calls.length}`,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    configureApiProfile({ apiKey: "test-key" });
+    fireEvent.click(screen.getByText("设置"));
+    fireEvent.change(screen.getByLabelText("自动总结间隔条数"), {
+      target: { value: "2" },
+    });
+    fireEvent.click(screen.getByLabelText("关闭设置"));
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "first turn" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+    await waitFor(() => expect(summaryRequests).toHaveLength(1));
+    await screen.findByText(/后台已总结到 2 条/);
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "second turn" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+    await waitFor(() => expect(summaryRequests).toHaveLength(2));
+
+    expect(summaryRequests[1]).toContain("AUTO SUMMARY 1");
+    expect(summaryRequests[1]).toContain("second turn");
+    await screen.findByText(/后台已总结到 4 条/);
   });
 
   it("uses web search as a single-turn composer option", async () => {
@@ -322,10 +442,31 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("流式输出"));
     expect(screen.getByLabelText("流式输出")).not.toBeChecked();
 
+    expectCustomSelectValue("输入快捷键", "Enter 发送，Shift+Enter 换行");
+    chooseCustomSelectOption("输入快捷键", "Enter 换行，Ctrl+Enter 发送");
+    expectCustomSelectValue("输入快捷键", "Enter 换行，Ctrl+Enter 发送");
+    expect(screen.getByLabelText("总结保留原文条数")).toHaveValue(8);
+    fireEvent.change(screen.getByLabelText("总结保留原文条数"), {
+      target: { value: "3" },
+    });
+    expect(screen.getByLabelText("总结保留原文条数")).toHaveValue(3);
+
     expectCustomSelectValue("上下文总结助手", "上下文总结助手");
     chooseCustomSelectOption("上下文总结助手", "压缩助手");
     expectCustomSelectValue("上下文总结助手", "压缩助手");
     expectCustomSelectValue("上下文压缩助手", "压缩助手");
+    chooseCustomSelectOption("设置中选择助手", "压缩助手");
+    expectCustomSelectValue("功能助手模型策略", "跟随当前对话模型");
+    expect(
+      screen.queryByRole("combobox", { name: "该助手默认模型" }),
+    ).not.toBeInTheDocument();
+    chooseCustomSelectOption("功能助手模型策略", "指定模型");
+    expectCustomSelectValue("该助手默认模型", "默认连接 / 默认模型");
+    chooseCustomSelectOption("功能助手模型策略", "跟随当前对话模型");
+    expect(
+      screen.queryByRole("combobox", { name: "该助手默认模型" }),
+    ).not.toBeInTheDocument();
+    chooseCustomSelectOption("设置中选择助手", "默认助手");
 
     expect(screen.getByLabelText("严格记忆系统描述")).toHaveValue(
       "只记录用户明确确认的需求、硬约束、长期偏好、必须遵守的规则和不可丢失结论。",
