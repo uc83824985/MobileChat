@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:mobile-file": "tsc -b && vite build --config vite.mobile-file.config.ts",
     "format": "prettier --write index.html \"*.{ts,json,md}\" \".github/**/*.yml\" \"src/**/*.{ts,tsx,css}\" \"tests/**/*.ts\"",
     "format:check": "prettier --check index.html \"*.{ts,json,md}\" \".github/**/*.yml\" \"src/**/*.{ts,tsx,css}\" \"tests/**/*.ts\"",
     "lint": "oxlint src tests vite.config.ts playwright.config.ts",
@@ -13,6 +14,8 @@
     "test:watch": "vitest",
     "test:browser": "playwright test",
     "desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File ./run.ps1",
+    "mobile:package": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-android.ps1 -PackageOnly",
+    "mobile:adb": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-android.ps1",
     "preview": "vite preview"
   },
   "dependencies": {

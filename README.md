@@ -82,6 +82,16 @@ run.bat
 - 不要求账号、云端数据库或常驻后端。
 - API 服务必须允许手机浏览器直接访问。
 - 跨设备访问通过导出、传输和导入备份包完成，不把浏览器内部 IndexedDB 文件当作可移植格式。
+- 手机端反复迭代测试应尽量保持同一访问 origin，例如 GitHub Pages 的 `/MobileChat/` 路径；同一浏览器同一 origin 下更新静态代码不会清空已有 IndexedDB。
+- 手机测试打包与 ADB 辅助脚本见[手机测试部署](docs/deployment/mobile-testing.md)，移动端操作统一入口为 `scripts/deploy-android.ps1`。
+
+常用手机测试命令：
+
+```powershell
+npm run mobile:adb
+```
+
+`mobile:adb` 是常规单入口：已有匹配当前代码/构建产物的最新 `mobilechat-mobile-YYYYMMDD.zip` 时会直接复用，否则自动构建并重新打包。脚本默认把手机端文件部署为 `MobileChat/index.html` + `MobileChat/source/`，并打开自包含本地入口；该入口使用不注册 Service Worker 的本地文件 bundle，仅用于快速 smoke test，并兼容部分浏览器通过 `content://` 只授权单个 HTML 文件的情况。如需打开 GitHub Pages/PWA origin，使用 `.\scripts\deploy-android.ps1 -OpenTarget Url`。仅需手动生成 zip 时再使用 `npm run mobile:package`，该命令也是调用同一个部署脚本的 `-PackageOnly` 模式。
 
 ## License
 

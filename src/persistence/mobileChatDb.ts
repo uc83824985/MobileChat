@@ -174,7 +174,7 @@ const sortRecordsByStoredOrder = <T extends { id: string }>(
 
   return records
     .map((record, originalIndex) => ({ record, originalIndex }))
-    .toSorted((left, right) => {
+    .sort((left, right) => {
       const leftIndex = orderIndex.get(left.record.id);
       const rightIndex = orderIndex.get(right.record.id);
 
