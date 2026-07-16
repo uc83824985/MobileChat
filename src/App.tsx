@@ -140,7 +140,7 @@ const createBootSnapshot = (): LocalDataSnapshot => {
 
 const createEmptyApiProfile = (index: number): ApiProfile => ({
   id: createId("api-profile"),
-  name: `API Profile ${index}`,
+  name: `连接 ${index}`,
   description: "",
   baseUrl: "",
   apiKey: "",
@@ -177,7 +177,7 @@ const createEmptyAssistant = (
 
 const createEmptyContextProfile = (index: number): ContextProfile => ({
   id: createId("context-profile"),
-  name: `上下文 Profile ${index}`,
+  name: `上下文配置 ${index}`,
   description: "",
   dimensionOverrides: [],
 });
@@ -294,6 +294,59 @@ const CustomSelect = ({
     </div>
   );
 };
+
+const ReorderControls = ({
+  itemName,
+  isFirst,
+  isLast,
+  onMoveUp,
+  onMoveDown,
+}: {
+  itemName: string;
+  isFirst: boolean;
+  isLast: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+}) => (
+  <div className="reorder-actions" aria-label={`调整 ${itemName} 顺序`}>
+    <button
+      className="reorder-button"
+      type="button"
+      aria-label={`上移 ${itemName}`}
+      disabled={isFirst}
+      onClick={onMoveUp}
+    >
+      ↑
+    </button>
+    <button
+      className="reorder-button"
+      type="button"
+      aria-label={`下移 ${itemName}`}
+      disabled={isLast}
+      onClick={onMoveDown}
+    >
+      ↓
+    </button>
+  </div>
+);
+
+function moveListItemById<T extends { id: string }>(
+  items: T[],
+  itemId: string,
+  direction: -1 | 1,
+) {
+  const fromIndex = items.findIndex((item) => item.id === itemId);
+  const toIndex = fromIndex + direction;
+
+  if (fromIndex < 0 || toIndex < 0 || toIndex >= items.length) {
+    return items;
+  }
+
+  const nextItems = [...items];
+  const [item] = nextItems.splice(fromIndex, 1);
+  nextItems.splice(toIndex, 0, item);
+  return nextItems;
+}
 
 const confirmDestructiveAction = (message: string) =>
   typeof window === "undefined" || window.confirm(message);
@@ -556,7 +609,7 @@ const buildContextProfileInstruction = (
     return "";
   }
 
-  return `MobileChat 当前聊天助手绑定的上下文 Profile：
+  return `MobileChat 当前聊天助手绑定的上下文配置：
 名称：${profile.name}
 说明：${profile.description || "无"}
 
@@ -576,7 +629,7 @@ const createEffectiveContextSummarySections = (
       ...section,
       title: override?.titleOverride?.trim() || section.title,
       instruction: overrideInstruction
-        ? `${section.instruction}\n\n上下文 Profile 重载：${overrideInstruction}`
+        ? `${section.instruction}\n\n上下文配置重载：${overrideInstruction}`
         : section.instruction,
     };
   });
@@ -619,11 +672,11 @@ ${framework.description}
 
 ${formatContextSummaryFramework(effectiveFramework)}
 
-当前聊天助手的上下文 Profile：${contextProfile.name}
+当前聊天助手的上下文配置：${contextProfile.name}
 ${contextProfile.description || "无说明"}
 
-Profile 维度重载：
-${formattedProfile || "当前 Profile 未启用任何上下文维度。"}
+配置维度重载：
+${formattedProfile || "当前上下文配置未启用任何上下文维度。"}
 
 对话标题：${conversation.title}
 列表摘要：${conversation.summary || "无"}
@@ -1069,16 +1122,16 @@ function App() {
     [activeConversation],
   );
 
-  const chatAssistantCount = assistants.filter(
-    (assistant) => assistant.kind === "chat",
-  ).length;
-  const utilityAssistantCount = assistants.filter(
-    (assistant) => assistant.kind === "utility",
-  ).length;
+  const chatAssistants = useMemo(
+    () => assistants.filter((assistant) => assistant.kind === "chat"),
+    [assistants],
+  );
   const utilityAssistants = useMemo(
     () => assistants.filter((assistant) => assistant.kind === "utility"),
     [assistants],
   );
+  const chatAssistantCount = chatAssistants.length;
+  const utilityAssistantCount = utilityAssistants.length;
   const diagnostics = useMemo(
     () => [
       [
@@ -1718,6 +1771,35 @@ function App() {
     }
   };
 
+  const moveAssistant = (assistantId: string, direction: -1 | 1) => {
+    setAssistants((current) => {
+      const targetAssistant = current.find(
+        (assistant) => assistant.id === assistantId,
+      );
+      if (!targetAssistant) {
+        return current;
+      }
+
+      const sameKindAssistants = current.filter(
+        (assistant) => assistant.kind === targetAssistant.kind,
+      );
+      const reorderedSameKindAssistants = moveListItemById(
+        sameKindAssistants,
+        assistantId,
+        direction,
+      );
+      let sameKindIndex = 0;
+
+      return current.map((assistant) => {
+        if (assistant.kind !== targetAssistant.kind) {
+          return assistant;
+        }
+
+        return reorderedSameKindAssistants[sameKindIndex++] ?? assistant;
+      });
+    });
+  };
+
   const updateAssistantField = (
     assistantId: string,
     key: AssistantFieldKey,
@@ -1798,6 +1880,12 @@ function App() {
     setApiProfiles((current) => [...current, newProfile]);
     setEditingApiProfileId(newProfile.id);
     setEditingModelId(newProfile.models[0]?.id ?? "");
+  };
+
+  const moveApiProfile = (profileId: string, direction: -1 | 1) => {
+    setApiProfiles((current) =>
+      moveListItemById(current, profileId, direction),
+    );
   };
 
   const updateApiProfileField = (
@@ -1913,6 +2001,19 @@ function App() {
       ),
     );
     setEditingModelId(modelId);
+  };
+
+  const moveModel = (profileId: string, modelId: string, direction: -1 | 1) => {
+    setApiProfiles((current) =>
+      current.map((profile) =>
+        profile.id === profileId
+          ? {
+              ...profile,
+              models: moveListItemById(profile.models, modelId, direction),
+            }
+          : profile,
+      ),
+    );
   };
 
   const deleteModel = (profileId: string, modelId: string) => {
@@ -2155,6 +2256,12 @@ function App() {
     setEditingContextProfileId(newProfile.id);
   };
 
+  const moveContextProfile = (profileId: string, direction: -1 | 1) => {
+    setContextProfiles((current) =>
+      moveListItemById(current, profileId, direction),
+    );
+  };
+
   const updateContextProfileField = (
     profileId: string,
     key: keyof Pick<ContextProfile, "name" | "description">,
@@ -2275,7 +2382,7 @@ function App() {
 
     if (
       !confirmDestructiveAction(
-        `删除上下文 Profile「${targetProfile.name}」？引用它的助手会切换到可用 Profile。`,
+        `删除上下文配置「${targetProfile.name}」？引用它的助手会切换到可用配置。`,
       )
     ) {
       return;
@@ -2379,9 +2486,7 @@ function App() {
         activeContextProfile,
       ).length === 0
     ) {
-      setContextSummaryStatus(
-        "当前上下文 Profile 未启用任何维度，已跳过总结。",
-      );
+      setContextSummaryStatus("当前上下文配置未启用任何维度，已跳过总结。");
       return;
     }
 
@@ -2664,7 +2769,7 @@ function App() {
                 text:
                   error instanceof Error
                     ? error.message
-                    : "请求模型失败，请检查 API Profile、模型和网络。",
+                    : "请求模型失败，请检查连接、模型和网络。",
               }
             : message,
         ),
@@ -2818,7 +2923,7 @@ function App() {
                 text:
                   error instanceof Error
                     ? error.message
-                    : "请求模型失败，请检查 API Profile、模型和网络。",
+                    : "请求模型失败，请检查连接、模型和网络。",
               }
             : message,
         ),
@@ -2973,7 +3078,7 @@ function App() {
                 text:
                   error instanceof Error
                     ? error.message
-                    : "请求模型失败，请检查 API Profile、模型和网络。",
+                    : "请求模型失败，请检查连接、模型和网络。",
               }
             : message,
         ),
@@ -3578,7 +3683,7 @@ function App() {
                 />
               </div>
               <div className="settings-row compact">
-                <span>API Profiles</span>
+                <span>连接配置</span>
                 <strong>{apiProfiles.length}</strong>
               </div>
               <div className="settings-row compact">
@@ -3590,7 +3695,7 @@ function App() {
                 <strong>{utilityAssistantCount}</strong>
               </div>
               <div className="settings-row compact">
-                <span>上下文 Profile</span>
+                <span>上下文配置</span>
                 <strong>{contextProfiles.length}</strong>
               </div>
               <div className="settings-row compact theme-select">
@@ -3699,17 +3804,17 @@ function App() {
 
             <section
               className="summary-framework-panel"
-              aria-label="上下文 Profile"
+              aria-label="上下文配置"
             >
               <header>
                 <div>
-                  <p className="eyebrow">Context profile</p>
-                  <h3>上下文 Profile</h3>
+                  <p className="eyebrow">Context config</p>
+                  <h3>上下文配置</h3>
                 </div>
                 <div className="header-actions">
                   <button type="button" onClick={createContextProfile}>
                     <Plus size={16} />
-                    新增上下文 Profile
+                    新增上下文配置
                   </button>
                   <button
                     className="danger-button"
@@ -3719,20 +3824,19 @@ function App() {
                     }
                   >
                     <Trash2 size={16} />
-                    删除 Profile
+                    删除配置
                   </button>
                 </div>
               </header>
               <p className="summary-framework-note">
-                聊天助手引用这里的 Profile；全局总结助手会按当前聊天助手绑定的
-                Profile 执行总结，不需要为每个聊天助手单独配置总结助手。
+                聊天助手引用这里的上下文配置；全局总结助手会按当前聊天助手绑定的配置执行总结，不需要为每个聊天助手单独配置总结助手。
               </p>
               <div className="profile-layout">
                 <aside className="profile-directory">
                   <div className="assistant-config-select">
-                    <span>当前 Profile</span>
+                    <span>当前配置</span>
                     <CustomSelect
-                      label="选择上下文 Profile"
+                      label="选择上下文配置"
                       value={editingContextProfile.id}
                       options={contextProfiles.map((profile) => ({
                         value: profile.id,
@@ -3742,22 +3846,30 @@ function App() {
                     />
                   </div>
                   <div className="assistant-card-list">
-                    {contextProfiles.map((profile) => (
-                      <button
-                        className={`assistant-card ${
-                          profile.id === editingContextProfile.id
-                            ? "selected"
-                            : ""
-                        }`}
-                        key={profile.id}
-                        type="button"
-                        onClick={() => setEditingContextProfileId(profile.id)}
-                      >
-                        <span>{profile.name}</span>
-                        <small>
-                          {profile.dimensionOverrides.length} 个维度重载
-                        </small>
-                      </button>
+                    {contextProfiles.map((profile, index) => (
+                      <div className="sortable-card-row" key={profile.id}>
+                        <button
+                          className={`assistant-card ${
+                            profile.id === editingContextProfile.id
+                              ? "selected"
+                              : ""
+                          }`}
+                          type="button"
+                          onClick={() => setEditingContextProfileId(profile.id)}
+                        >
+                          <span>{profile.name}</span>
+                          <small>
+                            {profile.dimensionOverrides.length} 个维度重载
+                          </small>
+                        </button>
+                        <ReorderControls
+                          itemName={`上下文配置 ${profile.name}`}
+                          isFirst={index === 0}
+                          isLast={index === contextProfiles.length - 1}
+                          onMoveUp={() => moveContextProfile(profile.id, -1)}
+                          onMoveDown={() => moveContextProfile(profile.id, 1)}
+                        />
+                      </div>
                     ))}
                   </div>
                 </aside>
@@ -3765,9 +3877,9 @@ function App() {
                 <section className="profile-detail">
                   <div className="reflected-fields">
                     <label className="detail-field">
-                      <span>Profile 名称</span>
+                      <span>配置名称</span>
                       <input
-                        aria-label="上下文 Profile 名称"
+                        aria-label="上下文配置名称"
                         value={editingContextProfile.name}
                         onChange={(event) =>
                           updateContextProfileField(
@@ -3779,9 +3891,9 @@ function App() {
                       />
                     </label>
                     <label className="detail-field">
-                      <span>Profile 描述</span>
+                      <span>配置描述</span>
                       <input
-                        aria-label="上下文 Profile 描述"
+                        aria-label="上下文配置描述"
                         value={editingContextProfile.description}
                         onChange={(event) =>
                           updateContextProfileField(
@@ -3854,7 +3966,7 @@ function App() {
                               : `未启用：该维度不会进入普通聊天或总结提示；当前重载内容仅保留为预览。默认：${section.instruction}`}
                           </p>
                           <label>
-                            <span>Profile 重载说明</span>
+                            <span>配置重载说明</span>
                             <textarea
                               aria-label={`${section.title}上下文重载说明`}
                               disabled={!enabled}
@@ -3882,7 +3994,7 @@ function App() {
                         resetContextProfile(editingContextProfile.id)
                       }
                     >
-                      还原当前 Profile 重载
+                      还原当前配置重载
                     </button>
                   </div>
                 </section>
@@ -3892,7 +4004,7 @@ function App() {
             <section className="backup-panel" aria-label="备份与存储">
               <header>
                 <div>
-                  <p className="eyebrow">Persistence</p>
+                  <p className="eyebrow">Storage</p>
                   <h3>本地持久化与备份</h3>
                 </div>
               </header>
@@ -3953,27 +4065,24 @@ function App() {
               ) : null}
             </section>
 
-            <section
-              className="api-profile-panel"
-              aria-label="API Profile 与模型"
-            >
+            <section className="api-profile-panel" aria-label="连接与模型">
               <header>
                 <div>
-                  <p className="eyebrow">Routes</p>
-                  <h3>API Profile 与模型</h3>
+                  <p className="eyebrow">Connections</p>
+                  <h3>连接与模型</h3>
                 </div>
                 <button type="button" onClick={createApiProfile}>
                   <Plus size={16} />
-                  新增 Profile
+                  新增连接
                 </button>
               </header>
 
               <div className="profile-layout">
                 <aside className="profile-directory">
                   <div className="assistant-config-select">
-                    <span>当前 Profile</span>
+                    <span>当前连接</span>
                     <CustomSelect
-                      label="选择 API Profile"
+                      label="选择连接"
                       value={editingApiProfile?.id ?? ""}
                       options={apiProfiles.map((profile) => ({
                         value: profile.id,
@@ -3989,21 +4098,31 @@ function App() {
                     />
                   </div>
                   <div className="assistant-card-list">
-                    {apiProfiles.map((profile) => (
-                      <button
-                        className={`assistant-card ${
-                          profile.id === editingApiProfile?.id ? "selected" : ""
-                        }`}
-                        key={profile.id}
-                        type="button"
-                        onClick={() => {
-                          setEditingApiProfileId(profile.id);
-                          setEditingModelId(profile.models[0]?.id ?? "");
-                        }}
-                      >
-                        <span>{profile.name}</span>
-                        <small>{profile.models.length} models</small>
-                      </button>
+                    {apiProfiles.map((profile, index) => (
+                      <div className="sortable-card-row" key={profile.id}>
+                        <button
+                          className={`assistant-card ${
+                            profile.id === editingApiProfile?.id
+                              ? "selected"
+                              : ""
+                          }`}
+                          type="button"
+                          onClick={() => {
+                            setEditingApiProfileId(profile.id);
+                            setEditingModelId(profile.models[0]?.id ?? "");
+                          }}
+                        >
+                          <span>{profile.name}</span>
+                          <small>{profile.models.length} models</small>
+                        </button>
+                        <ReorderControls
+                          itemName={`连接 ${profile.name}`}
+                          isFirst={index === 0}
+                          isLast={index === apiProfiles.length - 1}
+                          onMoveUp={() => moveApiProfile(profile.id, -1)}
+                          onMoveDown={() => moveApiProfile(profile.id, 1)}
+                        />
+                      </div>
                     ))}
                   </div>
                 </aside>
@@ -4016,9 +4135,9 @@ function App() {
                     </div>
                     <div className="reflected-fields">
                       <label className="detail-field">
-                        <span>Profile 名称</span>
+                        <span>连接名称</span>
                         <input
-                          aria-label="Profile 名称"
+                          aria-label="连接名称"
                           value={editingApiProfile.name}
                           onChange={(event) =>
                             updateApiProfileField(
@@ -4101,9 +4220,9 @@ function App() {
                         </div>
                       </label>
                       <label className="detail-field checkbox-field">
-                        <span>启用 Profile</span>
+                        <span>启用连接</span>
                         <input
-                          aria-label="启用 Profile"
+                          aria-label="启用连接"
                           checked={editingApiProfile.enabled}
                           type="checkbox"
                           onChange={(event) =>
@@ -4116,9 +4235,9 @@ function App() {
                         />
                       </label>
                       <label className="detail-field">
-                        <span>Profile 描述</span>
+                        <span>连接描述</span>
                         <textarea
-                          aria-label="Profile 描述"
+                          aria-label="连接描述"
                           rows={3}
                           value={editingApiProfile.description}
                           onChange={(event) =>
@@ -4131,14 +4250,14 @@ function App() {
                         />
                       </label>
                       <div className="detail-field danger-zone">
-                        <span>Profile 操作</span>
+                        <span>连接操作</span>
                         <button
                           className="danger-button"
                           type="button"
                           onClick={() => deleteApiProfile(editingApiProfile.id)}
                         >
                           <Trash2 size={16} />
-                          删除当前 Profile
+                          删除当前连接
                         </button>
                         <small>
                           会删除该连接下的模型配置，并移除引用这些模型的助手绑定；历史消息保留原始快照。
@@ -4174,20 +4293,34 @@ function App() {
                     </div>
 
                     <div className="model-card-list" aria-label="模型配置列表">
-                      {editingApiProfile.models.map((model) => (
-                        <button
-                          className={`model-card ${
-                            model.id === editingModel?.id ? "selected" : ""
-                          }`}
-                          key={model.id}
-                          type="button"
-                          aria-label={`编辑模型 ${model.name}`}
-                          onClick={() => setEditingModelId(model.id)}
-                        >
-                          <span>{model.name}</span>
-                          <small>{model.id}</small>
-                          <small>{model.enabled ? "已启用" : "已停用"}</small>
-                        </button>
+                      {editingApiProfile.models.map((model, index) => (
+                        <div className="sortable-card-row" key={model.id}>
+                          <button
+                            className={`model-card ${
+                              model.id === editingModel?.id ? "selected" : ""
+                            }`}
+                            type="button"
+                            aria-label={`编辑模型 ${model.name}`}
+                            onClick={() => setEditingModelId(model.id)}
+                          >
+                            <span>{model.name}</span>
+                            <small>{model.id}</small>
+                            <small>{model.enabled ? "已启用" : "已停用"}</small>
+                          </button>
+                          <ReorderControls
+                            itemName={`模型 ${model.name}`}
+                            isFirst={index === 0}
+                            isLast={
+                              index === editingApiProfile.models.length - 1
+                            }
+                            onMoveUp={() =>
+                              moveModel(editingApiProfile.id, model.id, -1)
+                            }
+                            onMoveDown={() =>
+                              moveModel(editingApiProfile.id, model.id, 1)
+                            }
+                          />
+                        </div>
                       ))}
                     </div>
 
@@ -4320,36 +4453,81 @@ function App() {
                   />
                 </div>
 
-                <div className="assistant-card-list">
-                  {assistants.map((assistant) => {
-                    const defaultBinding =
-                      assistant.modelBindings.find(
-                        (binding) => binding.isDefault,
-                      ) ?? assistant.modelBindings[0];
-                    return (
-                      <button
-                        className={`assistant-card ${
-                          assistant.id === editingAssistant.id ? "selected" : ""
-                        }`}
-                        key={assistant.id}
-                        type="button"
-                        onClick={() => setEditingAssistantId(assistant.id)}
-                      >
-                        <span>{assistant.name}</span>
-                        <small>
-                          {assistant.kind === "chat" ? "聊天助手" : "功能助手"}{" "}
-                          · {defaultBinding?.modelNameSnapshot ?? "未绑定模型"}
-                        </small>
-                      </button>
-                    );
-                  })}
+                <div className="assistant-kind-groups">
+                  {[
+                    {
+                      title: "聊天助手",
+                      description: "用于前台对话，可绑定上下文配置。",
+                      items: chatAssistants,
+                    },
+                    {
+                      title: "功能助手",
+                      description: "用于总结、压缩等内置语义任务。",
+                      items: utilityAssistants,
+                    },
+                  ].map((section) => (
+                    <section
+                      className="assistant-kind-group"
+                      aria-label={`${section.title}列表`}
+                      key={section.title}
+                    >
+                      <header className="assistant-kind-header">
+                        <div>
+                          <span>{section.title}</span>
+                          <small>{section.description}</small>
+                        </div>
+                        <strong>{section.items.length}</strong>
+                      </header>
+                      <div className="assistant-card-list">
+                        {section.items.map((assistant, index) => {
+                          const defaultBinding =
+                            assistant.modelBindings.find(
+                              (binding) => binding.isDefault,
+                            ) ?? assistant.modelBindings[0];
+                          return (
+                            <div
+                              className="sortable-card-row"
+                              key={assistant.id}
+                            >
+                              <button
+                                className={`assistant-card ${
+                                  assistant.id === editingAssistant.id
+                                    ? "selected"
+                                    : ""
+                                }`}
+                                type="button"
+                                onClick={() =>
+                                  setEditingAssistantId(assistant.id)
+                                }
+                              >
+                                <span>{assistant.name}</span>
+                                <small>
+                                  {defaultBinding?.modelNameSnapshot ??
+                                    "未绑定模型"}
+                                </small>
+                              </button>
+                              <ReorderControls
+                                itemName={`${section.title} ${assistant.name}`}
+                                isFirst={index === 0}
+                                isLast={index === section.items.length - 1}
+                                onMoveUp={() => moveAssistant(assistant.id, -1)}
+                                onMoveDown={() =>
+                                  moveAssistant(assistant.id, 1)
+                                }
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ))}
                 </div>
               </aside>
 
               <section className="assistant-detail" aria-label="助手详情">
                 <header>
                   <div>
-                    <p className="eyebrow">Details</p>
+                    <p className="eyebrow">Assistant details</p>
                     <h3>{editingAssistant.name}</h3>
                   </div>
                   <div className="header-actions">
@@ -4469,18 +4647,18 @@ function App() {
                 {editingAssistant.kind === "chat" ? (
                   <section
                     className="model-bindings"
-                    aria-label="助手上下文 Profile 设置"
+                    aria-label="助手上下文配置设置"
                   >
                     <header>
                       <div>
-                        <p className="eyebrow">Context profile</p>
-                        <h3>助手上下文 Profile</h3>
+                        <p className="eyebrow">Context config</p>
+                        <h3>助手上下文配置</h3>
                       </div>
                     </header>
                     <div className="assistant-config-select">
-                      <span>当前助手使用的 Profile</span>
+                      <span>当前助手使用的上下文配置</span>
                       <CustomSelect
-                        label="助手上下文 Profile"
+                        label="助手上下文配置"
                         value={
                           resolveContextProfile(
                             contextProfiles,
@@ -4499,8 +4677,7 @@ function App() {
                         }
                       />
                       <small>
-                        普通聊天会注入该
-                        Profile；主动总结时，全局总结助手也会按它执行分类。
+                        普通聊天会注入该上下文配置；主动总结时，全局总结助手也会按它执行分类。
                       </small>
                     </div>
                   </section>

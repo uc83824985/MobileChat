@@ -6,12 +6,12 @@ Date: 2026-07-14
 
 - The mobile/desktop shell is usable with persisted local state.
 - Conversation creation, conversation selection, title edit, title/summary search, archive action, archived conversation view, draft input, send, stop, debug panel toggle, settings open/close, theme switch, streaming switch, assistant switch, and model switch are covered by automated tests.
-- Settings is no longer a placeholder. It exposes persisted API Profile, model, assistant, context Profile, backup, theme, and streaming controls.
+- Settings is no longer a placeholder. It exposes persisted connection, model, assistant, context configuration, backup, theme, and streaming controls.
 - The app has OpenAI-compatible Responses and Chat Completions request loops. Responses sends `POST {baseUrl}/responses` using `store:false` and omits optional `metadata` for wider relay compatibility; Chat Completions sends `POST {baseUrl}/chat/completions`. Without an API key it shows a local configuration error. Streaming mode uses SSE text deltas when the gateway truly streams; if a `stream:true` request is buffered into JSON, the client falls back to one-shot JSON parsing.
 - Mobile browser compatibility is covered by responsive CSS plus Playwright Mobile Chrome checks. The default mobile layout keeps the side conversation rail as a drawer, collapses settings/detail grids to one column, and preserves the same application logic as desktop.
 - A persisted "布局模式" display setting supports `auto`, `mobile`, and `desktop`. `auto` follows viewport width, `mobile` forces drawer/single-column layout, and `desktop` forces the desktop layout structure. This is layout-only and does not change conversation state, local persistence, request construction, or provider protocol behavior.
 - Theme and layout still persist in `MobileChatDB`, but the app also mirrors those two paint-critical UI preferences to `localStorage` and applies theme in a small head boot script. This avoids a first-paint light/dark flash while keeping IndexedDB authoritative for domain data.
-- Route compatibility is protocol-specific. A user-configured Grok route was observed to fail with 404 on Responses while succeeding on Chat Completions, so each API Profile must preserve the selected protocol instead of assuming one relay-wide default.
+- Connection compatibility is protocol-specific. A user-configured Grok connection was observed to fail with 404 on Responses while succeeding on Chat Completions, so each connection must preserve the selected protocol instead of assuming one relay-wide default.
 - Web access is protocol-specific and turn-scoped: Responses sends `tools: [{ type: "web_search" }]`; Chat Completions sends `web_search_options: {}` only when the composer's current-turn web option is enabled.
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
 - Web access is now wired as a composer-level temporary request option rather than a static model toggle. Multimodal intent is also kept in the composer as a current-turn placeholder; image/file content sending is still not wired into the request builder.
@@ -32,17 +32,19 @@ Date: 2026-07-14
 - Dark mode styles native select options and applies `color-scheme: dark` to avoid white dropdown backgrounds with pale text.
 - Native select popups have been replaced by a reusable custom combobox/listbox component, so selected options use the same green `--selected` background as conversation and card selections across dark and light themes.
 - The assistant details panel is schema-rendered from `assistantFields`, so newly added assistants use the same reflected editor instead of a special hard-coded page.
+- Settings directory lists expose up/down reorder controls for context configurations, connections, models, and assistants. Assistant records are split into chat assistant and utility assistant sections, and reordering is constrained within each section. Reordering changes display/default order only; object IDs and cross-record references remain stable.
 - API Key editing uses an app-owned persistent show/hide button instead of relying on browser-specific password-field eye icons.
-- Debug mode exposes a manual **总结上下文** action and a **显示总结** preview. Summary generation calls the configured global context-summary utility assistant, applies the current chat assistant's context Profile, stores the generated active rolling summary on the conversation, and keeps the visible message thread unchanged except for a small debug status hint.
+- Debug mode exposes a manual **总结上下文** action and a **显示总结** preview. Summary generation calls the configured global context-summary utility assistant, applies the current chat assistant's context configuration, stores the generated active rolling summary on the conversation, and keeps the visible message thread unchanged except for a small debug status hint.
 - Settings has explicit built-in feature references for **上下文总结助手** and **上下文压缩助手**. The utility kind only makes an assistant eligible; feature settings decide which utility assistant is used by each built-in operation.
 - Settings exposes the fixed five-section context-summary framework. Users can override each section's system description, restore one section, or restore all default descriptions; section IDs and titles remain app-defined.
-- Settings also exposes reusable **上下文 Profile** records. A chat assistant references one Profile; each Profile keeps the fixed five dimensions but can add per-dimension business/domain guidance, such as roleplay formatting rules, relationship/emotion tracking, random events, or task-specific exploration notes.
-- Each Context Profile dimension has an explicit enable checkbox. Disabled dimensions stay visible and keep any previously edited text as local preview data, but they are greyed out, cannot be edited until re-enabled, and are excluded from regular chat injection and summary prompts.
+- Settings also exposes reusable **上下文配置** records. A chat assistant references one context configuration; each configuration keeps the fixed five dimensions but can add per-dimension business/domain guidance, such as roleplay formatting rules, relationship/emotion tracking, random events, or task-specific exploration notes.
+- Each context configuration dimension has an explicit enable checkbox. Disabled dimensions stay visible and keep any previously edited text as local preview data, but they are greyed out, cannot be edited until re-enabled, and are excluded from regular chat injection and summary prompts.
 
-## API Profile and model configuration
+## Connection and model configuration
 
+- User-facing terminology is normalized around **连接 / 模型 / 助手 / 上下文配置**. The internal data type is still named `apiProfiles` during the prototype phase to avoid mixing UI wording cleanup with schema churn.
 - `apiProfiles` are stored independently in `MobileChatDB`.
-- Each API Profile owns:
+- Each connection owns:
   - display name and description;
   - `baseUrl`;
   - local `apiKey`;
@@ -54,29 +56,29 @@ Date: 2026-07-14
   - description;
   - optional context window;
   - enabled flag.
-- The API Profile editor shows the full model list as selectable model cards, so every model visible in assistant model access can be traced back to a model-side configuration record.
-- Assistants own model bindings that reference existing API Profile + model records, with snapshots of key display fields for provenance. Chat assistants also reference a reusable context Profile; utility summary assistants remain global and read the active chat assistant's Profile at execution time.
+- The connection editor shows the full model list as selectable model cards, so every model visible in assistant model access can be traced back to a model-side configuration record.
+- Assistants own model bindings that reference existing connection + model records, with snapshots of key display fields for provenance. Chat assistants also reference a reusable context configuration; utility summary assistants remain global and read the active chat assistant's configuration at execution time.
 
 ## User-owned connection configuration
 
-- The repo no longer seeds a concrete relay URL, API key, or model slug. First-run data contains a generic editable API Profile and model placeholder.
-- User-specific routes and provider-specific model slugs should be created through the settings UI, import flow, or a local-only MobileChatDB update. Newly created API Profiles and models default optional descriptions to empty strings.
+- The repo no longer seeds a concrete relay URL, API key, or model slug. First-run data contains a generic editable connection and model placeholder.
+- User-specific connections and provider-specific model slugs should be created through the settings UI, import flow, or a local-only MobileChatDB update. Newly created connections and models default optional descriptions to empty strings.
 - API keys remain in the browser's IndexedDB unless the user exports with credentials in a future explicit flow.
-- CRUD status: API Profiles, model definitions, assistants, context Profiles, active conversations, and archived conversations all expose create/read/update/delete flows in the UI. Deleting the last required runtime object creates a blank local fallback so the app remains operable.
+- CRUD status: connections, model definitions, assistants, context configurations, active conversations, and archived conversations all expose create/read/update/delete flows in the UI. Deleting the last required runtime object creates a blank local fallback so the app remains operable.
 - Conversation deletion uses a confirmation prompt before permanently removing the conversation and its owned messages.
 - Single-message deletion uses a separate confirmation prompt. UI terminology distinguishes large conversation containers as "对话" and individual records inside a conversation as "消息".
 
 ## Persistence and import/export
 
-- `MobileChatDB` stores settings, API profiles, assistants, reusable context Profiles, conversations, messages, and reserved stores for drafts/checkpoints/blobs.
+- `MobileChatDB` stores settings, API profiles, assistants, reusable context configurations, conversations, messages, and reserved stores for drafts/checkpoints/blobs.
 - Messages now store `createdAt`, assistant `completedAt`, and assistant `elapsedMs` where available. They are rendered chronologically by creation time, while completed assistant responses show finish time and request duration.
-- Conversations may store `contextSummaries[]` plus `activeContextSummaryId`. The current implementation still manages one active rolling summary, but each record already keeps kind, status, boundary message ID, covered message count, retained raw tail count, framework snapshot, context Profile snapshot, update time, and summary-assistant/model source snapshot.
+- Conversations may store `contextSummaries[]` plus `activeContextSummaryId`. The current implementation still manages one active rolling summary, but each record already keeps kind, status, boundary message ID, covered message count, retained raw tail count, framework snapshot, context configuration snapshot, update time, and summary-assistant/model source snapshot.
 - During rapid iteration, persistence accepts only the current MobileChatDB record shape. Older fields are not translated into current configuration; users may reconfigure local profiles/assistants if a breaking schema change lands before the stable version.
 - UI edits update memory immediately and are autosaved after a short debounce. Settings close and page visibility changes flush the latest snapshot.
 - Settings persist the selected theme and whether Responses streaming is enabled.
 - The current implementation persists normalized full snapshots. This is acceptable for the current small prototype; future large histories should move to dirty-record writes as specified in the architecture document.
 - `.mobilechat` archives contain `manifest.json`, `records.json`, and `checksums.json`.
-- The current export path is credential-free: API Profile metadata and model definitions are exported, but `apiKey` is cleared.
+- The current export path is credential-free: connection metadata and model definitions are exported, but `apiKey` is cleared.
 - Desktop Playwright verifies title edit → settings edit → autosave → reload → export → local mutation → import → restored records with API key removed.
 
 ## Diagnostics and usage display

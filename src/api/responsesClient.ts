@@ -514,7 +514,7 @@ export const requestResponsesChat = async ({
   const apiKey = apiProfile.apiKey.trim();
 
   if (!apiProfile.enabled) {
-    throw new Error(`API Profile「${apiProfile.name}」未启用。`);
+    throw new Error(`连接「${apiProfile.name}」未启用。`);
   }
   if (!model.enabled) {
     throw new Error(`模型「${model.name}」未启用。`);

@@ -98,7 +98,7 @@ test("supports basic mobile interactions, title editing, and model switching", a
 
   await openSettings(page);
   await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
-  await expect(page.getByText("API Profiles")).toBeVisible();
+  await expect(page.getByLabel("设置概览").getByText("连接配置")).toBeVisible();
   await expectCustomSelectValue(page, "设置中选择助手", "默认助手");
 
   await selectCustomOption(page, "主题模式", "亮色");
@@ -164,7 +164,10 @@ test("supports archived conversation browsing and restore", async ({
 
 test("keeps settings rows compact on mobile", async ({ page }, testInfo) => {
   await openSettings(page);
-  const settingsRow = page.getByText("API Profiles").locator("..");
+  const settingsRow = page
+    .getByLabel("设置概览")
+    .getByText("连接配置")
+    .locator("..");
   const rowBox = await settingsRow.boundingBox();
   if (testInfo.project.name === "Mobile Chrome") {
     expect(rowBox?.height).toBeLessThan(90);

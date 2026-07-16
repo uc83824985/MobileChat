@@ -306,7 +306,7 @@ describe("App", () => {
     fireEvent.click(screen.getByText("设置"));
 
     expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
-    expect(screen.getByText("API Profiles")).toBeInTheDocument();
+    expect(screen.getAllByText("连接配置").length).toBeGreaterThan(0);
 
     chooseCustomSelectOption("主题模式", "亮色");
     expect(document.documentElement.dataset.theme).toBe("light");
@@ -351,11 +351,15 @@ describe("App", () => {
       "记录可精确引用的事实、字段、路径、版本、模型、配置、数值、角色属性和世界规则。禁止保存 API key 原文。",
     );
 
-    expectCustomSelectValue("选择上下文 Profile", "通用上下文");
-    expectCustomSelectValue("助手上下文 Profile", "通用上下文");
-    fireEvent.click(screen.getByText("新增上下文 Profile"));
-    expectCustomSelectValue("选择上下文 Profile", "上下文 Profile 2");
-    fireEvent.change(screen.getByLabelText("上下文 Profile 名称"), {
+    expectCustomSelectValue("选择上下文配置", "通用上下文");
+    expectCustomSelectValue("助手上下文配置", "通用上下文");
+    fireEvent.click(screen.getByText("新增上下文配置"));
+    expectCustomSelectValue("选择上下文配置", "上下文配置 2");
+    fireEvent.click(screen.getByLabelText("上移 上下文配置 上下文配置 2"));
+    expect(
+      screen.getByLabelText("上移 上下文配置 上下文配置 2"),
+    ).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("上下文配置名称"), {
       target: { value: "角色扮演上下文" },
     });
     fireEvent.change(screen.getByLabelText("模糊记忆上下文重载说明"), {
@@ -373,9 +377,9 @@ describe("App", () => {
     );
     fireEvent.click(screen.getByLabelText("启用模糊记忆上下文维度"));
     expect(screen.getByLabelText("模糊记忆上下文重载说明")).toBeEnabled();
-    chooseCustomSelectOption("助手上下文 Profile", "角色扮演上下文");
-    expectCustomSelectValue("助手上下文 Profile", "角色扮演上下文");
-    fireEvent.click(screen.getByText("还原当前 Profile 重载"));
+    chooseCustomSelectOption("助手上下文配置", "角色扮演上下文");
+    expectCustomSelectValue("助手上下文配置", "角色扮演上下文");
+    fireEvent.click(screen.getByText("还原当前配置重载"));
     expect(screen.getByLabelText("模糊记忆上下文重载说明")).toHaveValue("");
 
     expect(screen.getByLabelText("API Key")).toHaveAttribute(
@@ -442,11 +446,22 @@ describe("App", () => {
     fireEvent.click(screen.getByText("新增模型"));
     expect(screen.getByLabelText("模型名称")).toHaveValue("new-model-2");
     expect(screen.getByLabelText("模型描述")).toHaveValue("");
+    fireEvent.click(screen.getByLabelText("上移 模型 new-model-2"));
+    expect(screen.getByLabelText("上移 模型 new-model-2")).toBeDisabled();
+    fireEvent.click(screen.getByLabelText("下移 模型 new-model-2"));
+    expect(screen.getByLabelText("下移 模型 new-model-2")).toBeDisabled();
     fireEvent.click(screen.getByText("删除当前模型"));
     expect(screen.getByLabelText("模型名称")).toHaveValue("主模型");
 
     fireEvent.click(screen.getByText("新增"));
     expectCustomSelectValue("设置中选择助手", "新助手 4");
+    while (
+      !(screen.getByLabelText("上移 聊天助手 新助手 4") as HTMLButtonElement)
+        .disabled
+    ) {
+      fireEvent.click(screen.getByLabelText("上移 聊天助手 新助手 4"));
+    }
+    expect(screen.getByLabelText("上移 聊天助手 新助手 4")).toBeDisabled();
     fireEvent.change(screen.getByLabelText("助手名称"), {
       target: { value: "移动助手" },
     });
@@ -520,11 +535,13 @@ describe("App", () => {
     expect(screen.queryByText("归档删除测试")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText("设置"));
-    fireEvent.click(screen.getByText("新增 Profile"));
-    expectCustomSelectValue("选择 API Profile", "API Profile 2");
+    fireEvent.click(screen.getByText("新增连接"));
+    expectCustomSelectValue("选择连接", "连接 2");
     expect(screen.getByLabelText("模型描述")).toHaveValue("");
-    fireEvent.click(screen.getByText("删除当前 Profile"));
-    expectCustomSelectValue("选择 API Profile", "默认连接");
+    fireEvent.click(screen.getByLabelText("上移 连接 连接 2"));
+    expect(screen.getByLabelText("上移 连接 连接 2")).toBeDisabled();
+    fireEvent.click(screen.getByText("删除当前连接"));
+    expectCustomSelectValue("选择连接", "默认连接");
 
     fireEvent.click(screen.getByText("新增"));
     expectCustomSelectValue("设置中选择助手", "新助手 4");
