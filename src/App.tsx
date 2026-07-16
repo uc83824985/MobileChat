@@ -32,6 +32,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type TouchEvent,
 } from "react";
 import { requestResponsesChat } from "./api/responsesClient";
 import "./App.css";
@@ -101,12 +102,49 @@ const UI_PREFERENCES_STORAGE_KEY = "mobilechat:ui-preferences";
 const AUTOSAVE_DELAY_MS = 400;
 const SCROLL_EDGE_THRESHOLD_PX = 12;
 const COMPOSER_MAX_HEIGHT_PX = 220;
+const PANEL_SWIPE_EDGE_GUARD_PX = 32;
+const PANEL_SWIPE_TRIGGER_PX = 64;
+const PANEL_SWIPE_VERTICAL_LIMIT_PX = 56;
+const PANEL_SWIPE_IGNORE_SELECTOR = [
+  "a",
+  "button",
+  "input",
+  "textarea",
+  "select",
+  "[role='button']",
+  "[role='combobox']",
+  ".composer",
+  ".custom-select",
+  ".conversation-rail",
+].join(",");
 
 const isThemeMode = (value: unknown): value is ThemeMode =>
   value === "system" || value === "light" || value === "dark";
 
 const isLayoutMode = (value: unknown): value is LayoutMode =>
   value === "auto" || value === "mobile" || value === "desktop";
+
+const getViewportIsMobile = () =>
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(max-width: 820px)").matches;
+
+const getElementTarget = (target: EventTarget | null) =>
+  target instanceof Element ? target : null;
+
+const isNearHorizontalViewportEdge = (clientX: number) => {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return (
+    clientX <= PANEL_SWIPE_EDGE_GUARD_PX ||
+    window.innerWidth - clientX <= PANEL_SWIPE_EDGE_GUARD_PX
+  );
+};
+
+const sortMessagesByCreatedAt = (messages: Message[]) =>
+  [...messages].sort(compareMessagesByCreatedAt);
 
 const readBootUiPreferences = ():
   { themeMode?: ThemeMode; layoutMode?: LayoutMode } | undefined => {
@@ -933,6 +971,7 @@ function App() {
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(
     bootSnapshot.settings.layoutMode,
   );
+  const [viewportIsMobile, setViewportIsMobile] = useState(getViewportIsMobile);
   const [streamingEnabled, setStreamingEnabled] = useState(
     bootSnapshot.settings.streamingEnabled,
   );
@@ -998,6 +1037,8 @@ function App() {
   const [contextSummaryStatus, setContextSummaryStatus] = useState("");
   const [contextSummaryPreviewOpen, setContextSummaryPreviewOpen] =
     useState(false);
+  const [mobileDiagnosticsExpanded, setMobileDiagnosticsExpanded] =
+    useState(false);
   const [pwaNotice, setPwaNotice] = useState<PwaNotice>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const saveTimerRef = useRef<number | null>(null);
@@ -1006,6 +1047,11 @@ function App() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const messageThreadRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const drawerSwipeRef = useRef<{
+    mode: "open-panel" | "close-drawer" | "close-settings";
+    startX: number;
+    startY: number;
+  } | null>(null);
 
   const resizeComposerInput = useCallback(() => {
     const input = composerInputRef.current;
@@ -1024,8 +1070,35 @@ function App() {
   }, [draft, resizeComposerInput]);
 
   useEffect(() => {
+    if (typeof window.matchMedia !== "function") {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia("(max-width: 820px)");
+    const updateViewportMode = () => {
+      setViewportIsMobile(mediaQuery.matches);
+    };
+
+    updateViewportMode();
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", updateViewportMode);
+    } else {
+      mediaQuery.addListener(updateViewportMode);
+    }
+
+    return () => {
+      if (typeof mediaQuery.removeEventListener === "function") {
+        mediaQuery.removeEventListener("change", updateViewportMode);
+      } else {
+        mediaQuery.removeListener(updateViewportMode);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!debugEnabled) {
       setDataInspectorOpen(false);
+      setMobileDiagnosticsExpanded(false);
     }
   }, [debugEnabled]);
 
@@ -1120,9 +1193,11 @@ function App() {
   );
   const activeMessages = useMemo(
     () =>
-      messages
-        .filter((message) => message.conversationId === activeConversation?.id)
-        .toSorted(compareMessagesByCreatedAt),
+      sortMessagesByCreatedAt(
+        messages.filter(
+          (message) => message.conversationId === activeConversation?.id,
+        ),
+      ),
     [activeConversation?.id, messages],
   );
   const activeProjectedMessages = useMemo(
@@ -1380,6 +1455,113 @@ function App() {
       nextTurnWebSearchEnabled,
     ],
   );
+  const isCompactLayout =
+    layoutMode === "mobile" || (layoutMode === "auto" && viewportIsMobile);
+  const diagnosticsPanelExpanded =
+    !isCompactLayout || mobileDiagnosticsExpanded;
+  const diagnosticsBrief = `${diagnostics[0]?.[1] ?? "无估算"} · ${
+    diagnostics[2]?.[1] ?? "未选择模型"
+  }`;
+  const handleDrawerSwipeStart = useCallback(
+    (event: TouchEvent<HTMLElement>) => {
+      if (!isCompactLayout || dataInspectorOpen) {
+        drawerSwipeRef.current = null;
+        return;
+      }
+
+      const touch = event.touches[0];
+      if (!touch) {
+        drawerSwipeRef.current = null;
+        return;
+      }
+
+      const targetElement = getElementTarget(event.target);
+
+      if (settingsOpen) {
+        if (targetElement?.closest(PANEL_SWIPE_IGNORE_SELECTOR)) {
+          drawerSwipeRef.current = null;
+          return;
+        }
+
+        drawerSwipeRef.current = {
+          mode: "close-settings",
+          startX: touch.clientX,
+          startY: touch.clientY,
+        };
+        return;
+      }
+
+      if (drawerOpen) {
+        if (targetElement?.closest("input, textarea, select, .custom-select")) {
+          drawerSwipeRef.current = null;
+          return;
+        }
+
+        drawerSwipeRef.current = {
+          mode: "close-drawer",
+          startX: touch.clientX,
+          startY: touch.clientY,
+        };
+        return;
+      }
+
+      if (
+        isNearHorizontalViewportEdge(touch.clientX) ||
+        !targetElement?.closest(".chat-surface") ||
+        targetElement.closest(PANEL_SWIPE_IGNORE_SELECTOR)
+      ) {
+        drawerSwipeRef.current = null;
+        return;
+      }
+
+      drawerSwipeRef.current = {
+        mode: "open-panel",
+        startX: touch.clientX,
+        startY: touch.clientY,
+      };
+    },
+    [dataInspectorOpen, drawerOpen, isCompactLayout, settingsOpen],
+  );
+  const handleDrawerSwipeEnd = useCallback(
+    (event: TouchEvent<HTMLElement>) => {
+      const swipe = drawerSwipeRef.current;
+      drawerSwipeRef.current = null;
+
+      if (!swipe) {
+        return;
+      }
+
+      const touch = event.changedTouches[0];
+      if (!touch) {
+        return;
+      }
+
+      const deltaX = touch.clientX - swipe.startX;
+      const deltaY = touch.clientY - swipe.startY;
+      if (Math.abs(deltaY) > PANEL_SWIPE_VERTICAL_LIMIT_PX) {
+        return;
+      }
+
+      if (swipe.mode === "open-panel" && deltaX >= PANEL_SWIPE_TRIGGER_PX) {
+        setDrawerOpen(true);
+      }
+      if (swipe.mode === "open-panel" && deltaX <= -PANEL_SWIPE_TRIGGER_PX) {
+        setEditingAssistantId(activeAssistant.id);
+        setDrawerOpen(false);
+        setSettingsOpen(true);
+      }
+      if (swipe.mode === "close-drawer" && deltaX <= -PANEL_SWIPE_TRIGGER_PX) {
+        setDrawerOpen(false);
+      }
+      if (swipe.mode === "close-settings" && deltaX >= PANEL_SWIPE_TRIGGER_PX) {
+        setSettingsOpen(false);
+      }
+    },
+    [activeAssistant.id],
+  );
+  const cancelDrawerSwipe = useCallback(() => {
+    drawerSwipeRef.current = null;
+  }, []);
   const appSettings = useMemo(
     () => ({
       ...bootSnapshot.settings,
@@ -2357,9 +2539,7 @@ function App() {
     value: string | number | boolean,
   ) => {
     const nextModelId =
-      key === "id" && typeof value === "string" && value.trim()
-        ? value.trim()
-        : modelId;
+      key === "id" && typeof value === "string" ? value.trim() : modelId;
 
     setApiProfiles((current) =>
       current.map((profile) =>
@@ -2699,11 +2879,11 @@ function App() {
     const targetConversation = conversations.find(
       (conversation) => conversation.id === targetMessage.conversationId,
     );
-    const conversationMessages = messages
-      .filter(
+    const conversationMessages = sortMessagesByCreatedAt(
+      messages.filter(
         (message) => message.conversationId === targetMessage.conversationId,
-      )
-      .toSorted(compareMessagesByCreatedAt);
+      ),
+    );
     const targetIndex = conversationMessages.findIndex(
       (message) => message.id === messageId,
     );
@@ -2802,9 +2982,11 @@ function App() {
         throw new Error("总结助手未返回文本。");
       }
 
-      const latestConversationMessages = latestSnapshotRef.current.messages
-        .filter((message) => message.conversationId === conversation.id)
-        .toSorted(compareMessagesByCreatedAt);
+      const latestConversationMessages = sortMessagesByCreatedAt(
+        latestSnapshotRef.current.messages.filter(
+          (message) => message.conversationId === conversation.id,
+        ),
+      );
       const latestSummarizableMessages = latestConversationMessages.filter(
         (message) => message.status !== "streaming" && message.text.trim(),
       );
@@ -3020,11 +3202,11 @@ function App() {
       return;
     }
 
-    const summarizableMessages = messageSnapshot
-      .filter(
+    const summarizableMessages = sortMessagesByCreatedAt(
+      messageSnapshot.filter(
         (message) => message.status !== "streaming" && message.text.trim(),
-      )
-      .toSorted(compareMessagesByCreatedAt);
+      ),
+    );
     if (summarizableMessages.length === 0) {
       return;
     }
@@ -3086,8 +3268,8 @@ function App() {
     }
 
     const requestMessages = activeMessages.slice(0, messageIndex);
-    const lastUserMessage = requestMessages
-      .toReversed()
+    const lastUserMessage = [...requestMessages]
+      .reverse()
       .find((message) => message.role === "user");
     if (!lastUserMessage) {
       return;
@@ -3694,6 +3876,9 @@ function App() {
             ? "mobile-layout"
             : ""
       }`}
+      onTouchStart={handleDrawerSwipeStart}
+      onTouchEnd={handleDrawerSwipeEnd}
+      onTouchCancel={cancelDrawerSwipe}
     >
       {pwaNotice ? (
         <aside className="pwa-banner" role="status">
@@ -3724,20 +3909,6 @@ function App() {
           aria-label="关闭对话列表"
           onClick={() => setDrawerOpen(false)}
         />
-      ) : null}
-
-      {!drawerOpen ? (
-        <div className="floating-actions mobile-only" aria-label="快捷操作">
-          <button
-            className="floating-action"
-            type="button"
-            aria-label="悬浮对话入口"
-            onClick={() => setDrawerOpen(true)}
-          >
-            <PanelLeft size={18} />
-            对话
-          </button>
-        </div>
       ) : null}
 
       <aside className={`conversation-rail ${drawerOpen ? "open" : ""}`}>
@@ -3896,6 +4067,14 @@ function App() {
             )}
             <span>{activeConversation?.summary ?? "请新建或选择一个对话"}</span>
           </div>
+          <button
+            className="icon-button mobile-only chat-settings-button"
+            type="button"
+            aria-label="打开设置"
+            onClick={openSettings}
+          >
+            <Settings size={20} />
+          </button>
           <div className="chat-pickers">
             <div className="assistant-picker">
               <Bot size={18} />
@@ -4033,63 +4212,95 @@ function App() {
         </div>
 
         {debugEnabled ? (
-          <section className="diagnostics-panel" aria-label="调试诊断">
+          <section
+            className={`diagnostics-panel ${
+              diagnosticsPanelExpanded ? "expanded" : "collapsed"
+            }`}
+            aria-label="调试诊断"
+          >
             <header>
-              <SlidersHorizontal size={18} />
-              <span>Context diagnostics</span>
+              {isCompactLayout ? (
+                <button
+                  className="diagnostics-toggle"
+                  type="button"
+                  aria-expanded={diagnosticsPanelExpanded}
+                  onClick={() =>
+                    setMobileDiagnosticsExpanded((isExpanded) => !isExpanded)
+                  }
+                >
+                  <span>
+                    <SlidersHorizontal size={18} />
+                    调试诊断
+                  </span>
+                  <small>{diagnosticsBrief}</small>
+                  <span aria-hidden="true">
+                    {diagnosticsPanelExpanded ? "收起" : "展开"}
+                  </span>
+                </button>
+              ) : (
+                <>
+                  <SlidersHorizontal size={18} />
+                  <span>Context diagnostics</span>
+                </>
+              )}
             </header>
-            <div className="diagnostic-grid">
-              {diagnostics.map(([label, value]) => (
-                <div key={label}>
-                  <span>{label}</span>
-                  <strong>{value}</strong>
+            {diagnosticsPanelExpanded ? (
+              <>
+                <div className="diagnostic-grid">
+                  {diagnostics.map(([label, value]) => (
+                    <div key={label}>
+                      <span>{label}</span>
+                      <strong>{value}</strong>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <div className="context-summary-tools" role="status">
-              <button
-                type="button"
-                disabled={
-                  activeConversationReadOnly ||
-                  Boolean(pendingMessageId) ||
-                  contextSummaryPending
-                }
-                onClick={() => void summarizeActiveConversation()}
-              >
-                {contextSummaryPending ? "正在总结…" : "总结上下文"}
-              </button>
-              <button
-                type="button"
-                disabled={!activeContextSummary?.text.trim()}
-                onClick={() =>
-                  setContextSummaryPreviewOpen((isOpen) => !isOpen)
-                }
-              >
-                {contextSummaryPreviewOpen ? "隐藏总结" : "显示总结"}
-              </button>
-              <button
-                type="button"
-                disabled={!activeConversation}
-                onClick={() => setDataInspectorOpen(true)}
-              >
-                数据检查器
-              </button>
-              <span>
-                {contextSummaryStatus ||
-                  (activeContextSummary?.updatedAt
-                    ? `上下文总结：${activeContextSummary.coveredMessageCount} 条 · ${formatMessageTime(
-                        activeContextSummary.updatedAt,
-                      )}`
-                    : "上下文总结未生成")}
-              </span>
-            </div>
-            {contextSummaryPreviewOpen && activeContextSummary?.text.trim() ? (
-              <pre
-                className="context-summary-preview"
-                aria-label="当前上下文总结"
-              >
-                {activeContextSummary.text}
-              </pre>
+                <div className="context-summary-tools" role="status">
+                  <button
+                    type="button"
+                    disabled={
+                      activeConversationReadOnly ||
+                      Boolean(pendingMessageId) ||
+                      contextSummaryPending
+                    }
+                    onClick={() => void summarizeActiveConversation()}
+                  >
+                    {contextSummaryPending ? "正在总结…" : "总结上下文"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!activeContextSummary?.text.trim()}
+                    onClick={() =>
+                      setContextSummaryPreviewOpen((isOpen) => !isOpen)
+                    }
+                  >
+                    {contextSummaryPreviewOpen ? "隐藏总结" : "显示总结"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!activeConversation}
+                    onClick={() => setDataInspectorOpen(true)}
+                  >
+                    数据检查器
+                  </button>
+                  <span>
+                    {contextSummaryStatus ||
+                      (activeContextSummary?.updatedAt
+                        ? `上下文总结：${activeContextSummary.coveredMessageCount} 条 · ${formatMessageTime(
+                            activeContextSummary.updatedAt,
+                          )}`
+                        : "上下文总结未生成")}
+                  </span>
+                </div>
+                {contextSummaryPreviewOpen &&
+                activeContextSummary?.text.trim() ? (
+                  <pre
+                    className="context-summary-preview"
+                    aria-label="当前上下文总结"
+                  >
+                    {activeContextSummary.text}
+                  </pre>
+                ) : null}
+              </>
             ) : null}
           </section>
         ) : null}

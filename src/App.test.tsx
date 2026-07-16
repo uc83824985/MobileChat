@@ -451,7 +451,7 @@ describe("App", () => {
     });
     expect(screen.getByLabelText("总结保留原文条数")).toHaveValue(3);
 
-    expectCustomSelectValue("上下文总结助手", "上下文总结助手");
+    expectCustomSelectValue("上下文总结助手", "总结助手");
     chooseCustomSelectOption("上下文总结助手", "压缩助手");
     expectCustomSelectValue("上下文总结助手", "压缩助手");
     expectCustomSelectValue("上下文压缩助手", "压缩助手");

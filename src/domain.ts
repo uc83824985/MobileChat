@@ -334,7 +334,7 @@ export const defaultAssistant: Assistant = {
 
 export const contextSummaryAssistant: Assistant = {
   id: CONTEXT_SUMMARY_ASSISTANT_ID,
-  name: "上下文总结助手",
+  name: "总结助手",
   description:
     "内置功能助手预设：为单个对话生成可继续使用的上下文总结，不参与普通聊天。",
   kind: "utility",
@@ -360,6 +360,7 @@ export const initialMessages: Message[] = [];
 
 export const initialAssistants: Assistant[] = [
   defaultAssistant,
+  contextSummaryAssistant,
   {
     id: "compact",
     name: "压缩助手",
@@ -372,7 +373,6 @@ export const initialAssistants: Assistant[] = [
     initialMessage: "",
     enabled: true,
   },
-  contextSummaryAssistant,
 ];
 
 export const assistantFields: AssistantField[] = [

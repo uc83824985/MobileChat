@@ -344,6 +344,8 @@ button:disabled {
   border-bottom: 1px solid var(--line);
   min-height: 64px;
   padding: 12px 16px;
+  position: relative;
+  z-index: 3;
 }
 
 .chat-title {
@@ -402,6 +404,8 @@ button:disabled {
   flex: 0 0 auto;
   gap: 8px;
   min-width: 0;
+  overflow: visible;
+  position: relative;
 }
 
 .assistant-picker {
@@ -412,7 +416,9 @@ button:disabled {
   display: inline-flex;
   flex: 0 0 auto;
   gap: 8px;
+  overflow: visible;
   padding: 10px 12px;
+  position: relative;
 }
 
 .assistant-picker select {
@@ -452,6 +458,7 @@ button:disabled {
 
 .assistant-picker .custom-select-menu {
   min-width: max(100%, 140px);
+  z-index: 40;
 }
 
 .model-picker .custom-select-trigger {
@@ -586,6 +593,41 @@ button:disabled {
   font-weight: 700;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.diagnostics-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  display: grid;
+  gap: 2px 10px;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.diagnostics-toggle span {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.diagnostics-toggle small {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostics-toggle span:last-child {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .diagnostic-grid {
@@ -1689,7 +1731,7 @@ button:disabled {
   transform: translateX(-104%);
   transition: transform 0.18s ease;
   width: 82vw;
-  z-index: 3;
+  z-index: 30;
 }
 
 .mobile-layout .conversation-rail.open {
@@ -1700,7 +1742,7 @@ button:disabled {
   background: rgba(10, 12, 16, 0.35);
   inset: 0;
   position: fixed;
-  z-index: 2;
+  z-index: 29;
 }
 
 .mobile-layout .mobile-only {
@@ -1713,7 +1755,12 @@ button:disabled {
 
 .mobile-layout .chat-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  row-gap: 10px;
+}
+
+.mobile-layout .chat-settings-button {
+  justify-self: end;
 }
 
 .mobile-layout .chat-pickers {
@@ -1723,6 +1770,17 @@ button:disabled {
 
 .mobile-layout .chat-pickers .assistant-picker {
   flex: 1 1 0;
+  max-width: none;
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.mobile-layout .assistant-picker .custom-select {
+  width: 100%;
+}
+
+.mobile-layout .assistant-picker .custom-select-trigger,
+.mobile-layout .model-picker .custom-select-trigger {
   max-width: none;
 }
 
@@ -1771,7 +1829,7 @@ button:disabled {
     transform: translateX(-104%);
     transition: transform 0.18s ease;
     width: 82vw;
-    z-index: 3;
+    z-index: 30;
   }
 
   .desktop-layout .conversation-rail {
@@ -1788,7 +1846,7 @@ button:disabled {
     background: rgba(10, 12, 16, 0.35);
     inset: 0;
     position: fixed;
-    z-index: 2;
+    z-index: 29;
   }
 
   .conversation-rail.open {
@@ -1813,7 +1871,7 @@ button:disabled {
 
   .chat-header {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .desktop-layout .chat-header {
@@ -1837,7 +1895,7 @@ button:disabled {
 
   .assistant-picker {
     max-width: 132px;
-    overflow: hidden;
+    overflow: visible;
   }
 
   .assistant-picker select {
@@ -1952,6 +2010,10 @@ button:disabled {
 
   .diagnostics-panel {
     padding: 10px 12px;
+  }
+
+  .diagnostics-panel.collapsed header {
+    margin-bottom: 0;
   }
 
   .diagnostic-grid {
