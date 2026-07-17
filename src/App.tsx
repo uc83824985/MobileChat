@@ -54,6 +54,7 @@ import {
   createInitialSnapshot,
   defaultContextProfile,
   defaultContextSummaryFramework,
+  defaultModelProbeSettings,
   DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL,
   DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
   DEFAULT_MODEL_REF,
@@ -62,6 +63,10 @@ import {
   type LayoutMode,
   type Message,
   type ModelDefinition,
+  type ModelProbeDimensionValue,
+  type ModelProbeGroup,
+  type ModelProbeRule,
+  type ModelProbeSettings,
   type ModelRef,
   modelRefKey,
   parseModelRefKey,
@@ -71,6 +76,13 @@ import {
   type ThemeMode,
   type UtilityAssistantModelStrategy,
 } from "./domain";
+import {
+  createEmptyModelProbeGroup,
+  expandModelProbeSettings,
+  type ModelProbeResult,
+  normalizeModelProbeSettings,
+  runModelProbePool,
+} from "./modelProbe";
 import {
   createArchiveDownloadName,
   createMobileChatArchive,
@@ -102,9 +114,14 @@ const UI_PREFERENCES_STORAGE_KEY = "mobilechat:ui-preferences";
 const AUTOSAVE_DELAY_MS = 400;
 const SCROLL_EDGE_THRESHOLD_PX = 12;
 const COMPOSER_MAX_HEIGHT_PX = 220;
+const MOBILE_LAYOUT_MAX_WIDTH_PX = 820;
+const PHONE_LANDSCAPE_DESKTOP_MIN_WIDTH_PX = 640;
+const CONSTRAINED_VIEWPORT_MAX_WIDTH_PX = 920;
+const CONSTRAINED_VIEWPORT_MAX_HEIGHT_PX = 560;
 const PANEL_SWIPE_EDGE_GUARD_PX = 32;
 const PANEL_SWIPE_TRIGGER_PX = 64;
 const PANEL_SWIPE_VERTICAL_LIMIT_PX = 56;
+const MODEL_PROBE_CONCURRENCY = 8;
 const PANEL_SWIPE_IGNORE_SELECTOR = [
   "a",
   "button",
@@ -124,10 +141,49 @@ const isThemeMode = (value: unknown): value is ThemeMode =>
 const isLayoutMode = (value: unknown): value is LayoutMode =>
   value === "auto" || value === "mobile" || value === "desktop";
 
-const getViewportIsMobile = () =>
-  typeof window !== "undefined" &&
-  typeof window.matchMedia === "function" &&
-  window.matchMedia("(max-width: 820px)").matches;
+type ViewportProfile = {
+  prefersMobileLayout: boolean;
+  isConstrained: boolean;
+  isLandscape: boolean;
+  width: number;
+  height: number;
+};
+
+const getViewportProfile = (): ViewportProfile => {
+  if (typeof window === "undefined") {
+    return {
+      prefersMobileLayout: false,
+      isConstrained: false,
+      isLandscape: false,
+      width: 1024,
+      height: 768,
+    };
+  }
+
+  const width = Math.round(window.visualViewport?.width ?? window.innerWidth);
+  const height = Math.round(
+    window.visualViewport?.height ?? window.innerHeight,
+  );
+  const isPortrait =
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(orientation: portrait)").matches
+      : height >= width;
+  const isLandscape = !isPortrait;
+  const shouldUseDesktopInLandscape =
+    isLandscape && width >= PHONE_LANDSCAPE_DESKTOP_MIN_WIDTH_PX;
+
+  return {
+    prefersMobileLayout:
+      !shouldUseDesktopInLandscape &&
+      (isPortrait || width <= MOBILE_LAYOUT_MAX_WIDTH_PX),
+    isConstrained:
+      width <= CONSTRAINED_VIEWPORT_MAX_WIDTH_PX ||
+      height <= CONSTRAINED_VIEWPORT_MAX_HEIGHT_PX,
+    isLandscape,
+    width,
+    height,
+  };
+};
 
 const getElementTarget = (target: EventTarget | null) =>
   target instanceof Element ? target : null;
@@ -935,6 +991,55 @@ const createTurnTimestamps = () => {
   };
 };
 
+const parseModelIdListText = (text: string) =>
+  text
+    .split(/[\n,]/)
+    .map((line) => line.replace(/#.*$/, "").trim())
+    .filter(Boolean);
+
+const formatModelIdListText = (models: string[]) => models.join("\n");
+
+const isMinorTenthsDimension = (
+  value: ModelProbeDimensionValue,
+): value is Extract<ModelProbeDimensionValue, { type: "minorTenths" }> =>
+  typeof value === "object" &&
+  value !== null &&
+  !Array.isArray(value) &&
+  "type" in value &&
+  value.type === "minorTenths";
+
+const flattenProbeDimensionValues = (
+  value: ModelProbeDimensionValue,
+): string[] => {
+  if (Array.isArray(value)) {
+    return value.flatMap(flattenProbeDimensionValues);
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "values" in value
+  ) {
+    return value.values.flatMap(flattenProbeDimensionValues);
+  }
+  return [String(value ?? "")];
+};
+
+const formatProbeDimensionLabel = (key: string) =>
+  key === "version"
+    ? "版本区间"
+    : key.startsWith("arg")
+      ? `后缀段${key.slice(3) || ""}`
+      : "后缀段";
+
+const getNextProbeArgKey = (rule: ModelProbeRule) => {
+  let index = 1;
+  while (rule.dimensions[`arg${index}`] !== undefined) {
+    index += 1;
+  }
+  return `arg${index}`;
+};
+
 function App() {
   const bootSnapshot = useMemo(() => createBootSnapshot(), []);
   const [apiProfiles, setApiProfiles] = useState<ApiProfile[]>(
@@ -971,7 +1076,7 @@ function App() {
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(
     bootSnapshot.settings.layoutMode,
   );
-  const [viewportIsMobile, setViewportIsMobile] = useState(getViewportIsMobile);
+  const [viewportProfile, setViewportProfile] = useState(getViewportProfile);
   const [streamingEnabled, setStreamingEnabled] = useState(
     bootSnapshot.settings.streamingEnabled,
   );
@@ -986,6 +1091,8 @@ function App() {
   const [utilityAssistantRefs, setUtilityAssistantRefs] = useState(
     bootSnapshot.settings.utilityAssistantRefs,
   );
+  const [modelProbeSettings, setModelProbeSettings] =
+    useState<ModelProbeSettings>(bootSnapshot.settings.modelProbeSettings);
   const [contextSummaryFramework, setContextSummaryFramework] = useState(
     bootSnapshot.settings.contextSummaryFramework,
   );
@@ -1040,6 +1147,14 @@ function App() {
   const [mobileDiagnosticsExpanded, setMobileDiagnosticsExpanded] =
     useState(false);
   const [pwaNotice, setPwaNotice] = useState<PwaNotice>(null);
+  const [modelProbeRunning, setModelProbeRunning] = useState(false);
+  const [modelProbeStatus, setModelProbeStatus] = useState("");
+  const [modelProbeResults, setModelProbeResults] = useState<
+    ModelProbeResult[]
+  >([]);
+  const [modelProbeGroupIdDraft, setModelProbeGroupIdDraft] = useState(
+    bootSnapshot.settings.modelProbeSettings.editingGroupId,
+  );
   const abortControllerRef = useRef<AbortController | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const latestSnapshotRef = useRef<LocalDataSnapshot>(bootSnapshot);
@@ -1067,31 +1182,41 @@ function App() {
 
   useEffect(() => {
     resizeComposerInput();
-  }, [draft, resizeComposerInput]);
+  }, [draft, resizeComposerInput, viewportProfile]);
 
   useEffect(() => {
-    if (typeof window.matchMedia !== "function") {
+    if (typeof window === "undefined") {
       return undefined;
     }
 
-    const mediaQuery = window.matchMedia("(max-width: 820px)");
     const updateViewportMode = () => {
-      setViewportIsMobile(mediaQuery.matches);
+      setViewportProfile(getViewportProfile());
+    };
+    const scheduleViewportModeUpdate = () => {
+      updateViewportMode();
+      window.requestAnimationFrame(updateViewportMode);
+      window.setTimeout(updateViewportMode, 120);
+      window.setTimeout(updateViewportMode, 360);
     };
 
-    updateViewportMode();
-    if (typeof mediaQuery.addEventListener === "function") {
-      mediaQuery.addEventListener("change", updateViewportMode);
-    } else {
-      mediaQuery.addListener(updateViewportMode);
-    }
+    scheduleViewportModeUpdate();
+    window.addEventListener("resize", scheduleViewportModeUpdate);
+    window.addEventListener("orientationchange", scheduleViewportModeUpdate);
+    window.visualViewport?.addEventListener(
+      "resize",
+      scheduleViewportModeUpdate,
+    );
 
     return () => {
-      if (typeof mediaQuery.removeEventListener === "function") {
-        mediaQuery.removeEventListener("change", updateViewportMode);
-      } else {
-        mediaQuery.removeListener(updateViewportMode);
-      }
+      window.removeEventListener("resize", scheduleViewportModeUpdate);
+      window.removeEventListener(
+        "orientationchange",
+        scheduleViewportModeUpdate,
+      );
+      window.visualViewport?.removeEventListener(
+        "resize",
+        scheduleViewportModeUpdate,
+      );
     };
   }, []);
 
@@ -1416,6 +1541,30 @@ function App() {
     () => assistants.filter((assistant) => assistant.kind === "utility"),
     [assistants],
   );
+  const editingModelProbeGroup = useMemo(
+    () =>
+      modelProbeSettings.groups.find(
+        (group) => group.id === modelProbeSettings.editingGroupId,
+      ) ??
+      modelProbeSettings.groups[0] ??
+      normalizeModelProbeSettings().groups[0],
+    [modelProbeSettings.editingGroupId, modelProbeSettings.groups],
+  );
+  const modelProbeSelectedApiProfile = editingApiProfile ?? null;
+  const modelProbeCandidates = useMemo(
+    () =>
+      editingModelProbeGroup
+        ? expandModelProbeSettings(
+            modelProbeSettings,
+            editingModelProbeGroup.id,
+          )
+        : [],
+    [editingModelProbeGroup, modelProbeSettings],
+  );
+  const modelProbeSuccessResults = useMemo(
+    () => modelProbeResults.filter((result) => result.ok),
+    [modelProbeResults],
+  );
   const chatAssistantCount = chatAssistants.length;
   const utilityAssistantCount = utilityAssistants.length;
   const diagnostics = useMemo(
@@ -1455,10 +1604,17 @@ function App() {
       nextTurnWebSearchEnabled,
     ],
   );
-  const isCompactLayout =
-    layoutMode === "mobile" || (layoutMode === "auto" && viewportIsMobile);
+  const effectiveLayoutMode =
+    layoutMode === "auto"
+      ? viewportProfile.prefersMobileLayout
+        ? "mobile"
+        : "desktop"
+      : layoutMode;
+  const isCompactLayout = effectiveLayoutMode === "mobile";
+  const diagnosticsPanelCollapsible =
+    isCompactLayout || viewportProfile.isConstrained;
   const diagnosticsPanelExpanded =
-    !isCompactLayout || mobileDiagnosticsExpanded;
+    !diagnosticsPanelCollapsible || mobileDiagnosticsExpanded;
   const diagnosticsBrief = `${diagnostics[0]?.[1] ?? "无估算"} · ${
     diagnostics[2]?.[1] ?? "未选择模型"
   }`;
@@ -1579,6 +1735,7 @@ function App() {
       apiProfileOrder: apiProfiles.map((profile) => profile.id),
       assistantOrder: assistants.map((assistant) => assistant.id),
       utilityAssistantRefs,
+      modelProbeSettings,
       contextSummaryFramework,
       contextProfiles,
       editingContextProfileId,
@@ -1603,6 +1760,7 @@ function App() {
       editingContextProfileId,
       layoutMode,
       lastSuccessfulExportAt,
+      modelProbeSettings,
       streamingEnabled,
       storageInfo.persisted,
       storageInfo.quota,
@@ -1649,6 +1807,7 @@ function App() {
     );
     setDebugEnabled(snapshot.settings.debugEnabled);
     setUtilityAssistantRefs(snapshot.settings.utilityAssistantRefs);
+    setModelProbeSettings(snapshot.settings.modelProbeSettings);
     setContextSummaryFramework(snapshot.settings.contextSummaryFramework);
     setContextProfiles(snapshot.settings.contextProfiles);
     setEditingContextProfileId(snapshot.settings.editingContextProfileId);
@@ -1715,6 +1874,10 @@ function App() {
     setContextSummaryPreviewOpen(false);
     setContextSummaryStatus("");
   }, [activeConversation?.id]);
+
+  useEffect(() => {
+    setModelProbeGroupIdDraft(editingModelProbeGroup?.id ?? "");
+  }, [editingModelProbeGroup?.id]);
 
   useEffect(() => {
     const showOfflineReady = () => setPwaNotice("offline-ready");
@@ -2597,6 +2760,283 @@ function App() {
           : current,
       );
     }
+  };
+
+  const updateModelProbeSettings = (
+    updater: (current: ModelProbeSettings) => ModelProbeSettings,
+  ) => {
+    setModelProbeSettings((current) =>
+      normalizeModelProbeSettings(updater(current)),
+    );
+  };
+
+  const updateModelProbeGroup = (
+    groupId: string,
+    updater: (group: ModelProbeGroup) => ModelProbeGroup,
+  ) => {
+    updateModelProbeSettings((current) => ({
+      ...current,
+      groups: current.groups.map((group) =>
+        group.id === groupId ? updater(group) : group,
+      ),
+    }));
+  };
+
+  const createModelProbeGroup = () => {
+    const nextGroup = createEmptyModelProbeGroup(
+      modelProbeSettings.groups.length + 1,
+    );
+    updateModelProbeSettings((current) => ({
+      ...current,
+      groups: [...current.groups, nextGroup],
+      editingGroupId: nextGroup.id,
+    }));
+  };
+
+  const deleteModelProbeGroup = (groupId: string) => {
+    const targetGroup = modelProbeSettings.groups.find(
+      (group) => group.id === groupId,
+    );
+    if (!targetGroup) {
+      return;
+    }
+    if (
+      !confirmDestructiveAction(
+        `删除模型探测模型族「${targetGroup.name}」？这不会影响已创建的模型配置。`,
+      )
+    ) {
+      return;
+    }
+
+    updateModelProbeSettings((current) => {
+      const remainingGroups = current.groups.filter(
+        (group) => group.id !== groupId,
+      );
+      const groups =
+        remainingGroups.length > 0
+          ? remainingGroups
+          : [createEmptyModelProbeGroup(1)];
+      return {
+        ...current,
+        groups,
+        editingGroupId: groups[0]?.id ?? "",
+      };
+    });
+  };
+
+  const moveModelProbeGroup = (groupId: string, direction: -1 | 1) => {
+    updateModelProbeSettings((current) => ({
+      ...current,
+      groups: moveListItemById(current.groups, groupId, direction),
+    }));
+  };
+
+  const commitModelProbeGroupIdDraft = () => {
+    if (!editingModelProbeGroup) {
+      return;
+    }
+
+    const nextId = modelProbeGroupIdDraft.trim();
+    const currentId = editingModelProbeGroup.id;
+
+    if (nextId === currentId) {
+      setModelProbeGroupIdDraft(currentId);
+      return;
+    }
+
+    if (!nextId) {
+      setModelProbeGroupIdDraft(currentId);
+      setModelProbeStatus("模型族 ID 不能为空，已恢复原值。");
+      return;
+    }
+
+    if (
+      modelProbeSettings.groups.some(
+        (group) => group.id === nextId && group.id !== currentId,
+      )
+    ) {
+      setModelProbeGroupIdDraft(currentId);
+      setModelProbeStatus(`模型族 ID「${nextId}」已存在，已恢复原值。`);
+      return;
+    }
+
+    updateModelProbeSettings((current) => ({
+      ...current,
+      editingGroupId: nextId,
+      groups: current.groups.map((group) =>
+        group.id === currentId ? { ...group, id: nextId } : group,
+      ),
+    }));
+    setModelProbeStatus("");
+  };
+
+  const resetModelProbeSettings = () => {
+    if (
+      !confirmDestructiveAction(
+        "还原默认模型探测规则？当前自定义模型族会被覆盖。",
+      )
+    ) {
+      return;
+    }
+    setModelProbeSettings(
+      normalizeModelProbeSettings(defaultModelProbeSettings),
+    );
+    setModelProbeResults([]);
+    setModelProbeStatus("已还原默认模型探测规则。");
+  };
+
+  const updateModelProbeRule = (
+    groupId: string,
+    ruleId: string,
+    updater: (rule: ModelProbeRule) => ModelProbeRule,
+  ) => {
+    updateModelProbeGroup(groupId, (group) => ({
+      ...group,
+      rules: group.rules.map((rule) =>
+        rule.id === ruleId ? updater(rule) : rule,
+      ),
+    }));
+  };
+
+  const updateModelProbeRuleDimension = (
+    groupId: string,
+    ruleId: string,
+    key: string,
+    value: ModelProbeDimensionValue,
+  ) => {
+    updateModelProbeRule(groupId, ruleId, (rule) => ({
+      ...rule,
+      dimensions: {
+        ...rule.dimensions,
+        [key]: value,
+      },
+    }));
+  };
+
+  const deleteModelProbeRuleDimension = (
+    groupId: string,
+    ruleId: string,
+    key: string,
+  ) => {
+    updateModelProbeRule(groupId, ruleId, (rule) => {
+      const dimensions = { ...rule.dimensions };
+      delete dimensions[key];
+      return {
+        ...rule,
+        dimensions,
+      };
+    });
+  };
+
+  const addModelProbeRuleDimension = (
+    groupId: string,
+    ruleId: string,
+    key: string,
+  ) => {
+    updateModelProbeRule(groupId, ruleId, (rule) => {
+      if (rule.dimensions[key] !== undefined) {
+        return rule;
+      }
+
+      return {
+        ...rule,
+        dimensions: {
+          ...rule.dimensions,
+          [key]:
+            key === "version"
+              ? { type: "minorTenths", majors: ["1"], from: 0, to: 9 }
+              : [""],
+        },
+      };
+    });
+  };
+
+  const runModelProbe = async () => {
+    if (modelProbeRunning) {
+      return;
+    }
+    if (!editingModelProbeGroup) {
+      setModelProbeStatus("请先选择模型探测模型族。");
+      return;
+    }
+    if (!modelProbeSelectedApiProfile) {
+      setModelProbeStatus("请先选择用于执行探测的连接配置。");
+      return;
+    }
+    if (!modelProbeSelectedApiProfile.baseUrl.trim()) {
+      setModelProbeStatus("探测连接缺少 Base URL。");
+      return;
+    }
+    if (!modelProbeSelectedApiProfile.apiKey.trim()) {
+      setModelProbeStatus("探测连接缺少 API Key。");
+      return;
+    }
+    if (modelProbeCandidates.length === 0) {
+      setModelProbeStatus("当前模型族没有候选模型。");
+      return;
+    }
+
+    setModelProbeRunning(true);
+    setModelProbeResults([]);
+    setModelProbeStatus(
+      `正在探测 ${modelProbeCandidates.length} 个候选；协议跟随连接「${modelProbeSelectedApiProfile.protocol}」。`,
+    );
+
+    try {
+      const results = await runModelProbePool({
+        apiProfile: modelProbeSelectedApiProfile,
+        candidates: modelProbeCandidates,
+        concurrency: MODEL_PROBE_CONCURRENCY,
+        timeoutMs: modelProbeSettings.timeoutMs,
+      });
+      const successCount = results.filter((result) => result.ok).length;
+      setModelProbeResults(results);
+      setModelProbeStatus(
+        `探测完成：${successCount}/${results.length} 个候选可用。失败通常不产生输出 token，但会消耗网关请求。`,
+      );
+    } catch (error) {
+      setModelProbeStatus(
+        error instanceof Error ? error.message : "模型探测失败。",
+      );
+    } finally {
+      setModelProbeRunning(false);
+    }
+  };
+
+  const createModelFromProbeResult = (result: ModelProbeResult) => {
+    const targetProfile = modelProbeSelectedApiProfile;
+    if (!targetProfile || !result.ok) {
+      return;
+    }
+
+    const alreadyExists = targetProfile.models.some(
+      (model) => model.id === result.modelId,
+    );
+    if (alreadyExists) {
+      setEditingApiProfileId(targetProfile.id);
+      setEditingModelId(result.modelId);
+      setModelProbeStatus(`模型「${result.modelId}」已存在，已切换到该模型。`);
+      return;
+    }
+
+    const nextModel: ModelDefinition = {
+      id: result.modelId,
+      name: result.modelId,
+      description: `由模型探测模型族「${editingModelProbeGroup?.name ?? result.groupId}」创建。`,
+      contextWindow: 128000,
+      enabled: true,
+    };
+
+    setApiProfiles((current) =>
+      current.map((profile) =>
+        profile.id === targetProfile.id
+          ? { ...profile, models: [...profile.models, nextModel] }
+          : profile,
+      ),
+    );
+    setEditingApiProfileId(targetProfile.id);
+    setEditingModelId(result.modelId);
+    setModelProbeStatus(`已创建模型配置「${result.modelId}」。`);
   };
 
   const toggleAssistantModelBinding = (
@@ -3869,13 +4309,9 @@ function App() {
 
   return (
     <main
-      className={`app-shell ${
-        layoutMode === "desktop"
-          ? "desktop-layout"
-          : layoutMode === "mobile"
-            ? "mobile-layout"
-            : ""
-      }`}
+      className={`app-shell ${effectiveLayoutMode}-layout ${
+        viewportProfile.isConstrained ? "constrained-viewport" : ""
+      } ${viewportProfile.isLandscape ? "landscape-viewport" : ""}`}
       onTouchStart={handleDrawerSwipeStart}
       onTouchEnd={handleDrawerSwipeEnd}
       onTouchCancel={cancelDrawerSwipe}
@@ -4219,7 +4655,7 @@ function App() {
             aria-label="调试诊断"
           >
             <header>
-              {isCompactLayout ? (
+              {diagnosticsPanelCollapsible ? (
                 <button
                   className="diagnostics-toggle"
                   type="button"
@@ -4245,7 +4681,7 @@ function App() {
               )}
             </header>
             {diagnosticsPanelExpanded ? (
-              <>
+              <div className="diagnostics-body">
                 <div className="diagnostic-grid">
                   {diagnostics.map(([label, value]) => (
                     <div key={label}>
@@ -4300,7 +4736,7 @@ function App() {
                     {activeContextSummary.text}
                   </pre>
                 ) : null}
-              </>
+              </div>
             ) : null}
           </section>
         ) : null}
@@ -4675,6 +5111,10 @@ function App() {
                 <span>上下文配置</span>
                 <strong>{contextProfiles.length}</strong>
               </div>
+              <div className="settings-row compact">
+                <span>模型探测模型族</span>
+                <strong>{modelProbeSettings.groups.length}</strong>
+              </div>
               <div className="settings-row compact theme-select">
                 <span>上下文总结助手</span>
                 <CustomSelect
@@ -5040,6 +5480,533 @@ function App() {
               {saveError || backupMessage ? (
                 <p className="backup-message">{saveError || backupMessage}</p>
               ) : null}
+            </section>
+
+            <section className="model-probe-panel" aria-label="模型探测">
+              <header>
+                <div>
+                  <p className="eyebrow">Model probe</p>
+                  <h3>模型探测</h3>
+                </div>
+                <div className="header-actions">
+                  <button type="button" onClick={createModelProbeGroup}>
+                    <Plus size={16} />
+                    新增分组
+                  </button>
+                  <button type="button" onClick={resetModelProbeSettings}>
+                    <RotateCcw size={16} />
+                    还原默认
+                  </button>
+                </div>
+              </header>
+              <p className="summary-framework-note">
+                模型探测配置独立于助手与已创建模型；规则只生成可能有效的模型
+                ID。实际探测直接复用下方“连接与模型”当前连接、API Key
+                和协议。若本地仍显示旧规则，点击“还原默认”刷新为当前预设。
+              </p>
+
+              <div className="profile-layout model-probe-layout">
+                <aside className="profile-directory">
+                  <div className="assistant-config-select">
+                    <span>当前模型族</span>
+                    <CustomSelect
+                      label="选择模型探测模型族"
+                      value={editingModelProbeGroup?.id ?? ""}
+                      options={modelProbeSettings.groups.map((group) => ({
+                        value: group.id,
+                        label: group.name,
+                      }))}
+                      onChange={(nextValue) =>
+                        setModelProbeSettings((current) => ({
+                          ...current,
+                          editingGroupId: nextValue,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="assistant-card-list">
+                    {modelProbeSettings.groups.map((group, index) => (
+                      <div className="sortable-card-row" key={group.id}>
+                        <button
+                          className={`assistant-card ${
+                            group.id === editingModelProbeGroup?.id
+                              ? "selected"
+                              : ""
+                          }`}
+                          type="button"
+                          onClick={() =>
+                            setModelProbeSettings((current) => ({
+                              ...current,
+                              editingGroupId: group.id,
+                            }))
+                          }
+                        >
+                          <span>{group.name}</span>
+                          <small>
+                            {
+                              expandModelProbeSettings(
+                                modelProbeSettings,
+                                group.id,
+                              ).length
+                            }{" "}
+                            candidates
+                          </small>
+                        </button>
+                        <ReorderControls
+                          itemName={`模型探测模型族 ${group.name}`}
+                          isFirst={index === 0}
+                          isLast={
+                            index === modelProbeSettings.groups.length - 1
+                          }
+                          onMoveUp={() => moveModelProbeGroup(group.id, -1)}
+                          onMoveDown={() => moveModelProbeGroup(group.id, 1)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </aside>
+
+                {editingModelProbeGroup ? (
+                  <section className="profile-detail">
+                    <div className="reflected-fields">
+                      <label className="detail-field">
+                        <span>模型族 ID</span>
+                        <input
+                          aria-label="模型探测模型族 ID"
+                          value={modelProbeGroupIdDraft}
+                          onChange={(event) =>
+                            setModelProbeGroupIdDraft(event.target.value)
+                          }
+                          onBlur={commitModelProbeGroupIdDraft}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.currentTarget.blur();
+                            }
+                            if (event.key === "Escape") {
+                              setModelProbeGroupIdDraft(
+                                editingModelProbeGroup.id,
+                              );
+                              event.currentTarget.blur();
+                            }
+                          }}
+                        />
+                      </label>
+                      <label className="detail-field">
+                        <span>显示名称</span>
+                        <input
+                          aria-label="模型探测模型族名称"
+                          value={editingModelProbeGroup.name}
+                          onChange={(event) =>
+                            updateModelProbeGroup(
+                              editingModelProbeGroup.id,
+                              (group) => ({
+                                ...group,
+                                name: event.target.value,
+                              }),
+                            )
+                          }
+                        />
+                      </label>
+                      <div className="detail-field danger-zone">
+                        <span>分组操作</span>
+                        <button
+                          className="danger-button"
+                          type="button"
+                          onClick={() =>
+                            deleteModelProbeGroup(editingModelProbeGroup.id)
+                          }
+                        >
+                          <Trash2 size={16} />
+                          删除模型族
+                        </button>
+                        <small>不会删除已经创建的模型配置。</small>
+                      </div>
+                    </div>
+
+                    <section className="model-bindings">
+                      <header>
+                        <div>
+                          <p className="eyebrow">Rules</p>
+                          <h3>候选生成规则</h3>
+                        </div>
+                      </header>
+                      <div className="probe-rule-list">
+                        {editingModelProbeGroup.rules.map((rule, ruleIndex) => (
+                          <article className="probe-rule-card" key={rule.id}>
+                            <div className="summary-framework-card-header">
+                              <label className="dimension-toggle">
+                                <input
+                                  aria-label={`启用模型探测规则 ${ruleIndex + 1}`}
+                                  checked={rule.enabled}
+                                  type="checkbox"
+                                  onChange={(event) =>
+                                    updateModelProbeRule(
+                                      editingModelProbeGroup.id,
+                                      rule.id,
+                                      (currentRule) => ({
+                                        ...currentRule,
+                                        enabled: event.target.checked,
+                                      }),
+                                    )
+                                  }
+                                />
+                                <span>规则 {ruleIndex + 1}</span>
+                              </label>
+                            </div>
+                            <section
+                              className="probe-dimension-editor"
+                              aria-label={`模型探测规则 ${rule.id} 维度`}
+                            >
+                              <header>
+                                <div>
+                                  <p className="eyebrow">Arguments</p>
+                                  <h4>版本与后缀段</h4>
+                                </div>
+                                <div className="probe-dimension-actions">
+                                  {rule.dimensions.version === undefined ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        addModelProbeRuleDimension(
+                                          editingModelProbeGroup.id,
+                                          rule.id,
+                                          "version",
+                                        )
+                                      }
+                                    >
+                                      添加版本区间
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      addModelProbeRuleDimension(
+                                        editingModelProbeGroup.id,
+                                        rule.id,
+                                        getNextProbeArgKey(rule),
+                                      )
+                                    }
+                                  >
+                                    添加后缀段
+                                  </button>
+                                </div>
+                              </header>
+                              <div className="probe-dimension-list">
+                                {Object.entries(rule.dimensions).length ===
+                                0 ? (
+                                  <p className="summary-framework-note">
+                                    当前规则没有维度，会直接使用模板本身。
+                                  </p>
+                                ) : null}
+                                {Object.entries(rule.dimensions).map(
+                                  ([dimensionKey, dimensionValue]) => {
+                                    if (
+                                      isMinorTenthsDimension(dimensionValue)
+                                    ) {
+                                      return (
+                                        <article
+                                          className="probe-dimension-card"
+                                          key={dimensionKey}
+                                        >
+                                          <div className="summary-framework-card-header">
+                                            <div>
+                                              <h4>
+                                                {formatProbeDimensionLabel(
+                                                  dimensionKey,
+                                                )}
+                                              </h4>
+                                              <span>
+                                                大版本 + 小版本区间展开
+                                              </span>
+                                            </div>
+                                            <button
+                                              type="button"
+                                              disabled={
+                                                dimensionKey === "version"
+                                              }
+                                              onClick={() =>
+                                                deleteModelProbeRuleDimension(
+                                                  editingModelProbeGroup.id,
+                                                  rule.id,
+                                                  dimensionKey,
+                                                )
+                                              }
+                                            >
+                                              删除维度
+                                            </button>
+                                          </div>
+                                          <div className="probe-dimension-grid">
+                                            <label className="detail-field">
+                                              <span>大版本列表</span>
+                                              <textarea
+                                                aria-label={`${dimensionKey} 大版本列表`}
+                                                rows={3}
+                                                value={formatModelIdListText(
+                                                  dimensionValue.majors,
+                                                )}
+                                                onChange={(event) =>
+                                                  updateModelProbeRuleDimension(
+                                                    editingModelProbeGroup.id,
+                                                    rule.id,
+                                                    dimensionKey,
+                                                    {
+                                                      ...dimensionValue,
+                                                      majors:
+                                                        parseModelIdListText(
+                                                          event.target.value,
+                                                        ),
+                                                    },
+                                                  )
+                                                }
+                                              />
+                                              <small>
+                                                例如只写 5，会配合区间生成
+                                                5、5.1、5.2；小版本 0 不追加
+                                                .0。
+                                              </small>
+                                            </label>
+                                            <label className="detail-field number-setting">
+                                              <span>起始小版本</span>
+                                              <input
+                                                aria-label={`${dimensionKey} 起始小版本`}
+                                                min={0}
+                                                max={9}
+                                                type="number"
+                                                value={dimensionValue.from ?? 0}
+                                                onChange={(event) =>
+                                                  updateModelProbeRuleDimension(
+                                                    editingModelProbeGroup.id,
+                                                    rule.id,
+                                                    dimensionKey,
+                                                    {
+                                                      ...dimensionValue,
+                                                      from: Number(
+                                                        event.target.value,
+                                                      ),
+                                                    },
+                                                  )
+                                                }
+                                              />
+                                            </label>
+                                            <label className="detail-field number-setting">
+                                              <span>结束小版本</span>
+                                              <input
+                                                aria-label={`${dimensionKey} 结束小版本`}
+                                                min={0}
+                                                max={9}
+                                                type="number"
+                                                value={dimensionValue.to ?? 9}
+                                                onChange={(event) =>
+                                                  updateModelProbeRuleDimension(
+                                                    editingModelProbeGroup.id,
+                                                    rule.id,
+                                                    dimensionKey,
+                                                    {
+                                                      ...dimensionValue,
+                                                      to: Number(
+                                                        event.target.value,
+                                                      ),
+                                                    },
+                                                  )
+                                                }
+                                              />
+                                            </label>
+                                          </div>
+                                        </article>
+                                      );
+                                    }
+
+                                    const values =
+                                      flattenProbeDimensionValues(
+                                        dimensionValue,
+                                      );
+
+                                    return (
+                                      <article
+                                        className="probe-dimension-card"
+                                        key={dimensionKey}
+                                      >
+                                        <div className="summary-framework-card-header">
+                                          <div>
+                                            <h4>
+                                              {formatProbeDimensionLabel(
+                                                dimensionKey,
+                                              )}
+                                            </h4>
+                                            <span>
+                                              按顺序拼接到模型名后；非空词条会自动补
+                                              -，留空表示该段不追加内容
+                                            </span>
+                                          </div>
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              deleteModelProbeRuleDimension(
+                                                editingModelProbeGroup.id,
+                                                rule.id,
+                                                dimensionKey,
+                                              )
+                                            }
+                                          >
+                                            删除维度
+                                          </button>
+                                        </div>
+                                        <div className="probe-value-list">
+                                          {values.map((value, valueIndex) => (
+                                            <label
+                                              className="probe-value-row"
+                                              key={`${dimensionKey}-${valueIndex}`}
+                                            >
+                                              <span>词条 {valueIndex + 1}</span>
+                                              <input
+                                                aria-label={`${dimensionKey} 值 ${valueIndex + 1}`}
+                                                placeholder="例如 fast 或 flash-lite；留空表示不追加"
+                                                value={value}
+                                                onChange={(event) => {
+                                                  const nextValues = values.map(
+                                                    (candidate, index) =>
+                                                      index === valueIndex
+                                                        ? event.target.value
+                                                        : candidate,
+                                                  );
+                                                  updateModelProbeRuleDimension(
+                                                    editingModelProbeGroup.id,
+                                                    rule.id,
+                                                    dimensionKey,
+                                                    nextValues,
+                                                  );
+                                                }}
+                                              />
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  const nextValues =
+                                                    values.filter(
+                                                      (_candidate, index) =>
+                                                        index !== valueIndex,
+                                                    );
+                                                  updateModelProbeRuleDimension(
+                                                    editingModelProbeGroup.id,
+                                                    rule.id,
+                                                    dimensionKey,
+                                                    nextValues,
+                                                  );
+                                                }}
+                                              >
+                                                删除
+                                              </button>
+                                            </label>
+                                          ))}
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              updateModelProbeRuleDimension(
+                                                editingModelProbeGroup.id,
+                                                rule.id,
+                                                dimensionKey,
+                                                [...values, ""],
+                                              )
+                                            }
+                                          >
+                                            添加值
+                                          </button>
+                                        </div>
+                                      </article>
+                                    );
+                                  },
+                                )}
+                              </div>
+                            </section>
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="model-probe-preview">
+                      <header>
+                        <div>
+                          <p className="eyebrow">Candidates</p>
+                          <h3>候选预览</h3>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={runModelProbe}
+                          disabled={modelProbeRunning}
+                        >
+                          <Search size={16} />
+                          {modelProbeRunning ? "探测中" : "开始探测"}
+                        </button>
+                      </header>
+                      <div className="probe-candidate-summary">
+                        <strong>{modelProbeCandidates.length}</strong>
+                        <span>个候选模型。预览只展开规则，不会发送请求。</span>
+                      </div>
+                      <div className="probe-candidate-list">
+                        {modelProbeCandidates.slice(0, 80).map((candidate) => (
+                          <code key={candidate.modelId}>
+                            {candidate.modelId}
+                          </code>
+                        ))}
+                        {modelProbeCandidates.length > 80 ? (
+                          <span>
+                            还有 {modelProbeCandidates.length - 80} 个未显示
+                          </span>
+                        ) : null}
+                      </div>
+                    </section>
+
+                    <section className="model-probe-results">
+                      <header>
+                        <div>
+                          <p className="eyebrow">Results</p>
+                          <h3>探测结果</h3>
+                        </div>
+                        <strong>
+                          {modelProbeSuccessResults.length}/
+                          {modelProbeResults.length ||
+                            modelProbeCandidates.length}
+                        </strong>
+                      </header>
+                      {modelProbeStatus ? (
+                        <p className="backup-message">{modelProbeStatus}</p>
+                      ) : null}
+                      <div className="probe-result-list">
+                        {modelProbeResults.length === 0 ? (
+                          <p className="summary-framework-note">
+                            尚未执行探测。成功项会提供一键创建模型配置。
+                          </p>
+                        ) : modelProbeSuccessResults.length === 0 ? (
+                          <p className="summary-framework-note">
+                            本轮没有探测到可用模型；失败项已忽略，不在列表中显示。
+                          </p>
+                        ) : (
+                          modelProbeSuccessResults.map((result) => (
+                            <div
+                              className="probe-result-row success"
+                              key={result.id}
+                            >
+                              <span>
+                                <strong>{result.modelId}</strong>
+                                <small>
+                                  {result.protocol} · {result.latencyMs}ms
+                                </small>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  createModelFromProbeResult(result)
+                                }
+                              >
+                                创建模型
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </section>
+                  </section>
+                ) : null}
+              </div>
             </section>
 
             <section className="api-profile-panel" aria-label="连接与模型">
