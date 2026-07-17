@@ -8,7 +8,7 @@ The system SHALL allow a user to create, edit, disable, and delete API profiles 
 - **THEN** every model definition reuses that profile's endpoint, credential, and protocol without duplicating the credential
 
 ### Requirement: Configurable model definitions
-The system SHALL allow each API profile to define one or more models with stable local identifiers, provider model IDs, display names, enabled state, default generation parameters, optional context-window metadata, and optional pricing metadata for local estimates.
+The system SHALL allow each API profile to define one or more models with stable local identifiers, provider model IDs, display names, enabled state, default generation parameters, and optional pricing metadata for local estimates. Context budget and summary-size limits are configured through Context Profiles rather than model definitions.
 
 #### Scenario: Disable a model without removing its history
 - **WHEN** a user disables a configured model that appears in historical message snapshots
@@ -30,14 +30,14 @@ The system SHALL allow a user to create, edit, disable, and delete assistants co
 - **THEN** regular chat requests and context-summary requests use that Profile's five-dimension guidance without requiring a dedicated summary assistant for that chat assistant
 
 ### Requirement: Chat and utility assistant kinds
-The system SHALL classify assistants as `chat` or `utility`, and SHALL require each utility assistant to declare a supported semantic role such as `context-compression`.
+The system SHALL classify assistants as `chat` or `utility`, and SHALL make built-in semantic features reference specific utility assistants through settings.
 
 #### Scenario: Built-in features reference utility assistants
-- **WHEN** a built-in feature such as context summary or context compression needs a model call
+- **WHEN** a built-in feature such as context summary needs a model call
 - **THEN** the feature SHALL use its configured utility-assistant reference and SHALL NOT infer the target solely from the assistant being marked `utility`
 
-#### Scenario: Keep a compression result out of the visible chat
-- **WHEN** a context-compression utility assistant successfully produces a checkpoint
+#### Scenario: Keep a summary result out of the visible chat
+- **WHEN** a context-summary utility assistant successfully produces a summary
 - **THEN** the result is stored as derived conversation state and the utility assistant is not displayed as a speaker in the conversation
 
 #### Scenario: Prevent a utility assistant from becoming the active speaker
@@ -64,6 +64,42 @@ The system SHALL provide an explicit connection test for an API profile and sele
 #### Scenario: Test an invalid endpoint
 - **WHEN** a user tests an API profile whose endpoint cannot complete the configured protocol request
 - **THEN** the settings surface displays an actionable failure and leaves existing profiles, assistants, and conversations unchanged
+
+### Requirement: User-maintained model probing
+The system SHALL provide a settings workbench for model probing that is independent from configured assistants and model definitions, and SHALL use it only to generate and test possible provider model IDs for the currently selected API profile.
+
+#### Scenario: Configure candidate generation rules
+- **WHEN** a user edits a probe configuration
+- **THEN** the UI presents it as a **探测** with a model ID base/prefix, version ranges, and ordered suffix segments
+- **AND** the user edits structured fields instead of raw JSON, template strings, provider-family IDs, or runtime group IDs
+
+#### Scenario: Normalize generated suffixes
+- **WHEN** a probe suffix term is non-empty
+- **THEN** the generated candidate model ID includes exactly one dash before that suffix term
+- **AND** an empty suffix term leaves that suffix segment absent
+
+#### Scenario: Probe the current connection
+- **WHEN** the user starts model probing from Settings
+- **THEN** the system tests candidates against the currently selected API profile's base URL, API key, and protocol
+- **AND** failed candidates are not shown as individual create-model results
+
+#### Scenario: Create a model from a successful probe
+- **WHEN** a candidate model ID succeeds during probing
+- **THEN** the system offers a one-click action to create a model definition under the selected API profile
+- **AND** the created model is not automatically bound to an assistant or made the current conversation model
+
+### Requirement: Consistent settings record actions
+The settings surface SHALL colocate record-level actions with the edited record header where practical and SHALL use object-specific labels for destructive actions.
+
+#### Scenario: Delete configured records
+- **WHEN** a user edits a connection, model, assistant, context configuration, or probe configuration
+- **THEN** the delete action is labelled for that object type, such as **删除连接**, **删除模型**, **删除助手**, **删除配置**, or **删除探测**
+- **AND** the settings surface does not use one ambiguous generic delete label for all record kinds
+
+#### Scenario: Switch the active chat assistant
+- **WHEN** a user wants to change the active conversation assistant
+- **THEN** the conversation header provides the switching control
+- **AND** the assistant settings editor does not need a separate **设为当前** action
 
 ### Requirement: Initial OpenAI-compatible protocol adapters
 The first release SHALL implement minimal OpenAI-compatible Responses and Chat Completions adapters using a locally constructed context projection, and SHALL store the protocol identifier so additional adapters can be added without migrating conversation records.

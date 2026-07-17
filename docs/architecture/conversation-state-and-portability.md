@@ -1,14 +1,13 @@
-# 会话状态、上下文压缩与数据迁移
+# 会话状态、上下文总结与数据迁移
 
-本文记录 MobileChat 首版关于会话状态、单对话记忆、上下文压缩和跨设备数据迁移的设计结论。规范性要求仍以 `openspec/changes/build-mobile-chat-pwa/specs/` 为准。
+本文记录 MobileChat 首版关于会话状态、单对话记忆、上下文总结和跨设备数据迁移的设计结论。规范性要求仍以 `openspec/changes/build-mobile-chat-pwa/specs/` 为准。
 
 ## 结论
 
 - 首版只支持单个对话内的记忆，不创建或读取跨对话用户记忆、助手记忆或项目记忆。
-- IndexedDB 中的消息是会话事实来源；上下文检查点是可重建的派生数据。
+- IndexedDB 中的消息是会话事实来源；上下文总结是可重建的派生数据。
 - OpenAI-compatible 请求以 `store: false` 和本地构建上下文为可靠基线。
 - 首版放弃 provider store、`previous_response_id` 和 provider conversation 方案；返回的 ID 只可作为调试信息保存。
-- 上下文压缩引用 `context-compression` 功能助手，支持前台自动触发和类似 `/compact` 的手动触发。
 - 调试模式可显示上下文预算、各来源占比、provider usage 和可用的缓存命中统计。
 - 本地持久化统一使用名为 `MobileChatDB` 的 IndexedDB 数据库；配置、助手、API profiles、对话和后续附件均进入同一版本化 schema。
 - 完整跨设备迁移使用 ZIP-compatible `.mobilechat` 压缩包，不复制浏览器内部 IndexedDB 文件。
@@ -49,11 +48,11 @@ Claude Messages API 更明确地采用无状态设计：每轮发送完整的会
 
 MobileChat 首版中的 Memory 不是独立的跨会话数据库，而是以下三层：
 
-1. `messages`：完整、规范、不可因总结或压缩而删除的对话消息和分支关系。
+1. `messages`：完整、规范、不可因总结而删除的对话消息和分支关系。
 2. `ContextSummary`：由上下文总结功能引用的 utility 助手生成、覆盖到某个消息边界的轻量继续上下文。
 3. recent raw tail：总结边界之后保留原文的近期消息。
 
-`ContextSummary` 和后续 `/compact` 风格 `ContextCheckpoint` 是两个机制。前者用于低成本地减少每次请求重复发送的旧消息；后者用于未来更严格的结构化压缩、校验、版本和不可变 checkpoint 管理。
+首版不再引入独立的上下文检查点机制。上下文精简统一由 `ContextSummary` 承担：完整消息继续保留，后续请求只投影最新有效总结和总结边界之后的 raw tail。
 
 每次聊天请求使用：
 
@@ -85,7 +84,6 @@ MobileChatDB
 ├─ conversations
 ├─ messages
 ├─ drafts
-├─ contextCheckpoints
 └─ blobs
 ```
 
@@ -93,12 +91,11 @@ MobileChatDB
 
 - `meta`：数据库 schema 版本、应用版本和当前记录格式信息。
 - `settings`：当前助手、当前模型引用、当前对话、主题模式、流式输出开关、调试模式、上下文配置、顶层配置显示顺序、存储持久化状态、最后成功导出时间等应用设置。
-- `apiProfiles`：用户界面称为“连接”；保存 API base URL、协议、凭据、模型列表和价格/上下文窗口元数据。模型是独立记录，不应只作为助手字段存在。
+- `apiProfiles`：用户界面称为“连接”；保存 API base URL、协议、凭据和模型列表。模型是独立记录，不应只作为助手字段存在；上下文预算策略由上下文配置持有。
 - `assistants`：聊天助手和功能助手配置，包括 prompt、初始消息、模型绑定、功能助手模型策略和聊天助手引用的上下文配置。助手引用已有连接 + model，并保存关键显示字段快照，避免模型或助手删除后消息来源完全丢失。
-- `conversations`：标题、显示摘要、归档状态、活动助手/模型引用、活动检查点引用。归档不是移动到另一张表，而是通过 `archived=true` 在同一数据集中切换到只读浏览/搜索/恢复视图。
+- `conversations`：标题、显示摘要、归档状态、活动助手/模型引用、活动上下文总结引用。归档不是移动到另一张表，而是通过 `archived=true` 在同一数据集中切换到只读浏览/搜索/恢复视图。
 - `messages`：规范消息、创建时间、助手回复完成时间、浏览器观测耗时、content parts、分支关系、助手/模型来源快照、usage/debug 观测。渲染顺序必须基于 `createdAt` 或显式序号，不能依赖 IndexedDB `getAll()` 的主键顺序，因为 `assistant-*` / `message-*` 前缀会破坏真实对话顺序。
 - `drafts`：每个对话的未发送草稿。
-- `contextCheckpoints`：不可变压缩检查点。
 - `blobs`：多模态附件缓存和元数据。当前首版图片实现用 data URL 存储图片缓存，消息只保存轻量 `imageParts[]` 引用和 `referenceLabel`（例如 `图片1`）；正文可用 `[图片1]` 引用对应图片。后续可将 payload 迁移为独立二进制条目以降低 Base64 体积。
 
 写入策略采用“内存优先、后台持久化”：
@@ -108,7 +105,7 @@ MobileChatDB
 3. select、checkbox、新增/删除等离散操作立即提交。
 4. 文本输入使用 300–500ms debounce；失焦、关闭设置页、发送消息和页面隐藏时 flush。
 5. 对话消息、导入替换、删除、归档、检查点切换等需要一致性的操作使用 IndexedDB transaction。
-6. UI 显示轻量保存状态：`未保存`、`保存中`、`已保存`、`保存失败`。失败时保留内存状态并提示重试或导出。
+6. 常规 UI 不展示自动保存状态；保存失败时保留内存状态并在备份/提示区域显示错误，方便用户导出或重试。
 
 IndexedDB object store 的 `getAll()` 按主键返回，不保留用户拖动后的数组顺序。因此连接和助手这类顶层独立 store 的显示顺序必须在 settings 中保存为 `apiProfileOrder`、`assistantOrder`，加载后再按该顺序重排。
 
@@ -144,7 +141,7 @@ origin 至少区分：
 
 - `configPrompt`：当前聊天助手配置
 - `appMetadata`：应用生成的标题、边界、格式说明
-- `utilitySummary`：上下文总结助手或压缩助手生成的继续上下文
+- `utilitySummary`：上下文总结助手生成的继续上下文
 - `algorithmicAnchor`：本地算法选出的原文片段
 - `userRaw`：用户原文
 - `assistantRaw`：历史助手原文
@@ -220,7 +217,7 @@ estimatedCacheReadHitRate =
 
 成本估算需要每个模型配置价格分类，例如未缓存输入、缓存输入、cache write、输出、reasoning。没有价格配置时只显示 token；有价格配置时也标记为 estimate，不作为账单。
 
-调试模式默认关闭。启用后，对话页可显示最新请求的 `ContextBudgetReport`、最新响应的 `UsageStats`、cache 读写指标、压缩触发原因、活动 checkpoint、raw tail 边界、算法锚点 message ID 和 adapter 诊断。API key 和 Authorization header 不输出。
+调试模式默认关闭。启用后，对话页可显示最新请求的 `ContextBudgetReport`、最新响应的 `UsageStats`、cache 读写指标、活动上下文总结、raw tail 边界、算法锚点 message ID 和 adapter 诊断。API key 和 Authorization header 不输出。
 
 ## 当前边界情况与需明确点
 
@@ -231,9 +228,9 @@ estimatedCacheReadHitRate =
 3. **动态内容过早进入 prompt**：标题、时间、摘要、raw tail、调试标记等如果放在静态前缀前，会破坏 prefix cache。请求渲染应尽量保持“稳定说明 + 当前助手 prompt”在前，动态上下文在后。
 4. **中转站 usage 缺失**：部分 relay 可能不返回 usage 或 cache 字段。此时只能显示本地预算和 unknown/unsupported，不能补假数据。
 5. **多模态 token 估算**：图片、文件、未来音频/视频内容的 token 成本可能无法准确本地估算。预算表盘需要按 content part 标记 estimated/unsupported。
-6. **算法锚点重复**：本地锚点可能和 raw tail 或 checkpoint 覆盖内容重复。构建 projection 时需要按 message ID 和 span 去重。
-7. **算法锚点冲突**：关键词命中的旧消息可能已经在当前分支失效。锚点只能来自当前 active path，且不能跨 checkpoint 无条件复用。
-8. **checkpoint 质量漂移**：压缩助手可能遗漏或误写关键信息。完整原文必须保留，支持手动重新 compact，并在调试面板显示 checkpoint 来源和边界。
+6. **算法锚点重复**：本地锚点可能和 raw tail 或上下文总结覆盖内容重复。构建 projection 时需要按 message ID 和 span 去重。
+7. **算法锚点冲突**：关键词命中的旧消息可能已经在当前分支失效。锚点只能来自当前 active path。
+8. **总结质量漂移**：总结助手可能遗漏或误写关键信息。完整原文必须保留，支持手动重新总结，并在调试面板显示总结来源和边界。
 9. **分支与并发**：用户编辑旧消息、重新生成、多个标签页同时发送都可能改变 active leaf。首版应限制同一对话同一时间只有一个生成请求，或把并发请求显式分支化。
 10. **部分响应无 usage**：用户中止、网络断开或 provider 流结束异常时，消息可保留 partial/interrupted 状态，但 usage/cache 观测应为 unknown。
 11. **模型价格过期**：成本估算依赖用户维护的价格元数据，必须标记为 estimate，不作为账单。
@@ -244,13 +241,14 @@ estimatedCacheReadHitRate =
 当前实现优先落地轻量 `ContextSummary`：
 
 - 调试模式下显示 **总结上下文** 手动入口。
-- 入口调用设置中 **上下文总结助手** 引用的全局 `utility` 助手；该助手有自己的 prompt、模型策略、可选模型绑定和来源快照。`utility` kind 只表示助手不可作为聊天发言者，不能单独决定它用于总结、压缩还是其他功能。
-- 功能助手模型策略默认为 **跟随当前对话模型**，即总结/压缩请求使用当前聊天窗口实际选中的连接 + 模型；当用户选择 **指定模型** 时，才启用该功能助手自己的允许模型和默认模型配置。
+- 入口调用设置中 **上下文总结助手** 引用的全局 `utility` 助手；该助手有自己的 prompt、模型策略、可选模型绑定和来源快照。`utility` kind 只表示助手不可作为聊天发言者，不能单独决定它用于哪类内置语义任务。
+- 功能助手模型策略默认为 **跟随当前对话模型**，即总结请求使用当前聊天窗口实际选中的连接 + 模型；当用户选择 **指定模型** 时，才启用该功能助手自己的允许模型和默认模型配置。
 - 总结助手不按每个聊天助手单独配置。当前聊天助手引用一个上下文配置（内部类型仍为 `ContextProfile`），总结请求把该配置附加给全局总结助手，使同一个总结助手可复用于通用问答、角色扮演、资料整理、代码研究等场景。
+- 模型配置不承载业务场景的总结长度策略。上下文配置持有 `summaryMaxChars`：普通助手可以使用较短总结，角色扮演、世界状态等高预算场景可以配置更长总结。
 - 总结请求和输出不作为普通消息写入对话流，不刷新或追加前台消息，只在调试区域显示状态提示。
 - 自动总结由 **自动总结间隔** 设置控制。`0` 表示关闭；非零时，在普通发送、重试、重答的助手回复完成后，应用统计 active summary 边界之后的已完成文本消息数量，达到间隔后启动一个不阻塞前台对话的总结任务。
 - 自动总结只处理触发时的消息快照。例如第 8 条消息完成时触发总结，即使用户随后继续到第 10 条，返回结果也只覆盖到第 8 条；第 9–10 条继续作为 raw tail 保留，直到后续间隔再次满足。
-- 当已有 active summary 且 boundary 仍存在时，下一次总结请求会带上旧 summary，并只合并 boundary 之后到本次触发点的新增原文段；输出替换为新的 active rolling summary，`previousSummaryId` 记录旧 summary ID。
+- 当已有 active summary 且 boundary 仍存在时，下一次总结请求会带上旧 summary，并只合并 boundary 之后到本次触发点的新增原文段；输出替换为新的 active rolling summary，`previousSummaryId` 记录旧 summary ID。总结是预算内重写，不是追加流水账；如果输出超过当前上下文配置的 `summaryMaxChars`，本地会要求总结助手重写一次，仍超限则不启用新总结并保留旧 summary。
 - 调试模式下可以通过 **显示总结** 展开当前保存的 `contextSummary`，用于确认后续请求会引用的总结内容。
 - 调试模式下可以通过只读 **数据检查器** 查看当前数据库/前端状态概览、当前对话记录、summary diff、summary 边界覆盖的原文、保留的 raw tail、下一次请求投影，以及只读 JSON。首版只观察不写回，用于验证总结边界和投影是否符合预期，避免开发期直接编辑 IndexedDB 造成数据损坏。
 - 成功后对话写入 `contextSummaries[]` 和 `activeContextSummaryId`。当前只维护一条 `rolling` active summary，但记录结构已保留 `kind`、`status`、`boundaryMessageId`、`coveredMessageCount`、`retainedRawMessageCount`、`framework` 快照、上下文配置快照、更新时间和来源快照，后续可扩展为多段 segment 和 merged summary。
@@ -279,42 +277,17 @@ estimatedCacheReadHitRate =
 
 自动轻量总结已启用消息数间隔触发。后续仍可扩展空闲时间、单次长回复、发送前预算接近阈值等触发条件，但这些触发应继续保持前台可观测、不阻塞普通对话、失败不回滚聊天回复。
 
-## 压缩助手与 `/compact` 风格流程
+## 上下文总结作为唯一精简机制
 
-助手分为：
+首版只保留 `ContextSummary` 作为单对话上下文精简机制。用户感知上，目标是“把旧消息变短，并让后续对话继续接上”；为了降低配置复杂度和 UI 术语重叠，MobileChat 不再设计第二套助手、手动入口或持久记录结构。
 
-```text
-chat     在用户可见对话中回复
-utility  为应用功能产生语义派生数据
-```
+后续优化方向是增强总结算法，而不是新增压缩机制：
 
-上下文压缩策略引用一个 `utilityRole: context-compression` 的功能助手。压缩助手有自己的 prompt、模型策略、可选模型绑定和来源快照；它的请求与输出不作为普通消息写入对话流。该机制不同于轻量 `ContextSummary`：压缩结果要求更强的结构化输出、校验、版本和不可变 checkpoint。
-
-首版不需要因为单次对话达到几千 token 就立刻自动压缩。压缩的实际触发条件应是：发送前估算接近当前模型上下文窗口的可配置阈值、用户明确点击 `/compact`/Compact context、或用户希望降低后续成本和延迟。为了保持实现简单且便于扩展，优先实现“手动压缩 + 阈值提醒”，再扩展为前台自动触发；不要在用户不知情时后台改写上下文。
-
-触发方式：
-
-- 完成若干轮后在前台自动触发。
-- 预计下一次输入接近配置的 token 阈值时触发。
-- 用户点击 **Compact context** 手动触发，语义上对应 `/compact`。
-
-增量压缩输入可引用上一个有效 `ContextCheckpoint` 或当前轻量 `ContextSummary`，并合并上一个边界之后且位于新截断点之前的消息；配置数量的近期轮次继续保留原文。一次调用输出：
-
-- `contextSummary`：供后续对话继续使用的详细状态。
-- `displaySummary`：供历史列表和标题/摘要模糊搜索使用的短摘要。
-
-成功后创建不可变检查点并原子切换当前引用。失败时保留旧检查点、完整消息和聊天回复。若用户编辑旧消息或切换到在检查点前分叉的路径，该检查点对新活动路径失效，应用从原始消息重建并重新压缩。
-
-最小可工作实现：
-
-1. 用户或阈值触发压缩。
-2. 本地选定压缩边界：保留最近 N 轮原文，边界之前的活动路径消息进入压缩输入。
-3. 调用配置为 `context-compression` 的功能助手，要求输出严格 JSON：`contextSummary`、`displaySummary`、`coveredMessageIds`、`openQuestions`、`importantFacts`。
-4. 本地校验 JSON、长度和覆盖边界；失败则只记录错误，不切换上下文。
-5. 成功后写入不可变 `ContextCheckpoint`，对话引用该检查点；原始消息继续保留、可浏览、可导出。
-6. 后续请求构建为：当前聊天助手 prompt + 标题/摘要元数据 + 当前检查点 summary + 检查点后的原文 tail + 最新用户输入。
-
-压缩助手只参与语义压缩，不参与确定性操作。标题编辑、消息排序、归档、删除、导入导出、token 估算等仍由本地代码处理。
+- 让总结助手输出更稳定的结构化结果，并按当前上下文配置的字数预算重写合并旧信息。
+- 从结构化结果中提取 `displaySummary` 更新左侧对话摘要。
+- 保留 `boundaryMessageId`、覆盖条数、raw tail 条数和来源快照，确保可检查、可重新生成。
+- 原始消息始终保留；删除总结覆盖范围内的消息时清除该总结。
+- 暂不引入不可变检查点、分支版本或专用配置。
 
 ## `.mobilechat` 跨设备迁移包
 

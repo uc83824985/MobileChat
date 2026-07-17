@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Unified MobileChatDB database
-The system SHALL use one versioned IndexedDB database named `MobileChatDB` as the source of truth for local domain records, including metadata, settings, API profiles, assistants, conversations, messages, drafts, context checkpoints, and blobs.
+The system SHALL use one versioned IndexedDB database named `MobileChatDB` as the source of truth for local domain records, including metadata, settings, API profiles, assistants, conversations, messages, drafts, context summaries, and blobs.
 
 #### Scenario: Open the app on phone after prior configuration
 - **WHEN** the user relaunches the application on the same browser origin after configuring assistants or API profiles
@@ -12,7 +12,7 @@ The system SHALL use one versioned IndexedDB database named `MobileChatDB` as th
 - **THEN** rapid-iteration builds normalize records to the current schema and ignore obsolete fields instead of translating old configuration
 
 ### Requirement: Indexed local persistence
-The system SHALL persist API profiles, model definitions, assistants, conversations, messages, context checkpoints, display summaries, drafts, blobs, and application settings in browser-managed local storage using a versioned IndexedDB schema for structured records.
+The system SHALL persist API profiles, model definitions, assistants, conversations, messages, context summaries, display summaries, drafts, blobs, and application settings in browser-managed local storage using a versioned IndexedDB schema for structured records.
 
 #### Scenario: Reload after local changes
 - **WHEN** a user reloads or relaunches the application after saving data
@@ -29,9 +29,10 @@ The system SHALL apply UI edits to in-memory state immediately and SHALL persist
 - **WHEN** a user blurs a field, closes settings, sends a message, or the page becomes hidden
 - **THEN** any pending dirty records are flushed to `MobileChatDB` before the state is considered saved
 
-#### Scenario: Save status is visible
-- **WHEN** a background save is pending, committed, or fails
-- **THEN** the UI exposes a local save status such as unsaved, saving, saved, or failed without leaking credentials
+#### Scenario: Autosave status stays unobtrusive
+- **WHEN** background saves are pending or committed normally
+- **THEN** the settings UI does not need to reserve persistent space for a saved/saving card
+- **AND** failed saves, quota risk, persistent-storage risk, and backup/export risk remain visible as actionable diagnostics without leaking credentials
 
 ### Requirement: Persistent storage request and quota observability
 The system SHALL request persistent storage when available after meaningful local configuration exists and SHALL expose storage mode and estimated usage/quota in settings or debug diagnostics.
@@ -78,6 +79,11 @@ The system SHALL export a ZIP-compatible `.mobilechat` archive containing a vers
 - **WHEN** a user selects credential-free export
 - **THEN** the archive preserves API-profile and model metadata but omits secret values and reports that credentials must be re-entered after import
 
+#### Scenario: Export without image blobs
+- **WHEN** a user exports a default lightweight archive that omits image-cache blob payloads
+- **THEN** message records still preserve their image reference metadata
+- **AND** importing the archive renders those images as missing-cache placeholders rather than corrupting or dropping the messages
+
 ### Requirement: Portable format is independent of browser database files
 The system SHALL NOT use a raw IndexedDB directory, browser-profile file, or implementation-specific database file as its backup interchange format.
 
@@ -102,7 +108,7 @@ The system SHALL validate archive entry paths, checksums, export version, record
 
 #### Scenario: Merge records with conflicting IDs
 - **WHEN** an imported record ID already exists locally with unequal content
-- **THEN** the system assigns a new local ID and consistently remaps every imported reference, including message parents, active leaves, checkpoint boundaries, assistant bindings, and blob references
+- **THEN** the system assigns a new local ID and consistently remaps every imported reference, including message parents, active leaves, summary boundaries, assistant bindings, and blob references
 
 ### Requirement: Manual cross-device transfer
 The system SHALL support cross-device use through an explicit export-transfer-import workflow and SHALL NOT present this workflow as live synchronization.

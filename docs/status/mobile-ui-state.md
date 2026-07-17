@@ -35,15 +35,18 @@ Date: 2026-07-17
 - The assistant details panel is schema-rendered from `assistantFields`, so newly added assistants use the same reflected editor instead of a special hard-coded page.
 - Settings directory lists expose up/down reorder controls for context configurations, connections, models, and assistants. Assistant records are split into chat assistant and utility assistant sections, and reordering is constrained within each section. Reordering changes display/default order only; object IDs and cross-record references remain stable.
 - API Key editing uses an app-owned persistent show/hide button instead of relying on browser-specific password-field eye icons.
+- Settings overview no longer reserves cards for normal save-state or count-only summaries. Autosave remains automatic; only failures, storage risk, and backup/import/export state need visible action.
+- Settings detail panels colocate record actions with the edited record header where practical. Delete labels are object-specific: connection, model, assistant, context configuration, and probe records use separate wording instead of one generic delete action.
 - Debug mode exposes a manual **总结上下文** action and a **显示总结** preview. Summary generation calls the configured global context-summary utility assistant, applies the current chat assistant's context configuration, stores the generated active rolling summary on the conversation, and keeps the visible message thread unchanged except for a small debug status hint.
 - Debug mode also exposes a read-only **数据检查器**. It shows current database/state counts, the active conversation record, the current summary diff, messages covered by the summary boundary, retained raw tail messages, next-request projected messages, and read-only JSON dumps. This is intended for development validation before any editable DB inspector is introduced.
 - Manual debug summary no longer blocks solely because the message count is below the raw-tail retention threshold. The retained raw-tail message count is a persisted setting, defaults to 8, and is clamped to 0–50. When the conversation is shorter than the configured tail size, the UI shows a warning status but still executes the user-requested summary action; only an empty completed-message set is skipped.
 - Automatic context summary is enabled by a persisted **自动总结间隔** setting. `0` disables it; otherwise, after a chat/retry/regenerate response completes, the app counts completed text messages after the active summary boundary and starts a non-blocking summary job when the count reaches the interval. The job summarizes only the trigger-time message snapshot, so later user turns remain visible raw tail until a later trigger.
 - When an active summary already exists and its boundary is still present, the next summary request includes the previous summary plus only the newly completed raw messages after that boundary. The result replaces the single active rolling summary and advances the boundary; canonical messages remain unchanged.
-- Settings has explicit built-in feature references for **上下文总结助手** and **上下文压缩助手**. The utility kind only makes an assistant eligible; feature settings decide which utility assistant is used by each built-in operation.
-- Utility assistants have a model strategy. The default strategy is **跟随当前对话模型**, so summary/compression can run with the same connection + model as the active chat without extra setup. Switching a utility assistant to **指定模型** reveals its own allowed-model/default-model editor as an explicit override.
+- Settings has an explicit built-in feature reference for **上下文总结助手**. The utility kind only makes an assistant eligible; feature settings decide which utility assistant is used by the built-in summary operation.
+- Utility assistants have a model strategy. The default strategy is **跟随当前对话模型**, so context summary can run with the same connection + model as the active chat without extra setup. Switching a utility assistant to **指定模型** reveals its own allowed-model/default-model editor as an explicit override.
 - Settings exposes the fixed five-section context-summary framework. Users can override each section's system description, restore one section, or restore all default descriptions; section IDs and titles remain app-defined.
 - Settings also exposes reusable **上下文配置** records. A chat assistant references one context configuration; each configuration keeps the fixed five dimensions but can add per-dimension business/domain guidance, such as roleplay formatting rules, relationship/emotion tracking, random events, or task-specific exploration notes.
+- Each context configuration also owns a summary character budget. Model records no longer carry context-budget or summary-size policy; per-scenario summary size is controlled by the chat assistant's referenced context configuration.
 - Each context configuration dimension has an explicit enable checkbox. Disabled dimensions stay visible and keep any previously edited text as local preview data, but they are greyed out, cannot be edited until re-enabled, and are excluded from regular chat injection and summary prompts.
 
 ## Connection and model configuration
@@ -60,10 +63,10 @@ Date: 2026-07-17
   - model ID / slug;
   - display name;
   - description;
-  - optional context window;
   - enabled flag.
 - The connection editor shows the full model list as selectable model cards, so every model visible in assistant model access can be traced back to a model-side configuration record.
 - Assistants own model bindings that reference existing connection + model records, with snapshots of key display fields for provenance. Chat assistants always use their own allowed-model/default-model selection. Utility assistants default to following the active chat model and only use their own model bindings when their model strategy is set to fixed. Chat assistants also reference a reusable context configuration; utility summary assistants remain global and read the active chat assistant's configuration at execution time.
+- Model probing is a separate settings workbench. Probe configurations generate candidate model IDs from structured version ranges and suffix segments, reuse the currently selected connection for execution, hide failed candidates from the result list, and offer one-click creation of successful model IDs under that connection. Creating a model from a probe does not bind it to an assistant or change the current conversation model.
 
 ## User-owned connection configuration
 
@@ -76,10 +79,11 @@ Date: 2026-07-17
 
 ## Persistence and import/export
 
-- `MobileChatDB` stores settings, API profiles, assistants, reusable context configurations, conversations, messages, and stores for drafts/checkpoints/blobs. The current `blobs` implementation stores first-stage image cache records as data URLs plus metadata.
-- Messages can include `imageParts[]` that reference `blobs` records by ID. Clearing image cache keeps message records and image placeholders, but removes preview/retry image payloads.
+- `MobileChatDB` stores settings, API profiles, assistants, reusable context configurations, conversations, messages, drafts, context summaries, and image blobs. The current `blobs` implementation stores first-stage image cache records as data URLs plus metadata.
+- Messages can include `imageParts[]` that reference `blobs` records by ID. Clearing image cache keeps message records and image placeholders, but removes preview/retry image payloads. The UI renders missing images as **图片缓存已清理**, and later requests send an explicit text placeholder instead of an empty or missing image object.
 - Messages now store `createdAt`, assistant `completedAt`, and assistant `elapsedMs` where available. They are rendered chronologically by creation time, while completed assistant responses show finish time and request duration.
 - Conversations may store `contextSummaries[]` plus `activeContextSummaryId`. The current implementation still manages one active rolling summary, but each record already keeps kind, status, boundary message ID, covered message count, retained raw tail count, framework snapshot, context configuration snapshot, update time, and summary-assistant/model source snapshot.
+- Context summary output is locally budget-checked against the active context configuration. Over-budget summaries trigger one rewrite attempt; if the rewrite is still empty or over budget, the app keeps the previous active summary.
 - During rapid iteration, persistence accepts only the current MobileChatDB record shape. Older fields are not translated into current configuration; users may reconfigure local profiles/assistants if a breaking schema change lands before the stable version.
 - UI edits update memory immediately and are autosaved after a short debounce. Settings close and page visibility changes flush the latest snapshot.
 - Top-level settings list order is explicit state. `apiProfileOrder` and `assistantOrder` are stored in settings and used to re-sort records after IndexedDB `getAll()`, because object stores return primary-key order rather than last UI display order.
@@ -122,7 +126,7 @@ Current automated coverage includes Desktop Chrome and Pixel-class Mobile Chrome
 ## Remaining limitations
 
 - No endpoint validation button yet.
-- No model discovery (`GET /models`) UI yet; model list is manually edited.
-- No real context compression/checkpoint execution yet.
+- No authoritative model discovery (`GET /models`) dependency exists. The settings probe workbench can test user-maintained candidate rules, but provider-visible model lists may still need manual curation.
+- Context reduction is handled through the rolling context summary mechanism; no separate context-reduction feature is planned in the current design.
 - No credential-including export flow yet; current export deliberately removes API keys.
 - No CORS workaround exists in the static deployment. If the selected relay rejects browser origins, a proxy route is required.

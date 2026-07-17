@@ -21,6 +21,17 @@ The system SHALL use browser-supported file selection to create local draft cont
 - **WHEN** a user selects an image that the browser can decode and read
 - **THEN** the draft displays a local preview and file metadata before the message is sent or saved
 
+#### Scenario: Preserve image labels across send
+- **WHEN** a user attaches one or more images to a draft
+- **THEN** the composer assigns stable visible labels such as `[图片1]`, `[图片2]` in message order
+- **AND** the provider request includes adjacent text labels so the assistant can map each visible placeholder to the corresponding image content part
+
+#### Scenario: Clear image cache after messages exist
+- **WHEN** image cache blobs are cleared after messages have been saved
+- **THEN** the messages keep their image reference metadata and visible placeholders
+- **AND** previews render a missing-cache state such as **图片缓存已清理**
+- **AND** later provider requests serialize a text-only placeholder for the missing image rather than an empty image object
+
 #### Scenario: File access is denied
 - **WHEN** the browser or user denies access to selected local content
 - **THEN** the application remains usable and reports that the content could not be read without altering the source file

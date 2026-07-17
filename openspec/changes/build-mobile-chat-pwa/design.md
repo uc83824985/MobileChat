@@ -14,11 +14,11 @@ Composer input behavior is local UI state. The composer is multi-line and may us
 
 - Deliver an installable mobile-first PWA requiring no application backend.
 - Support reusable API profiles with multiple models and assistants that reference those models.
-- Separate user-facing chat assistants from utility assistants used for semantic derived-data tasks such as context compression.
+- Separate user-facing chat assistants from utility assistants used for explicit semantic derived-data tasks such as context summary.
 - Preserve conversations through assistant, prompt, model, and credential changes.
 - Allow assistant/model switching inside a shared conversation context with accurate per-response attribution.
-- Preserve robust memory within each conversation using local canonical messages and compacted context checkpoints, independently of provider-side response storage.
-- Provide local conversation management, metadata-only history search, in-conversation content search, and configurable context compaction.
+- Preserve robust memory within each conversation using local canonical messages, rolling context summaries, and recent raw tails, independently of provider-side response storage.
+- Provide local conversation management, metadata-only history search, in-conversation content search, and configurable context summarization.
 - Expose optional debug diagnostics for context composition, token budget estimates, provider usage, and cache metrics.
 - Establish versioned content-part and persistence schemas suitable for later multimodal expansion.
 - Deploy repeatably to GitHub Pages from this repository.
@@ -55,13 +55,12 @@ assistants
 conversations
 messages
 drafts
-contextCheckpoints
 blobs
 ```
 
 Every record uses a stable application-generated ID, ISO timestamp fields, and an explicit record version. During rapid iteration, the repository accepts the current schema only and rebuilds records from current DTO fields; obsolete fields are ignored instead of translated. Exported backups carry an independent export schema version.
 
-Writes are optimistic from the UI point of view: React state updates first, then a repository write commits the changed dirty record asynchronously. Selects, checkboxes, add/delete actions, message creation, checkpoint switching, import replacement, and archive/delete operations commit immediately, using transactions when consistency spans records. Text fields debounce commits for 300–500ms and flush on blur, settings close, send, and page visibility changes. The implementation must not serialize the whole database for every keystroke, block render on IndexedDB, or use synchronous `localStorage` for domain records. If real-device testing shows prompt editing jank on low-end phones, individual large text fields may switch to blur/manual save, but the default is non-blocking autosave.
+Writes are optimistic from the UI point of view: React state updates first, then a repository write commits the changed dirty record asynchronously. Selects, checkboxes, add/delete actions, message creation, summary switching, import replacement, and archive/delete operations commit immediately, using transactions when consistency spans records. Text fields debounce commits for 300–500ms and flush on blur, settings close, send, and page visibility changes. The implementation must not serialize the whole database for every keystroke, block render on IndexedDB, or use synchronous `localStorage` for domain records. If real-device testing shows prompt editing jank on low-end phones, individual large text fields may switch to blur/manual save, but the default is non-blocking autosave.
 
 After first meaningful configuration, request persistent storage with `navigator.storage.persist()` when available and show storage mode plus `navigator.storage.estimate()` usage/quota in settings or debug diagnostics. Persistent storage reduces eviction risk but does not replace `.mobilechat` backups because users can still clear site data, uninstall browsers, change origins, or lose devices.
 
@@ -83,7 +82,7 @@ type ApiProfile = {
 
 If two models need different credentials, headers, URLs, or protocols, they belong to different API profiles. Updating a credential updates every assistant binding that references it.
 
-Each model definition may include optional context-window metadata and pricing categories for uncached input, cached input, cache writes, output, and reasoning tokens. These values are user-maintained estimates used only for local budget display; they are not required to send chat requests.
+Each model definition may include pricing categories for uncached input, cached input, cache writes, output, and reasoning tokens. These values are user-maintained estimates used only for local budget display; they are not required to send chat requests. Context budget and summary-size policy are owned by Context Profiles, not model records.
 
 ### 4. Assistants aggregate model bindings
 
@@ -93,7 +92,6 @@ Do not persist a standalone AssistantRoute entity. An `Assistant` owns identity 
 type Assistant = {
   id: string;
   kind: "chat" | "utility";
-  utilityRole?: "context-compression" | "content-analysis";
   name: string;
   description: string;
   avatar: AvatarValue;
@@ -112,7 +110,7 @@ type Assistant = {
 
 The many-to-many assistant/model relationship is expressed by `modelBindings`. Runtime code resolves a binding against its API profile and model; unresolved bindings remain visible as invalid configuration instead of being silently removed.
 
-Only enabled `chat` assistants are selectable as the active conversation speaker. A context-compaction policy references an enabled `utility` assistant whose `utilityRole` is `context-compression`. Utility results are stored as derived records and never inserted into the visible chat stream as assistant messages.
+Only enabled `chat` assistants are selectable as the active conversation speaker. Built-in semantic features reference enabled `utility` assistants explicitly through settings, rather than inferring behavior from the assistant kind alone. Utility results are stored as derived records and never inserted into the visible chat stream as assistant messages.
 
 ### 5. Generic conversations plus immutable source snapshots
 
@@ -125,7 +123,7 @@ Conversation
   activeSourceSnapshot
   title
   displaySummary
-  contextCheckpointId
+  activeContextSummaryId
   contextState
   status
 
@@ -148,21 +146,21 @@ For every chat request, the request builder produces a deterministic `Conversati
 ```text
 current chat assistant prompt
 current conversation metadata, including the latest title
-latest valid context checkpoint summary
+latest valid context summary
 optional locally selected algorithmic anchors
-raw active-path messages after the checkpoint boundary
+raw active-path messages after the summary boundary
 latest user message
 ```
 
-The context checkpoint replaces the covered older messages in the model input; it is not appended in addition to the full covered history. Covered messages remain in IndexedDB and remain visible, searchable inside the open conversation, exportable, and available for rebuilding a checkpoint. Optional algorithmic anchors are deterministic local selections of existing message spans, such as pinned messages or keyword matches, and include source message IDs; they are not model-generated rewrites. Only the currently selected chat assistant's system prompt is applied. Earlier assistants' visible messages remain ordinary shared context, while their old system prompts are not replayed.
+The context summary replaces the covered older messages in the model input; it is not appended in addition to the full covered history. Covered messages remain in IndexedDB and remain visible, searchable inside the open conversation, exportable, and available for regenerating a summary. Optional algorithmic anchors are deterministic local selections of existing message spans, such as pinned messages or keyword matches, and include source message IDs; they are not model-generated rewrites. Only the currently selected chat assistant's system prompt is applied. Earlier assistants' visible messages remain ordinary shared context, while their old system prompts are not replayed.
 
-The latest title and checkpoint summary are serialized as clearly delimited application-owned context, not executable instructions. The title is deliberately kept outside the checkpoint, so renaming a conversation updates the next request without invalidating or regenerating the checkpoint. Empty fields are omitted, and no synthetic synchronization message is persisted.
+The latest title and context summary are serialized as clearly delimited application-owned context, not executable instructions. The title is deliberately kept outside the summary, so renaming a conversation updates the next request without invalidating or regenerating the summary. Empty fields are omitted, and no synthetic synchronization message is persisted.
 
 During development, debug mode exposes a read-only data inspector rather than direct IndexedDB editing. It renders the active conversation record, summary boundary diff, covered messages, retained raw tail, projected request messages, and JSON snapshots from current app state. This gives enough visibility to validate context projection while avoiding accidental DB corruption before an editable inspector is designed.
 
-Messages include `parentMessageId` and the conversation records the active leaf. Edit-and-resubmit, regeneration, or active-branch changes invalidate a checkpoint when its covered boundary is not an ancestor of the new active leaf. Invalid checkpoints remain auditable but are not used; the application rebuilds from the active raw path until compaction succeeds. No context is silently borrowed from another conversation.
+Messages include `parentMessageId` and the conversation records the active leaf. Edit-and-resubmit, regeneration, or active-branch changes clear or invalidate the active summary when its covered boundary is not an ancestor of the new active leaf. The application rebuilds from the active raw path until a new summary succeeds. No context is silently borrowed from another conversation.
 
-Each projection also produces a `ContextBudgetReport` before network send. It records estimated tokens and percentages by section and origin, including chat assistant prompt, application metadata, utility-assistant checkpoint summary, algorithmic anchors, user raw messages, assistant raw messages, and latest user input. It also records a `PreSendCacheEstimate` with the cache scope, stable prefix fingerprint, estimated input tokens, cacheable prefix tokens, potential cacheable rate, estimated cache-read hit rate, confidence, and prefix-instability reasons. Estimates are used for local budget decisions and debug display; provider usage returned after the response is stored separately as observed data.
+Each projection also produces a `ContextBudgetReport` before network send. It records estimated tokens and percentages by section and origin, including chat assistant prompt, application metadata, utility-assistant context summary, algorithmic anchors, user raw messages, assistant raw messages, and latest user input. It also records a `PreSendCacheEstimate` with the cache scope, stable prefix fingerprint, estimated input tokens, cacheable prefix tokens, potential cacheable rate, estimated cache-read hit rate, confidence, and prefix-instability reasons. Estimates are used for local budget decisions and debug display; provider usage returned after the response is stored separately as observed data.
 
 ### 7. Protocol adapter boundary with one initial implementation
 
@@ -185,7 +183,7 @@ Hosted provider tools are not inferred from prompt text. Web access is represent
 
 Streaming support is also observed at the adapter boundary. The UI may request `stream: true`, but a relay can still buffer and return one JSON response. In that case the adapter parses the completed JSON response and records that true SSE deltas were not observed, because the browser client cannot force incremental rendering if the gateway does not flush SSE chunks.
 
-The first release does not use provider continuation modes such as `previous_response_id` or provider conversation IDs. The adapter contract may preserve raw diagnostic fields for future analysis, but conversation correctness, resume, export, import, branch changes, assistant switching, and context compaction all use local records only.
+The first release does not use provider continuation modes such as `previous_response_id` or provider conversation IDs. The adapter contract may preserve raw diagnostic fields for future analysis, but conversation correctness, resume, export, import, branch changes, assistant switching, and context summary all use local records only.
 
 The adapter normalizes provider usage into a `UsageStats` shape when available:
 
@@ -213,16 +211,13 @@ Writable file handles are never required by the domain model. If a supported bro
 
 ### 9. Separate current and historical search indexes
 
-Current-conversation search derives an in-memory fuzzy index from searchable text content parts for the active conversation. Historical search maintains a lightweight index containing only conversation ID, title, and `displaySummary`. Historical message bodies and context checkpoint details are never loaded or searched for global history queries.
+Current-conversation search derives an in-memory fuzzy index from searchable text content parts for the active conversation. Historical search maintains a lightweight index containing only conversation ID, title, and `displaySummary`. Historical message bodies and context-summary details are never loaded or searched for global history queries.
 
 Search normalization handles Unicode case folding, whitespace, and punctuation consistently. A bundled fuzzy matcher may be used, but its scoring and highlighting are wrapped behind an application search service so the library can be replaced.
 
-### 10. Utility-assistant context summary and compaction
+### 10. Utility-assistant context summary
 
-Context summary and context compaction are separate mechanisms:
-
-- `ContextSummary` is a lightweight continuation summary stored directly on a conversation with a covered message boundary, covered-message count, update time, and source snapshot. It reduces repeated old-message input while keeping canonical messages visible and unchanged.
-- `ContextCheckpoint` is a future `/compact`-style immutable artifact with stricter validation, revisioning, prior-checkpoint links, and display-summary commit behavior.
+`ContextSummary` is the only first-release context-reduction mechanism. It is a lightweight continuation summary stored directly on a conversation with a covered message boundary, covered-message count, update time, and source snapshot. It reduces repeated old-message input while keeping canonical messages visible and unchanged.
 
 The working implementation exposes manual **总结上下文** in debug mode and a message-interval automatic summary trigger. Both paths call the global utility assistant referenced by the built-in context-summary feature setting, apply the active chat assistant's Context Profile, do not append visible chat messages, and update only a small debug status hint. The automatic trigger runs after chat/retry/regenerate response completion, uses the trigger-time completed-message snapshot, and does not block the user from continuing the conversation. Later user messages remain raw tail until a later trigger. Future trigger types may include idle duration, long assistant replies, or projected-context thresholds.
 
@@ -232,28 +227,28 @@ The summary framework is local application configuration, not only free-form pro
 
 Context Profiles are reusable scenario overlays referenced by chat assistants. A Profile cannot add new dimensions; it can only append per-dimension guidance to the five fixed sections and explicitly enable or disable each dimension. Disabled dimensions retain edited text for local preview and later re-enable, but they are excluded from regular chat injection and context-summary prompts. Regular chat requests and context-summary requests both include the active chat assistant's enabled Profile dimensions. This keeps one reusable summary utility assistant while allowing roleplay, research, coding, and other business contexts to tune what each dimension means.
 
+Model definitions do not carry context-budget or summary-size policy. Each Context Profile owns a `summaryMaxChars` policy used as the target and hard local limit for rolling summaries generated while a chat assistant references that Profile. Simple assistants can use short summaries; expensive roleplay or world-state profiles can choose a larger budget without changing connection or model records.
+
 When a valid `ContextSummary` exists, request construction projects old covered messages into one clearly delimited non-instructional summary message plus the recent raw tail. Full canonical messages remain in local storage and export data.
 
-A completed turn is a user message followed by a terminal assistant message status. Global compaction defaults may be overridden per conversation and include enablement, a context-compression utility-assistant reference, minimum completed turns, completed-turn interval, optional estimated-input-token threshold, number of recent turns to preserve verbatim, and maximum lengths for continuation and display summaries.
+A completed turn is a user message followed by a terminal assistant message status. Automatic summarization is controlled by a foreground message-count interval setting. A manual **总结上下文** action is available in debug mode and may run before the automatic interval. No wall-clock scheduler, service-worker background sync, or closed-app timer is used.
 
-Automatic compaction runs only in the foreground after a completed chat response. A manual **Compact context** action provides the same explicit control as a `/compact` command and may run before the automatic threshold. No wall-clock scheduler, service-worker background sync, or closed-app timer is used.
-
-The compaction request applies the referenced utility assistant's own prompt and model binding. It receives the previous checkpoint summary plus active-path messages after the prior boundary, stopping before the configured recent raw-message tail. One semantic call returns a versioned result containing:
+The summary request applies the referenced utility assistant's own prompt and model strategy. It receives the previous rolling summary plus active-path messages after the prior boundary, stopping at the trigger-time snapshot. One semantic call returns a versioned result containing:
 
 ```text
 contextSummary: continuation state for future model requests
 displaySummary: concise text used in the history list and fuzzy history search
 ```
 
-The result is validated before commit. Success creates an immutable `ContextCheckpoint` with the covered boundary, active-path identity, completed-turn count, utility-assistant/model references and immutable source snapshot, previous-checkpoint reference, output revision, and timestamps. The conversation then atomically points to the new checkpoint and display summary. The utility prompt and output do not appear as visible conversation messages.
+The result is validated before commit. If the assistant returns a summary over the active Profile's `summaryMaxChars`, the app may ask the same utility assistant to rewrite it once within budget. If the rewrite is still over budget or empty, the new summary is rejected and the previous valid summary remains active. Success creates or replaces the active rolling `ContextSummary` with the covered boundary, active-path identity, completed-message count, utility-assistant/model references and immutable source snapshot, previous-summary reference, output revision, Profile budget snapshot, and timestamps. The utility prompt and output do not appear as visible conversation messages.
 
-Failure retains the prior valid checkpoint and completed chat response, records a retryable error, and leaves newer messages in the raw tail. If the projected request approaches the active model's context limit without a valid compacted projection, the UI warns and requires successful compaction or a model/context change rather than silently dropping messages.
+Failure retains the prior valid summary and completed chat response, records a retryable error, and leaves newer messages in the raw tail. If the projected request approaches the active model's context limit without a valid summarized projection, the UI warns and requires a new summary or a model/context change rather than silently dropping messages.
 
-This is the only Memory mechanism in the first release: same-conversation canonical messages plus derived checkpoints and a recent raw tail. There is no user-level, assistant-level, project-level, or cross-conversation memory record.
+This is the only Memory mechanism in the first release: same-conversation canonical messages plus a derived rolling summary and a recent raw tail. There is no user-level, assistant-level, project-level, or cross-conversation memory record.
 
 ### 11. Debug mode and context budget dashboard
 
-Debug mode is an application setting that defaults off. When enabled, the conversation UI exposes a developer diagnostics panel for the latest request and response. It shows the pre-send `ContextBudgetReport`, post-response `UsageStats`, cache read/write rates where available, compaction decisions, active checkpoint identity, raw-tail boundaries, algorithmic anchor message IDs, and adapter diagnostics. API keys and credential headers are never rendered in debug output.
+Debug mode is an application setting that defaults off. When enabled, the conversation UI exposes a developer diagnostics panel for the latest request and response. It shows the pre-send `ContextBudgetReport`, post-response `UsageStats`, cache read/write rates where available, summary status, active summary identity, raw-tail boundaries, algorithmic anchor message IDs, and adapter diagnostics. API keys and credential headers are never rendered in debug output.
 
 The dashboard distinguishes estimated, observed, and unsupported values. Estimated values come from the local projection builder before the request. Observed values come from provider usage fields after or during the response stream. Unsupported values are displayed when the provider or relay does not expose enough information. Cost estimates are optional and require configured per-model price categories for uncached input, cached input, cache writes, output, and reasoning tokens where applicable; they are labelled estimates, not invoices.
 
@@ -267,14 +262,14 @@ The portable format is a ZIP-compatible file with a `.mobilechat` extension rath
 
 ```text
 manifest.json       export format version, application version, timestamps, options
-records.json        API profiles, assistants, conversations, messages, checkpoints, settings
+records.json        API profiles, assistants, conversations, messages, summaries, settings
 blobs/<blob-id>     optional binary attachment payloads without Base64 expansion
 checksums.json      per-entry integrity hashes
 ```
 
 Complete transfer mode includes API credentials after an explicit confirmation so another personal device can operate immediately; a credential-free export mode omits secret values while preserving profile and model metadata. Persistent browser file handles are never exported. Large exports report estimated size and attachment inclusion before creation.
 
-Import reads the archive into an isolated representation, checks ZIP entry safety, checksums, export version, record schema, references, and blob metadata, then shows an import summary. Only after confirmation does it perform transactional replacement or ID-based merge. Merge preserves imported IDs when they do not conflict; unequal conflicts receive new IDs and all imported internal references, including checkpoint boundaries and source references, are remapped together. Replace clears domain stores only after validation succeeds.
+Import reads the archive into an isolated representation, checks ZIP entry safety, checksums, export version, record schema, references, and blob metadata, then shows an import summary. Only after confirmation does it perform transactional replacement or ID-based merge. Merge preserves imported IDs when they do not conflict; unequal conflicts receive new IDs and all imported internal references, including summary boundaries and source references, are remapped together. Replace clears domain stores only after validation succeeds.
 
 Persistence and import/export use the same current record DTOs during rapid iteration. Export reads a committed `MobileChatDB` snapshot and records export options such as credential inclusion, attachment inclusion, estimated size, app version, and schema version. Import parses into isolated DTOs first, validates current-schema records and references, then writes to `MobileChatDB` in a single replace or merge transaction. Older record shapes are not translated in this phase; users may reconfigure local profiles and assistants after breaking changes. The last successful export timestamp is stored in `settings` and displayed in backup settings.
 
@@ -282,7 +277,19 @@ Cross-device access is a manual export-transfer-import workflow through the phon
 
 ### 13. Static deployment and verification
 
-Use GitHub Actions to build and publish the static artifact to GitHub Pages. Verification includes unit tests for adapters, current-schema persistence, context projection, budget reports, usage normalization, compaction thresholds, checkpoint validity, archive round trips, and search scope; component tests for conversation, diagnostics, and settings flows; and browser tests at representative phone viewport sizes.
+Use GitHub Actions to build and publish the static artifact to GitHub Pages. Verification includes unit tests for adapters, current-schema persistence, context projection, budget reports, usage normalization, summary triggers, summary validity, archive round trips, and search scope; component tests for conversation, diagnostics, and settings flows; and browser tests at representative phone viewport sizes.
+
+### 14. Settings, probing, and cache UX refinements
+
+Settings surfaces are optimized around actionable configuration rather than passive counters. Autosave remains automatic and silent during normal operation; only failures, backup risk, quota risk, or explicit import/export status need prominent feedback. Top-level count-only cards and always-visible "saved" status cards are avoided because they consume space on phones without changing user decisions.
+
+Record-level actions are colocated with each detail header where possible. Connection, model, assistant, context-profile, and model-probe detail panels put enable/disable and destructive actions on the same header row as the record title, using object-specific labels such as **删除连接**, **删除模型**, **删除助手**, **删除配置**, and **删除探测**. The settings page does not provide a separate "set as current chat assistant" action; active chat assistant and model switching belongs to the conversation header.
+
+The model probing workbench is independent from configured models and assistants. User-facing terminology is **探测** or **探测配置**, not "model family" or runtime group. A probe configuration defines a base model ID/prefix plus structured generation rules for version ranges and ordered suffix segments. The UI edits those rules through compact fields rather than raw JSON. Each non-empty suffix term is normalized with one leading dash at generation time, while empty terms keep the segment absent. Probe execution reuses the currently selected connection and shows only successful candidates with a one-click create-model action. Failed candidates are summarized as diagnostics instead of becoming noisy rows.
+
+Image attachments are treated as message references plus optional local cache blobs. Clearing the image cache must not corrupt historical messages: the message keeps its `imageParts[]` metadata and visible placeholder, previews show **图片缓存已清理**, and later model requests serialize an explicit text fallback such as `[图片1：缓存已清理，无法随本次请求发送]` instead of emitting an empty image payload.
+
+Reusable form/card layout primitives should center labels and controls consistently. Compact numeric fields, suffix-segment editors, enable rows, and delete actions share alignment rules so desktop and phone layouts do not drift as settings panels become denser.
 
 ## Risks / Trade-offs
 
@@ -294,8 +301,8 @@ Use GitHub Actions to build and publish the static artifact to GitHub Pages. Ver
 - **PWA updates can leave an old client open** → Use versioned caches and prompt the user to reload after a new service worker is ready.
 - **Assistant snapshots duplicate prompts** → Accept bounded duplication to preserve provenance; never duplicate credentials.
 - **User-defined titles or generated summaries may resemble instructions** → Delimit them as application-owned context metadata and keep them separate from the active assistant's instruction section.
-- **Automatic compaction consumes model calls** → Make automation configurable, visible, and failure-isolated.
-- **A compressed checkpoint can omit an important detail** → Preserve all canonical messages, keep a recent raw tail, expose manual recompression, and never make checkpoint generation destructive.
+- **Automatic summary consumes model calls** → Make automation configurable, visible, and failure-isolated.
+- **A generated summary can omit an important detail** → Preserve all canonical messages, keep a recent raw tail, expose manual regeneration, and never make summary generation destructive.
 - **Editing a prior message creates branching complexity** → Store parent links from the beginning while exposing only one active path initially.
 - **Mobile file editing support is inconsistent** → Keep write-back experimental and feature-detected; preview remains the supported baseline.
 - **No cloud sync means device loss loses unexported data** → Make `.mobilechat` export/import a first-class settings capability and show the last successful export time locally.
