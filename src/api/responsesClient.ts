@@ -163,7 +163,7 @@ const formatImagePlaceholder = (image: {
 }) =>
   `[${image.referenceLabel ?? "图片"}：${image.name || "image"}，${
     image.mimeType || "image/*"
-  }，${image.size || 0} bytes]`;
+  }，${image.size || 0} bytes；图片缓存已清理，无法随本次请求发送]`;
 
 const createAvailableImages = (
   imageParts: MessageImagePart[],

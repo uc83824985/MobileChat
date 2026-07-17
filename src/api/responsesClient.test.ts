@@ -405,6 +405,39 @@ describe("responsesClient", () => {
     ]);
   });
 
+  it("keeps cleared image references as explicit text placeholders", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ output_text: "missing image ok" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestResponsesChat({
+      apiProfile,
+      assistant,
+      conversation,
+      model,
+      messages: [multiImageMessage],
+      blobs: [],
+      signal: new AbortController().signal,
+      stream: false,
+    });
+
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).input,
+    ).toEqual([
+      {
+        role: "user",
+        content:
+          "compare [图片1] and [图片2]\n" +
+          "[图片1：sample.png，image/png，12 bytes；图片缓存已清理，无法随本次请求发送]\n" +
+          "[图片2：second.jpg，image/jpeg，34 bytes；图片缓存已清理，无法随本次请求发送]",
+      },
+    ]);
+  });
+
   it("supports OpenAI-compatible Chat Completions profiles", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -502,6 +535,42 @@ describe("responsesClient", () => {
           image_url: { url: imageBlob.dataUrl },
         },
       ],
+    });
+  });
+
+  it("keeps cleared image references as text for Chat Completions", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "missing chat image ok" } }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestResponsesChat({
+      apiProfile: {
+        ...apiProfile,
+        protocol: "openai-chat-completions",
+      },
+      assistant,
+      conversation,
+      model,
+      messages: [multiImageMessage],
+      blobs: [],
+      signal: new AbortController().signal,
+      stream: false,
+    });
+
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).messages[1],
+    ).toEqual({
+      role: "user",
+      content:
+        "compare [图片1] and [图片2]\n" +
+        "[图片1：sample.png，image/png，12 bytes；图片缓存已清理，无法随本次请求发送]\n" +
+        "[图片2：second.jpg，image/jpeg，34 bytes；图片缓存已清理，无法随本次请求发送]",
     });
   });
 

@@ -9,6 +9,7 @@ import {
   defaultContextProfile,
   defaultContextSummaryFramework,
   defaultUtilityAssistantRefs,
+  DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS,
   DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL,
   DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
   DEFAULT_MODEL_REF,
@@ -32,7 +33,6 @@ const STORES = [
   "conversations",
   "messages",
   "drafts",
-  "contextCheckpoints",
   "blobs",
 ] as const;
 
@@ -88,7 +88,6 @@ export const openMobileChatDb = (): Promise<IDBDatabase> =>
       createStoreIfMissing(db, "conversations", { keyPath: "id" });
       createStoreIfMissing(db, "messages", { keyPath: "id" });
       createStoreIfMissing(db, "drafts", { keyPath: "conversationId" });
-      createStoreIfMissing(db, "contextCheckpoints", { keyPath: "id" });
       createStoreIfMissing(db, "blobs", { keyPath: "id" });
 
       const transaction = request.transaction;
@@ -132,7 +131,6 @@ const cloneInitialApiProfiles = (): ApiProfile[] =>
       id: model.id,
       name: model.name,
       description: model.description,
-      contextWindow: model.contextWindow,
       enabled: model.enabled,
     })),
   }));
@@ -150,7 +148,6 @@ const cloneApiProfiles = (apiProfiles: ApiProfile[]): ApiProfile[] =>
       id: model.id,
       name: model.name,
       description: model.description,
-      contextWindow: model.contextWindow,
       enabled: model.enabled,
     })),
   }));
@@ -311,6 +308,14 @@ const normalizeContextSummaryAutoMessageInterval = (value: unknown) => {
   return Math.max(0, Math.min(100, Math.trunc(value)));
 };
 
+const normalizeContextProfileSummaryMaxChars = (value: unknown) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS;
+  }
+
+  return Math.max(500, Math.min(50000, Math.trunc(value)));
+};
+
 const normalizeContextSummaryFramework = (
   framework?: Partial<ContextSummaryFramework>,
 ): ContextSummaryFramework => {
@@ -343,6 +348,9 @@ const normalizeContextProfiles = (
         id: profile.id,
         name: profile.name,
         description: profile.description,
+        summaryMaxChars: normalizeContextProfileSummaryMaxChars(
+          profile.summaryMaxChars,
+        ),
         dimensionOverrides: Array.isArray(profile.dimensionOverrides)
           ? profile.dimensionOverrides.map((override) => ({
               dimensionId: override.dimensionId,
@@ -455,8 +463,9 @@ export const normalizeSnapshot = (
       apiProfileOrder: apiProfiles.map((profile) => profile.id),
       assistantOrder: assistants.map((assistant) => assistant.id),
       utilityAssistantRefs: {
-        ...defaultUtilityAssistantRefs,
-        ...settings.utilityAssistantRefs,
+        contextSummaryAssistantId:
+          settings.utilityAssistantRefs?.contextSummaryAssistantId ??
+          defaultUtilityAssistantRefs.contextSummaryAssistantId,
       },
       modelProbeSettings: normalizeModelProbeSettings(
         settings.modelProbeSettings,
@@ -499,7 +508,6 @@ export const replaceSnapshot = async (
   });
   transaction.objectStore("settings").put(nextSnapshot.settings);
   transaction.objectStore("drafts").clear();
-  transaction.objectStore("contextCheckpoints").clear();
 
   replaceAll<ApiProfile>(
     transaction.objectStore("apiProfiles"),

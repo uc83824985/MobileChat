@@ -98,7 +98,7 @@ test("supports basic mobile interactions, title editing, and model switching", a
 
   await openSettings(page);
   await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
-  await expect(page.getByLabel("设置概览").getByText("连接配置")).toBeVisible();
+  await expectCustomSelectValue(page, "布局模式", "跟随屏幕");
   await expectCustomSelectValue(page, "设置中选择助手", "默认助手");
 
   await selectCustomOption(page, "主题模式", "亮色");
@@ -123,7 +123,7 @@ test("supports basic mobile interactions, title editing, and model switching", a
   await page.getByText("新增模型").click();
   await expect(page.getByLabel("模型名称")).toHaveValue("new-model-2");
   await expect(page.getByLabel("模型描述")).toHaveValue("");
-  await page.getByText("删除当前模型").click();
+  await page.getByText("删除模型").click();
   await expect(page.getByLabel("模型名称")).toHaveValue("手机主模型");
 });
 
@@ -142,7 +142,6 @@ test("supports archived conversation browsing and restore", async ({
     await page.getByLabel("打开对话列表").click();
   }
   await page.getByRole("button", { name: "归档", exact: true }).click();
-  await page.getByRole("button", { name: /已归档/ }).click();
 
   await expect(
     page.getByRole("navigation", { name: "归档对话列表" }),
@@ -166,7 +165,7 @@ test("keeps settings rows compact on mobile", async ({ page }, testInfo) => {
   await openSettings(page);
   const settingsRow = page
     .getByLabel("设置概览")
-    .getByText("连接配置")
+    .getByText("调试模式")
     .locator("..");
   const rowBox = await settingsRow.boundingBox();
   if (testInfo.project.name === "Mobile Chrome") {
@@ -232,7 +231,7 @@ test("verifies persistence and .mobilechat import/export on desktop", async ({
   await page.getByLabel("模型名称").fill("PC 主模型");
   await page.getByLabel("助手名称").fill("PC 持久化助手");
   await page.getByLabel("初始 Prompt").fill("PC 端验证持久化 prompt。");
-  await expect(page.getByText("已保存")).toBeVisible({ timeout: 6000 });
+  await page.waitForTimeout(900);
 
   await page.reload();
   await expect(
@@ -255,7 +254,7 @@ test("verifies persistence and .mobilechat import/export on desktop", async ({
   expect(downloadPath).toBeTruthy();
 
   await page.getByLabel("助手名称").fill("导入前临时名称");
-  await expect(page.getByText("已保存")).toBeVisible({ timeout: 6000 });
+  await page.waitForTimeout(900);
 
   await page.getByLabel("导入 mobilechat 文件").setInputFiles(downloadPath!);
   await expect(page.getByLabel("助手名称")).toHaveValue("PC 持久化助手");

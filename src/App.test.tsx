@@ -64,9 +64,6 @@ describe("App", () => {
     expect(
       screen.getByRole("option", { name: "默认助手" }),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("option", { name: "压缩助手" }),
-    ).not.toBeInTheDocument();
   });
 
   it("uses mirrored UI preferences before IndexedDB hydration", () => {
@@ -258,6 +255,9 @@ describe("App", () => {
     expect(summaryRequestText).toContain(
       "定位信息（仅供理解，不要写入总结正文）",
     );
+    expect(summaryRequestText).toContain(
+      "总结预算来自当前聊天助手绑定的上下文配置",
+    );
     await screen.findByText(/已总结/);
 
     expect(screen.getByText("显示总结")).toBeEnabled();
@@ -278,6 +278,74 @@ describe("App", () => {
     expect(screen.getAllByText("保留 tail").length).toBeGreaterThan(0);
     expect(screen.getAllByText("请求投影").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("数据检查概览")).toBeInTheDocument();
+  });
+
+  it("rewrites over-budget context summaries before storing them", async () => {
+    const summaryRequests: string[] = [];
+    const fetchMock = vi.fn().mockImplementation((_url, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      const inputText = Array.isArray(body.input)
+        ? body.input
+            .map((item: { content?: string }) => item.content)
+            .join("\n")
+        : "";
+
+      if (inputText.includes("请把下面的 MobileChat 上下文总结改写")) {
+        summaryRequests.push(inputText);
+        return Promise.resolve(
+          new Response(JSON.stringify({ output_text: "SHORT SUMMARY" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      if (inputText.includes("请为 MobileChat 当前单个对话")) {
+        summaryRequests.push(inputText);
+        return Promise.resolve(
+          new Response(JSON.stringify({ output_text: "过长".repeat(260) }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      return Promise.resolve(
+        new Response(JSON.stringify({ output_text: "chat response" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    fireEvent.click(screen.getByText("设置"));
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://api.example.test/v1" },
+    });
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "test-key" },
+    });
+    fireEvent.change(screen.getByLabelText("上下文总结字数上限"), {
+      target: { value: "500" },
+    });
+    fireEvent.click(screen.getByLabelText("关闭设置"));
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "budget seed" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+    await screen.findByText("chat response");
+
+    fireEvent.click(screen.getByText("总结上下文"));
+    await waitFor(() => expect(summaryRequests).toHaveLength(2));
+    await screen.findByText(/已总结/);
+
+    fireEvent.click(screen.getByText("显示总结"));
+    expect(screen.getByLabelText("当前上下文总结")).toHaveTextContent(
+      "SHORT SUMMARY",
+    );
   });
 
   it("automatically summarizes completed message intervals and reuses the previous summary", async () => {
@@ -426,7 +494,7 @@ describe("App", () => {
     fireEvent.click(screen.getByText("设置"));
 
     expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
-    expect(screen.getAllByText("连接配置").length).toBeGreaterThan(0);
+    expectCustomSelectValue("上下文总结助手", "总结助手");
 
     chooseCustomSelectOption("主题模式", "亮色");
     expect(document.documentElement.dataset.theme).toBe("light");
@@ -451,11 +519,7 @@ describe("App", () => {
     });
     expect(screen.getByLabelText("总结保留原文条数")).toHaveValue(3);
 
-    expectCustomSelectValue("上下文总结助手", "总结助手");
-    chooseCustomSelectOption("上下文总结助手", "压缩助手");
-    expectCustomSelectValue("上下文总结助手", "压缩助手");
-    expectCustomSelectValue("上下文压缩助手", "压缩助手");
-    chooseCustomSelectOption("设置中选择助手", "压缩助手");
+    chooseCustomSelectOption("设置中选择助手", "总结助手");
     expectCustomSelectValue("功能助手模型策略", "跟随当前对话模型");
     expect(
       screen.queryByRole("combobox", { name: "该助手默认模型" }),
@@ -494,8 +558,14 @@ describe("App", () => {
 
     expectCustomSelectValue("选择上下文配置", "通用上下文");
     expectCustomSelectValue("助手上下文配置", "通用上下文");
+    expect(screen.getByLabelText("上下文总结字数上限")).toHaveValue(6000);
+    fireEvent.change(screen.getByLabelText("上下文总结字数上限"), {
+      target: { value: "12000" },
+    });
+    expect(screen.getByLabelText("上下文总结字数上限")).toHaveValue(12000);
     fireEvent.click(screen.getByText("新增上下文配置"));
     expectCustomSelectValue("选择上下文配置", "上下文配置 2");
+    expect(screen.getByLabelText("上下文总结字数上限")).toHaveValue(6000);
     fireEvent.click(screen.getByLabelText("上移 上下文配置 上下文配置 2"));
     expect(
       screen.getByLabelText("上移 上下文配置 上下文配置 2"),
@@ -591,18 +661,18 @@ describe("App", () => {
     expect(screen.getByLabelText("上移 模型 new-model-2")).toBeDisabled();
     fireEvent.click(screen.getByLabelText("下移 模型 new-model-2"));
     expect(screen.getByLabelText("下移 模型 new-model-2")).toBeDisabled();
-    fireEvent.click(screen.getByText("删除当前模型"));
+    fireEvent.click(screen.getByText("删除模型"));
     expect(screen.getByLabelText("模型名称")).toHaveValue("主模型");
 
     fireEvent.click(screen.getByText("新增"));
-    expectCustomSelectValue("设置中选择助手", "新助手 4");
+    expectCustomSelectValue("设置中选择助手", "新助手 3");
     while (
-      !(screen.getByLabelText("上移 聊天助手 新助手 4") as HTMLButtonElement)
+      !(screen.getByLabelText("上移 聊天助手 新助手 3") as HTMLButtonElement)
         .disabled
     ) {
-      fireEvent.click(screen.getByLabelText("上移 聊天助手 新助手 4"));
+      fireEvent.click(screen.getByLabelText("上移 聊天助手 新助手 3"));
     }
-    expect(screen.getByLabelText("上移 聊天助手 新助手 4")).toBeDisabled();
+    expect(screen.getByLabelText("上移 聊天助手 新助手 3")).toBeDisabled();
     fireEvent.change(screen.getByLabelText("助手名称"), {
       target: { value: "移动助手" },
     });
@@ -611,14 +681,13 @@ describe("App", () => {
     });
 
     expectCustomSelectValue("选择助手", "移动助手");
-    fireEvent.click(screen.getByText("设为当前"));
     expectCustomSelectValue("选择助手", "移动助手");
     expect(screen.getByLabelText("初始 Prompt")).toHaveValue(
       "移动端编辑后的 prompt",
     );
 
     fireEvent.click(screen.getByText("新增"));
-    expectCustomSelectValue("设置中选择助手", "新助手 5");
+    expectCustomSelectValue("设置中选择助手", "新助手 4");
   });
 
   it("archives, searches, browses, and restores conversations", () => {
@@ -632,7 +701,6 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("保存标题"));
     fireEvent.click(screen.getByText("归档"));
 
-    fireEvent.click(screen.getByText(/已归档/));
     expect(
       screen.getByRole("navigation", { name: "归档对话列表" }),
     ).toBeInTheDocument();
@@ -646,11 +714,62 @@ describe("App", () => {
     });
     expect(screen.getAllByText("归档测试").length).toBeGreaterThan(0);
 
+    fireEvent.change(screen.getByPlaceholderText("搜索归档标题或摘要"), {
+      target: { value: "归档 测试" },
+    });
+    expect(screen.getAllByText("归档测试").length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByPlaceholderText("搜索归档标题或摘要"), {
+      target: { value: "归档.*测试" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "对话正则搜索" }));
+    expect(screen.getAllByText("归档测试").length).toBeGreaterThan(0);
+
     fireEvent.click(screen.getByText("恢复当前"));
     expect(
       screen.getByRole("navigation", { name: "对话列表" }),
     ).toBeInTheDocument();
     expect(screen.getByPlaceholderText("输入消息")).toBeEnabled();
+  });
+
+  it("searches messages with loose space matching and regex mode", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ output_text: "ok" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    configureApiProfile({ apiKey: "test-key" });
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "alpha middle beta" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+    await screen.findByText("alpha middle beta");
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "second regex topic" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    const searchInput = screen.getByLabelText("搜索当前对话消息");
+    fireEvent.change(searchInput, { target: { value: "alpha beta" } });
+    await waitFor(() =>
+      expect(
+        screen.getByText("alpha middle beta").closest("article"),
+      ).toHaveClass("search-active"),
+    );
+
+    fireEvent.change(searchInput, { target: { value: "second.*topic" } });
+    fireEvent.click(screen.getByRole("button", { name: "正则搜索" }));
+    await waitFor(() =>
+      expect(
+        screen.getByText("second regex topic").closest("article"),
+      ).toHaveClass("search-active"),
+    );
   });
 
   it("deletes conversations, API profiles, and assistants with safe fallbacks", () => {
@@ -670,7 +789,6 @@ describe("App", () => {
     });
     fireEvent.click(screen.getByLabelText("保存标题"));
     fireEvent.click(screen.getByText("归档"));
-    fireEvent.click(screen.getByText(/已归档/));
     expect(screen.getAllByText("归档删除测试").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
     expect(screen.queryByText("归档删除测试")).not.toBeInTheDocument();
@@ -681,11 +799,11 @@ describe("App", () => {
     expect(screen.queryByLabelText("模型描述")).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("上移 连接 连接 2"));
     expect(screen.getByLabelText("上移 连接 连接 2")).toBeDisabled();
-    fireEvent.click(screen.getByText("删除当前连接"));
+    fireEvent.click(screen.getByText("删除连接"));
     expectCustomSelectValue("选择连接", "默认连接");
 
     fireEvent.click(screen.getByText("新增"));
-    expectCustomSelectValue("设置中选择助手", "新助手 4");
+    expectCustomSelectValue("设置中选择助手", "新助手 3");
     fireEvent.click(screen.getByText("删除助手"));
     expectCustomSelectValue("设置中选择助手", "默认助手");
   });

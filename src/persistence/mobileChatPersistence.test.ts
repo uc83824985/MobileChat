@@ -53,7 +53,7 @@ describe("MobileChat persistence", () => {
     expect(snapshot.apiProfiles).toHaveLength(1);
     expect(snapshot.apiProfiles[0]?.baseUrl).toBe("");
     expect(snapshot.apiProfiles[0]?.models).toHaveLength(1);
-    expect(snapshot.assistants).toHaveLength(3);
+    expect(snapshot.assistants).toHaveLength(2);
     expect(snapshot.assistants.map((assistant) => assistant.id)).toContain(
       CONTEXT_SUMMARY_ASSISTANT_ID,
     );
@@ -171,10 +171,12 @@ describe("MobileChat persistence", () => {
       id: "roleplay-context",
       name: "角色扮演上下文",
       description: "用于角色扮演分类。",
+      summaryMaxChars: 12000,
       dimensionOverrides: [
         {
           dimensionId: "fuzzy_memory",
           enabled: false,
+          titleOverride: undefined,
           instruction: "记录关系温度、心情变化和共同经历。",
         },
       ],
@@ -212,11 +214,7 @@ describe("MobileChat persistence", () => {
       name: "Z 连接",
       models: snapshot.apiProfiles[0]!.models.map((model) => ({ ...model })),
     };
-    const assistantOrder = [
-      CONTEXT_SUMMARY_ASSISTANT_ID,
-      "compact",
-      "architect",
-    ];
+    const assistantOrder = [CONTEXT_SUMMARY_ASSISTANT_ID, "architect"];
     const apiProfileOrder = ["z-connection", "default-profile"];
 
     await saveSnapshot({

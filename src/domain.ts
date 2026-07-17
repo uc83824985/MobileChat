@@ -37,6 +37,7 @@ export type ContextProfile = {
   id: string;
   name: string;
   description: string;
+  summaryMaxChars: number;
   dimensionOverrides: ContextProfileDimensionOverride[];
 };
 
@@ -58,6 +59,7 @@ export type ContextSummaryRecord = {
   frameworkSectionsSnapshot: ContextSummaryFrameworkSection[];
   contextProfileId?: string;
   contextProfileNameSnapshot?: string;
+  contextProfileSummaryMaxCharsSnapshot?: number;
   contextProfileDimensionOverridesSnapshot?: ContextProfileDimensionOverride[];
 };
 
@@ -124,14 +126,12 @@ export type ApiProtocol = "openai-responses" | "openai-chat-completions";
 
 export type UtilityAssistantFeatureRefs = {
   contextSummaryAssistantId: string;
-  contextCompressionAssistantId: string;
 };
 
 export type ModelDefinition = {
   id: string;
   name: string;
   description: string;
-  contextWindow?: number;
   enabled: boolean;
 };
 
@@ -264,16 +264,16 @@ export type LocalDataSnapshot = {
 
 export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 
-export const DATABASE_SCHEMA_VERSION = 11;
+export const DATABASE_SCHEMA_VERSION = 13;
 
 export const DEFAULT_PROFILE_ID = "default-profile";
 export const DEFAULT_MODEL_ID = "default-model";
 export const CONTEXT_SUMMARY_ASSISTANT_ID = "context-summary-gpt54";
-export const CONTEXT_COMPRESSION_ASSISTANT_ID = "compact";
 export const DEFAULT_CONTEXT_SUMMARY_FRAMEWORK_ID = "default-context-summary";
 export const DEFAULT_CONTEXT_PROFILE_ID = "general-context";
 export const DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES = 8;
 export const DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL = 8;
+export const DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS = 6000;
 export const DEFAULT_MODEL_PROBE_GROUP_ID = "grok";
 export const DEFAULT_MODEL_REF: ModelRef = {
   apiProfileId: DEFAULT_PROFILE_ID,
@@ -282,7 +282,6 @@ export const DEFAULT_MODEL_REF: ModelRef = {
 
 export const defaultUtilityAssistantRefs: UtilityAssistantFeatureRefs = {
   contextSummaryAssistantId: CONTEXT_SUMMARY_ASSISTANT_ID,
-  contextCompressionAssistantId: CONTEXT_COMPRESSION_ASSISTANT_ID,
 };
 
 export const defaultModelProbeSettings: ModelProbeSettings = {
@@ -454,6 +453,7 @@ export const defaultContextProfile: ContextProfile = {
   id: DEFAULT_CONTEXT_PROFILE_ID,
   name: "通用上下文",
   description: "默认上下文设定。保留系统五维度含义，不添加特定业务重载。",
+  summaryMaxChars: DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS,
   dimensionOverrides: [],
 };
 
@@ -492,7 +492,6 @@ export const initialApiProfiles: ApiProfile[] = [
         id: DEFAULT_MODEL_ID,
         name: "默认模型",
         description: "",
-        contextWindow: 128000,
         enabled: true,
       },
     ],
@@ -521,7 +520,7 @@ export const contextSummaryAssistant: Assistant = {
   modelBindings: [defaultBinding(true)],
   contextProfileId: DEFAULT_CONTEXT_PROFILE_ID,
   prompt:
-    "你是 MobileChat 的上下文总结助手。你的任务是把一个单独对话的旧消息整理成后续请求可使用的上下文总结。只保留对继续对话有用的信息：目标、已确认决策、约束、待办、术语定义、重要代码/配置发现、未解决问题。不要新增事实，不要评价，不要输出寒暄。输出中文 Markdown，结构清晰但尽量紧凑。",
+    "你是 MobileChat 的上下文总结助手。你的任务是把一个单独对话的旧消息整理成后续请求可使用的上下文总结。只保留对继续对话有用的信息：目标、已确认决策、约束、待办、术语定义、重要代码/配置发现、未解决问题。不要新增事实，不要评价，不要输出寒暄。总结是滚动重写，不是追加流水账；请主动合并重复信息、删除过期探索过程，并严格遵守请求中的字数预算。输出中文 Markdown，结构清晰但尽量紧凑。",
   initialMessage: "",
   enabled: true,
 };
@@ -540,18 +539,6 @@ export const initialMessages: Message[] = [];
 export const initialAssistants: Assistant[] = [
   defaultAssistant,
   contextSummaryAssistant,
-  {
-    id: "compact",
-    name: "压缩助手",
-    description: "功能助手，用于后续 /compact 风格上下文压缩。",
-    kind: "utility",
-    utilityModelStrategy: "follow-conversation",
-    modelBindings: [defaultBinding(true)],
-    contextProfileId: DEFAULT_CONTEXT_PROFILE_ID,
-    prompt: "你只输出结构化压缩结果，不参与普通聊天。",
-    initialMessage: "",
-    enabled: true,
-  },
 ];
 
 export const assistantFields: AssistantField[] = [

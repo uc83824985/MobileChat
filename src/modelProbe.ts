@@ -133,7 +133,7 @@ export const expandModelProbeSettings = (
 
 export const createEmptyModelProbeGroup = (index: number): ModelProbeGroup => ({
   id: createId("probe-group"),
-  name: `探测模型族 ${index}`,
+  name: `探测 ${index}`,
   description: "",
   rules: [
     {
@@ -156,7 +156,7 @@ export const normalizeModelProbeSettings = (
     Array.isArray(settings?.groups) && settings.groups.length > 0
       ? settings.groups.map((group, index) => ({
           id: String(group.id || `probe-group-${index + 1}`),
-          name: String(group.name || group.id || `探测模型族 ${index + 1}`),
+          name: String(group.name || group.id || `探测 ${index + 1}`),
           description: String(group.description ?? ""),
           rules: Array.isArray(group.rules)
             ? group.rules.map((rule, ruleIndex) => ({
@@ -301,7 +301,7 @@ export const runModelProbePool = async ({
   concurrency: number;
   timeoutMs: number;
 }) => {
-  const results = new Array<ModelProbeResult>(candidates.length);
+  const results: ModelProbeResult[] = [];
   let nextIndex = 0;
 
   const workers = Array.from(

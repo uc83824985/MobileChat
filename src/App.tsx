@@ -57,6 +57,7 @@ import {
   defaultContextProfile,
   defaultContextSummaryFramework,
   defaultModelProbeSettings,
+  DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS,
   DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL,
   DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
   DEFAULT_MODEL_REF,
@@ -266,6 +267,32 @@ const readFileAsDataUrl = (file: File): Promise<string> =>
 const escapeRegExp = (value: string) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const createLooseSearchRegex = (query: string) => {
+  const terms = query.trim().split(/\s+/).filter(Boolean).map(escapeRegExp);
+  return terms.length > 0 ? new RegExp(terms.join(".*"), "i") : undefined;
+};
+
+const createMessageSearchRegex = (query: string, regexEnabled: boolean) => {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return { regex: undefined, error: "" };
+  }
+
+  try {
+    return {
+      regex: regexEnabled
+        ? new RegExp(trimmed, "i")
+        : createLooseSearchRegex(trimmed),
+      error: "",
+    };
+  } catch (error) {
+    return {
+      regex: undefined,
+      error: error instanceof Error ? error.message : "正则表达式无效",
+    };
+  }
+};
+
 const readBootUiPreferences = ():
   { themeMode?: ThemeMode; layoutMode?: LayoutMode } | undefined => {
   if (typeof window === "undefined") {
@@ -333,6 +360,7 @@ const createEmptyContextProfile = (index: number): ContextProfile => ({
   id: createId("context-profile"),
   name: `上下文配置 ${index}`,
   description: "",
+  summaryMaxChars: DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS,
   dimensionOverrides: [],
 });
 
@@ -532,13 +560,10 @@ const normalizeContextSummaryAutoMessageInterval = (value: number) =>
     ? Math.max(0, Math.min(100, Math.trunc(value)))
     : DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL;
 
-const saveStatusLabels: Record<SaveStatus, string> = {
-  loading: "加载中",
-  unsaved: "未保存",
-  saving: "保存中",
-  saved: "已保存",
-  failed: "保存失败",
-};
+const normalizeContextProfileSummaryMaxChars = (value: number) =>
+  Number.isFinite(value)
+    ? Math.max(500, Math.min(50000, Math.trunc(value)))
+    : DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS;
 
 const cloneModelRef = (ref: ModelRef): ModelRef => ({
   apiProfileId: ref.apiProfileId,
@@ -743,6 +768,21 @@ const formatTranscriptMessage = (message: Message, index: number) => {
   }`;
 };
 
+const formatMessageSearchText = (message: Message) =>
+  [
+    message.label,
+    message.role,
+    message.status,
+    message.text,
+    formatMessageTime(message.createdAt),
+    formatMessageTime(message.completedAt),
+    message.source?.assistantName,
+    message.source?.modelName,
+    ...getMessageImageParts(message).map(formatMessageImageMarker),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
 const formatInspectorJson = (value: unknown) => JSON.stringify(value, null, 2);
 
 const formatContextSummaryFramework = (framework: ContextSummaryFramework) =>
@@ -843,12 +883,14 @@ const buildContextSummaryPrompt = ({
   messages,
   framework,
   contextProfile,
+  maxChars,
 }: {
   conversation: Conversation;
   previousSummary?: string;
   messages: Message[];
   framework: ContextSummaryFramework;
   contextProfile: ContextProfile;
+  maxChars: number;
 }) => {
   const effectiveSections = createEffectiveContextSummarySections(
     framework,
@@ -867,7 +909,9 @@ const buildContextSummaryPrompt = ({
 - 保留用户目标、明确决策、技术约束、已完成修改、待验证问题、重要路径/配置/错误信息。
 - 不要臆测，不要补充消息中没有的事实。
 - 对话标题和列表摘要只作为定位参考，不要把它们写进总结正文；除非用户明确把标题或摘要本身当作业务事实讨论。
-- 如果已有旧总结，请把新增消息合并进去，输出一份完整的新总结。
+- 如果已有旧总结，请把新增消息合并进去，输出一份完整的新总结；不要在旧总结后追加流水账。
+- 总结预算来自当前聊天助手绑定的上下文配置：输出必须不超过 ${maxChars} 个字符。超限会被本地拒绝。
+- 若信息过多，请优先保留“严格记忆、精确事实、当前状态”，合并“探索记录”，压缩或删除低价值“模糊记忆”和过期过程。
 - 必须使用下面的总结框架作为 Markdown 二级标题；没有内容的可写“无”。
 - 输出中文 Markdown，尽量紧凑，优先结构化。
 
@@ -893,6 +937,37 @@ ${previousSummary?.trim() || "无"}
 ${messages.map(formatTranscriptMessage).join("\n\n")}
 `;
 };
+
+const buildContextSummaryRewritePrompt = ({
+  summary,
+  maxChars,
+  framework,
+  contextProfile,
+}: {
+  summary: string;
+  maxChars: number;
+  framework: ContextSummaryFramework;
+  contextProfile: ContextProfile;
+}) => `请把下面的 MobileChat 上下文总结改写为不超过 ${maxChars} 个字符的中文 Markdown。
+
+要求：
+- 这是对既有总结的预算修正，不是新聊天回复。
+- 不要新增事实。
+- 保持总结框架和当前上下文配置的分类意图。
+- 优先保留严格记忆、精确事实、当前状态；合并探索记录；压缩或删除低价值模糊记忆和过期过程。
+- 输出必须不超过 ${maxChars} 个字符，超限会被本地拒绝。
+
+总结框架：
+${formatContextSummaryFramework({
+  ...framework,
+  sections: createEffectiveContextSummarySections(framework, contextProfile),
+})}
+
+当前上下文配置：
+${formatContextProfile(framework, contextProfile) || "当前上下文配置未启用任何上下文维度。"}
+
+待改写总结：
+${summary}`;
 
 const getActiveContextSummaryRecord = (
   conversation?: Conversation,
@@ -1064,11 +1139,11 @@ const createTurnTimestamps = () => {
 
 const parseModelIdListText = (text: string) =>
   text
-    .split(/[\n,]/)
+    .split(/[\s,]+/)
     .map((line) => line.replace(/#.*$/, "").trim())
     .filter(Boolean);
 
-const formatModelIdListText = (models: string[]) => models.join("\n");
+const formatModelIdListText = (models: string[]) => models.join(", ");
 
 const isMinorTenthsDimension = (
   value: ModelProbeDimensionValue,
@@ -1191,6 +1266,12 @@ function App() {
     "top" | "bottom"
   >("top");
   const [conversationSearch, setConversationSearch] = useState("");
+  const [conversationSearchRegexEnabled, setConversationSearchRegexEnabled] =
+    useState(false);
+  const [messageSearchQuery, setMessageSearchQuery] = useState("");
+  const [messageSearchRegexEnabled, setMessageSearchRegexEnabled] =
+    useState(false);
+  const [activeMessageSearchIndex, setActiveMessageSearchIndex] = useState(0);
   const [showArchived, setShowArchived] = useState(false);
   const [editingTitleConversationId, setEditingTitleConversationId] = useState<
     string | null
@@ -1198,7 +1279,7 @@ function App() {
   const [titleDraft, setTitleDraft] = useState("");
   const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("loading");
+  const [, setSaveStatus] = useState<SaveStatus>("loading");
   const [saveError, setSaveError] = useState("");
   const [lastSuccessfulExportAt, setLastSuccessfulExportAt] = useState(
     bootSnapshot.settings.lastSuccessfulExportAt,
@@ -1399,6 +1480,55 @@ function App() {
       ),
     [activeConversation?.id, messages],
   );
+  const messageSearch = useMemo(() => {
+    const { regex, error } = createMessageSearchRegex(
+      messageSearchQuery,
+      messageSearchRegexEnabled,
+    );
+    const matches = regex
+      ? activeMessages.filter((message) =>
+          regex.test(formatMessageSearchText(message)),
+        )
+      : [];
+
+    return {
+      error,
+      matches,
+      ids: matches.map((message) => message.id),
+    };
+  }, [activeMessages, messageSearchQuery, messageSearchRegexEnabled]);
+  const activeMessageSearchId =
+    messageSearch.ids.length > 0
+      ? messageSearch.ids[
+          Math.min(activeMessageSearchIndex, messageSearch.ids.length - 1)
+        ]
+      : undefined;
+  useEffect(() => {
+    setActiveMessageSearchIndex(0);
+  }, [activeConversation?.id, messageSearchQuery, messageSearchRegexEnabled]);
+
+  useEffect(() => {
+    if (activeMessageSearchIndex < messageSearch.ids.length) {
+      return;
+    }
+
+    setActiveMessageSearchIndex(
+      messageSearch.ids.length > 0 ? messageSearch.ids.length - 1 : 0,
+    );
+  }, [activeMessageSearchIndex, messageSearch.ids.length]);
+
+  useEffect(() => {
+    if (!activeMessageSearchId) {
+      return;
+    }
+
+    const thread = messageThreadRef.current;
+    const target = Array.from(
+      thread?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [],
+    ).find((element) => element.dataset.messageId === activeMessageSearchId);
+
+    target?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  }, [activeMessageSearchId]);
   const blobMap = useMemo(
     () => new Map(blobs.map((blob) => [blob.id, blob])),
     [blobs],
@@ -1475,23 +1605,29 @@ function App() {
     () => conversations.filter((conversation) => conversation.archived),
     [conversations],
   );
+  const conversationSearchResult = useMemo(
+    () =>
+      createMessageSearchRegex(
+        conversationSearch,
+        conversationSearchRegexEnabled,
+      ),
+    [conversationSearch, conversationSearchRegexEnabled],
+  );
   const visibleConversations = useMemo(() => {
-    const keyword = conversationSearch.trim().toLocaleLowerCase();
     const source = showArchived ? archivedConversations : activeConversations;
+    const regex = conversationSearchResult.regex;
 
     return source.filter((conversation) => {
-      if (!keyword) {
+      if (!regex) {
         return true;
       }
 
-      return `${conversation.title} ${conversation.summary}`
-        .toLocaleLowerCase()
-        .includes(keyword);
+      return regex.test(`${conversation.title}\n${conversation.summary}`);
     });
   }, [
     activeConversations,
     archivedConversations,
-    conversationSearch,
+    conversationSearchResult.regex,
     showArchived,
   ]);
   const activeConversationReadOnly =
@@ -1552,9 +1688,13 @@ function App() {
       imageBlobBytes: imageCacheStats.bytes,
       rawTailMessages: contextSummaryRawTailMessages,
       autoSummaryInterval: contextSummaryAutoMessageInterval,
+      activeSummaryMaxChars: normalizeContextProfileSummaryMaxChars(
+        activeContextProfile.summaryMaxChars,
+      ),
     }),
     [
       activeConversations.length,
+      activeContextProfile.summaryMaxChars,
       apiProfiles,
       archivedConversations.length,
       assistants,
@@ -1610,6 +1750,9 @@ function App() {
         ? {
             id: activeContextSummary.contextProfileId ?? null,
             name: activeContextSummary.contextProfileNameSnapshot ?? null,
+            summaryMaxChars:
+              activeContextSummary.contextProfileSummaryMaxCharsSnapshot ??
+              null,
           }
         : null,
     }),
@@ -1654,8 +1797,6 @@ function App() {
     () => modelProbeResults.filter((result) => result.ok),
     [modelProbeResults],
   );
-  const chatAssistantCount = chatAssistants.length;
-  const utilityAssistantCount = utilityAssistants.length;
   const diagnostics = useMemo(
     () => [
       [
@@ -2263,10 +2404,6 @@ function App() {
       return;
     }
 
-    const nextActive = activeConversations.find(
-      (conversation) => conversation.id !== activeConversation.id,
-    );
-
     setConversations((current) =>
       current.map((conversation) =>
         conversation.id === activeConversation.id
@@ -2274,21 +2411,9 @@ function App() {
           : conversation,
       ),
     );
-    setShowArchived(false);
-
-    if (nextActive) {
-      setActiveConversationId(nextActive.id);
-      return;
-    }
-
-    const fallbackConversation: Conversation = {
-      id: createId("conversation"),
-      title: "新对话",
-      summary: "当前没有未归档对话",
-      archived: false,
-    };
-    setConversations((current) => [fallbackConversation, ...current]);
-    setActiveConversationId(fallbackConversation.id);
+    setShowArchived(true);
+    setConversationSearch("");
+    setActiveConversationId(activeConversation.id);
   };
 
   const restoreActiveConversation = () => {
@@ -2938,7 +3063,6 @@ function App() {
                   id: modelId,
                   name: modelId,
                   description: "",
-                  contextWindow: 128000,
                   enabled: true,
                 },
               ],
@@ -3024,10 +3148,7 @@ function App() {
   const updateModelField = (
     profileId: string,
     modelId: string,
-    key: keyof Pick<
-      ModelDefinition,
-      "id" | "name" | "description" | "contextWindow" | "enabled"
-    >,
+    key: keyof Pick<ModelDefinition, "id" | "name" | "description" | "enabled">,
     value: string | number | boolean,
   ) => {
     const nextModelId =
@@ -3042,12 +3163,7 @@ function App() {
                 model.id === modelId
                   ? {
                       ...model,
-                      [key]:
-                        key === "contextWindow"
-                          ? Number(value) || undefined
-                          : key === "id"
-                            ? nextModelId
-                            : value,
+                      [key]: key === "id" ? nextModelId : value,
                     }
                   : model,
               ),
@@ -3131,7 +3247,7 @@ function App() {
     }
     if (
       !confirmDestructiveAction(
-        `删除模型探测模型族「${targetGroup.name}」？这不会影响已创建的模型配置。`,
+        `删除探测「${targetGroup.name}」？这不会影响已创建的模型配置。`,
       )
     ) {
       return;
@@ -3175,7 +3291,7 @@ function App() {
 
     if (!nextId) {
       setModelProbeGroupIdDraft(currentId);
-      setModelProbeStatus("模型族 ID 不能为空，已恢复原值。");
+      setModelProbeStatus("模型 ID 不能为空，已恢复原值。");
       return;
     }
 
@@ -3185,7 +3301,7 @@ function App() {
       )
     ) {
       setModelProbeGroupIdDraft(currentId);
-      setModelProbeStatus(`模型族 ID「${nextId}」已存在，已恢复原值。`);
+      setModelProbeStatus(`模型 ID「${nextId}」已存在，已恢复原值。`);
       return;
     }
 
@@ -3202,7 +3318,7 @@ function App() {
   const resetModelProbeSettings = () => {
     if (
       !confirmDestructiveAction(
-        "还原默认模型探测规则？当前自定义模型族会被覆盖。",
+        "还原默认模型探测规则？当前自定义探测会被覆盖。",
       )
     ) {
       return;
@@ -3285,7 +3401,7 @@ function App() {
       return;
     }
     if (!editingModelProbeGroup) {
-      setModelProbeStatus("请先选择模型探测模型族。");
+      setModelProbeStatus("请先选择探测。");
       return;
     }
     if (!modelProbeSelectedApiProfile) {
@@ -3301,7 +3417,7 @@ function App() {
       return;
     }
     if (modelProbeCandidates.length === 0) {
-      setModelProbeStatus("当前模型族没有候选模型。");
+      setModelProbeStatus("当前探测没有候选模型。");
       return;
     }
 
@@ -3352,7 +3468,6 @@ function App() {
       id: result.modelId,
       name: result.modelId,
       description: "",
-      contextWindow: 128000,
       enabled: true,
     };
 
@@ -3491,6 +3606,22 @@ function App() {
     setContextProfiles((current) =>
       current.map((profile) =>
         profile.id === profileId ? { ...profile, [key]: value } : profile,
+      ),
+    );
+  };
+
+  const updateContextProfileSummaryMaxChars = (
+    profileId: string,
+    value: number,
+  ) => {
+    setContextProfiles((current) =>
+      current.map((profile) =>
+        profile.id === profileId
+          ? {
+              ...profile,
+              summaryMaxChars: normalizeContextProfileSummaryMaxChars(value),
+            }
+          : profile,
       ),
     );
   };
@@ -3738,6 +3869,9 @@ function App() {
     setContextSummaryStatus(statusText);
 
     const now = new Date().toISOString();
+    const summaryMaxChars = normalizeContextProfileSummaryMaxChars(
+      contextProfile.summaryMaxChars,
+    );
     const summaryRequestMessage: Message = {
       id: createId("summary-request"),
       conversationId: conversation.id,
@@ -3751,6 +3885,7 @@ function App() {
         messages: messagesToSummarize,
         framework: contextSummaryFramework,
         contextProfile,
+        maxChars: summaryMaxChars,
       }),
       createdAt: now,
       status: "complete",
@@ -3769,10 +3904,54 @@ function App() {
         stream: false,
         webSearchEnabled: false,
       });
-      const contextSummary = result.text.trim();
+      let contextSummary = result.text.trim();
 
       if (!contextSummary) {
         throw new Error("总结助手未返回文本。");
+      }
+
+      if (contextSummary.length > summaryMaxChars) {
+        setContextSummaryStatus(
+          `${
+            trigger === "auto" ? "自动上下文总结" : "上下文总结"
+          }超出 ${summaryMaxChars} 字，正在要求总结助手重写。`,
+        );
+        const rewriteMessage: Message = {
+          id: createId("summary-rewrite-request"),
+          conversationId: conversation.id,
+          role: "user",
+          label: "上下文总结重写请求",
+          text: buildContextSummaryRewritePrompt({
+            summary: contextSummary,
+            maxChars: summaryMaxChars,
+            framework: contextSummaryFramework,
+            contextProfile,
+          }),
+          createdAt: new Date().toISOString(),
+          status: "complete",
+        };
+        const rewriteResult = await requestResponsesChat({
+          apiProfile: summaryResolvedModel.apiProfile,
+          assistant: summaryAssistant,
+          conversation,
+          model: summaryResolvedModel.model,
+          messages: [rewriteMessage],
+          blobs: [],
+          signal: controller.signal,
+          stream: false,
+          webSearchEnabled: false,
+        });
+        contextSummary = rewriteResult.text.trim();
+
+        if (!contextSummary) {
+          throw new Error("总结助手重写后未返回文本。");
+        }
+      }
+
+      if (contextSummary.length > summaryMaxChars) {
+        throw new Error(
+          `总结长度 ${contextSummary.length} 字符超过当前上下文配置上限 ${summaryMaxChars}，未启用新总结。`,
+        );
       }
 
       const latestConversationMessages = sortMessagesByCreatedAt(
@@ -3830,6 +4009,7 @@ function App() {
         ),
         contextProfileId: contextProfile.id,
         contextProfileNameSnapshot: contextProfile.name,
+        contextProfileSummaryMaxCharsSnapshot: summaryMaxChars,
         contextProfileDimensionOverridesSnapshot:
           contextProfile.dimensionOverrides,
       };
@@ -4623,6 +4803,17 @@ function App() {
     window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
   };
 
+  const jumpMessageSearchResult = (direction: -1 | 1) => {
+    const total = messageSearch.ids.length;
+    if (total === 0) {
+      return;
+    }
+
+    setActiveMessageSearchIndex(
+      (current) => (current + direction + total) % total,
+    );
+  };
+
   const renderInspectorMessageList = (
     title: string,
     list: Message[],
@@ -4735,14 +4926,34 @@ function App() {
           </button>
         </header>
 
-        <label className="search-box">
-          <Search size={18} />
-          <input
-            placeholder={showArchived ? "搜索归档标题或摘要" : "搜索标题或摘要"}
-            value={conversationSearch}
-            onChange={(event) => setConversationSearch(event.target.value)}
-          />
-        </label>
+        <div className="conversation-search">
+          <label className="search-box">
+            <Search size={18} />
+            <input
+              placeholder={
+                showArchived ? "搜索归档标题或摘要" : "搜索标题或摘要"
+              }
+              value={conversationSearch}
+              onChange={(event) => setConversationSearch(event.target.value)}
+            />
+          </label>
+          <button
+            className={`conversation-search-mode ${
+              conversationSearchRegexEnabled ? "active" : ""
+            }`}
+            type="button"
+            aria-label="对话正则搜索"
+            aria-pressed={conversationSearchRegexEnabled}
+            onClick={() =>
+              setConversationSearchRegexEnabled((enabled) => !enabled)
+            }
+          >
+            正则
+          </button>
+          {conversationSearchResult.error ? (
+            <span className="conversation-search-error">正则无效</span>
+          ) : null}
+        </div>
 
         <nav
           className="conversation-list"
@@ -4920,6 +5131,57 @@ function App() {
           </div>
         </header>
 
+        <section className="message-search-panel" aria-label="消息搜索">
+          <label className="message-search-input">
+            <Search size={16} />
+            <input
+              aria-label="搜索当前对话消息"
+              placeholder="搜索当前对话消息；空格表示任意间隔"
+              value={messageSearchQuery}
+              onChange={(event) => setMessageSearchQuery(event.target.value)}
+            />
+          </label>
+          <button
+            className={`message-search-mode ${
+              messageSearchRegexEnabled ? "active" : ""
+            }`}
+            type="button"
+            aria-label="正则搜索"
+            aria-pressed={messageSearchRegexEnabled}
+            onClick={() => setMessageSearchRegexEnabled((enabled) => !enabled)}
+          >
+            正则
+          </button>
+          <button
+            type="button"
+            aria-label="上一个搜索结果"
+            disabled={messageSearch.ids.length === 0}
+            onClick={() => jumpMessageSearchResult(-1)}
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            aria-label="下一个搜索结果"
+            disabled={messageSearch.ids.length === 0}
+            onClick={() => jumpMessageSearchResult(1)}
+          >
+            ↓
+          </button>
+          <span
+            className={`message-search-status ${
+              messageSearch.error ? "error" : ""
+            }`}
+            title={messageSearch.error || undefined}
+          >
+            {messageSearch.error
+              ? "正则无效"
+              : messageSearchQuery.trim()
+                ? `${messageSearch.ids.length > 0 ? activeMessageSearchIndex + 1 : 0}/${messageSearch.ids.length}`
+                : "未搜索"}
+          </span>
+        </section>
+
         <div className="message-thread-shell">
           <div
             className="message-thread"
@@ -4932,10 +5194,14 @@ function App() {
                 const createdTime = formatMessageTime(message.createdAt);
                 const completedTime = formatMessageTime(message.completedAt);
                 const elapsedText = formatElapsedMs(message.elapsedMs);
+                const isSearchHit = messageSearch.ids.includes(message.id);
 
                 return (
                   <article
-                    className={`message ${message.role}`}
+                    className={`message ${message.role} ${
+                      isSearchHit ? "search-hit" : ""
+                    } ${message.id === activeMessageSearchId ? "search-active" : ""}`}
+                    data-message-id={message.id}
                     key={message.id}
                   >
                     <div className="message-label">
@@ -5479,10 +5745,6 @@ function App() {
             </header>
 
             <section className="settings-summary" aria-label="设置概览">
-              <div className="settings-row compact">
-                <span>保存状态</span>
-                <strong>{saveStatusLabels[saveStatus]}</strong>
-              </div>
               <div className="settings-row compact theme-select">
                 <span>
                   <Palette size={16} />
@@ -5525,40 +5787,6 @@ function App() {
                   <span />
                 </label>
               </div>
-              <div className="settings-row compact number-setting">
-                <span>总结保留原文</span>
-                <input
-                  aria-label="总结保留原文条数"
-                  max={50}
-                  min={0}
-                  type="number"
-                  value={contextSummaryRawTailMessages}
-                  onChange={(event) =>
-                    setContextSummaryRawTailMessages(
-                      normalizeContextSummaryRawTailMessages(
-                        Number(event.target.value),
-                      ),
-                    )
-                  }
-                />
-              </div>
-              <div className="settings-row compact number-setting">
-                <span>自动总结间隔</span>
-                <input
-                  aria-label="自动总结间隔条数"
-                  max={100}
-                  min={0}
-                  type="number"
-                  value={contextSummaryAutoMessageInterval}
-                  onChange={(event) =>
-                    setContextSummaryAutoMessageInterval(
-                      normalizeContextSummaryAutoMessageInterval(
-                        Number(event.target.value),
-                      ),
-                    )
-                  }
-                />
-              </div>
               <div className="settings-row compact theme-select wide-setting">
                 <span>输入快捷键</span>
                 <div className="setting-control-stack">
@@ -5594,28 +5822,8 @@ function App() {
                   }
                 />
               </div>
-              <div className="settings-row compact">
-                <span>连接配置</span>
-                <strong>{apiProfiles.length}</strong>
-              </div>
-              <div className="settings-row compact">
-                <span>聊天助手</span>
-                <strong>{chatAssistantCount}</strong>
-              </div>
-              <div className="settings-row compact">
-                <span>功能助手</span>
-                <strong>{utilityAssistantCount}</strong>
-              </div>
-              <div className="settings-row compact">
-                <span>上下文配置</span>
-                <strong>{contextProfiles.length}</strong>
-              </div>
-              <div className="settings-row compact">
-                <span>模型探测模型族</span>
-                <strong>{modelProbeSettings.groups.length}</strong>
-              </div>
-              <div className="settings-row compact theme-select">
-                <span>上下文总结助手</span>
+              <div className="settings-row compact summary-policy-setting">
+                <span>上下文总结</span>
                 <CustomSelect
                   label="上下文总结助手"
                   value={utilityAssistantRefs.contextSummaryAssistantId}
@@ -5630,23 +5838,40 @@ function App() {
                     }))
                   }
                 />
-              </div>
-              <div className="settings-row compact theme-select">
-                <span>上下文压缩助手</span>
-                <CustomSelect
-                  label="上下文压缩助手"
-                  value={utilityAssistantRefs.contextCompressionAssistantId}
-                  options={utilityAssistants.map((assistant) => ({
-                    value: assistant.id,
-                    label: assistant.name,
-                  }))}
-                  onChange={(nextValue) =>
-                    setUtilityAssistantRefs((current) => ({
-                      ...current,
-                      contextCompressionAssistantId: nextValue,
-                    }))
-                  }
-                />
+                <label className="inline-number-setting">
+                  <span>保留原文</span>
+                  <input
+                    aria-label="总结保留原文条数"
+                    max={50}
+                    min={0}
+                    type="number"
+                    value={contextSummaryRawTailMessages}
+                    onChange={(event) =>
+                      setContextSummaryRawTailMessages(
+                        normalizeContextSummaryRawTailMessages(
+                          Number(event.target.value),
+                        ),
+                      )
+                    }
+                  />
+                </label>
+                <label className="inline-number-setting">
+                  <span>自动间隔</span>
+                  <input
+                    aria-label="自动总结间隔条数"
+                    max={100}
+                    min={0}
+                    type="number"
+                    value={contextSummaryAutoMessageInterval}
+                    onChange={(event) =>
+                      setContextSummaryAutoMessageInterval(
+                        normalizeContextSummaryAutoMessageInterval(
+                          Number(event.target.value),
+                        ),
+                      )
+                    }
+                  />
+                </label>
               </div>
             </section>
 
@@ -5775,7 +6000,11 @@ function App() {
                         >
                           <span>{profile.name}</span>
                           <small>
-                            {profile.dimensionOverrides.length} 个维度重载
+                            {profile.dimensionOverrides.length} 个维度重载 ·{" "}
+                            {normalizeContextProfileSummaryMaxChars(
+                              profile.summaryMaxChars,
+                            )}{" "}
+                            字
                           </small>
                         </button>
                         <ReorderControls
@@ -5819,6 +6048,28 @@ function App() {
                           )
                         }
                       />
+                    </label>
+                    <label className="detail-field">
+                      <span>总结字数上限</span>
+                      <input
+                        aria-label="上下文总结字数上限"
+                        max={50000}
+                        min={500}
+                        type="number"
+                        value={normalizeContextProfileSummaryMaxChars(
+                          editingContextProfile.summaryMaxChars,
+                        )}
+                        onChange={(event) =>
+                          updateContextProfileSummaryMaxChars(
+                            editingContextProfile.id,
+                            Number(event.target.value),
+                          )
+                        }
+                      />
+                      <small>
+                        仅限制该上下文配置生成的 rolling
+                        summary；模型配置不参与上下文预算策略。
+                      </small>
                     </label>
                   </div>
 
@@ -6005,7 +6256,7 @@ function App() {
                 <div className="header-actions">
                   <button type="button" onClick={createModelProbeGroup}>
                     <Plus size={16} />
-                    新增分组
+                    新增探测
                   </button>
                   <button type="button" onClick={resetModelProbeSettings}>
                     <RotateCcw size={16} />
@@ -6022,9 +6273,9 @@ function App() {
               <div className="profile-layout model-probe-layout">
                 <aside className="profile-directory">
                   <div className="assistant-config-select">
-                    <span>当前模型族</span>
+                    <span>当前探测</span>
                     <CustomSelect
-                      label="选择模型探测模型族"
+                      label="选择探测"
                       value={editingModelProbeGroup?.id ?? ""}
                       options={modelProbeSettings.groups.map((group) => ({
                         value: group.id,
@@ -6067,7 +6318,7 @@ function App() {
                           </small>
                         </button>
                         <ReorderControls
-                          itemName={`模型探测模型族 ${group.name}`}
+                          itemName={`探测 ${group.name}`}
                           isFirst={index === 0}
                           isLast={
                             index === modelProbeSettings.groups.length - 1
@@ -6082,11 +6333,29 @@ function App() {
 
                 {editingModelProbeGroup ? (
                   <section className="profile-detail">
+                    <header className="config-detail-header">
+                      <div className="section-caption">
+                        <Search size={16} />
+                        <span>探测配置</span>
+                      </div>
+                      <div className="header-actions">
+                        <button
+                          className="danger-button"
+                          type="button"
+                          onClick={() =>
+                            deleteModelProbeGroup(editingModelProbeGroup.id)
+                          }
+                        >
+                          <Trash2 size={16} />
+                          删除探测
+                        </button>
+                      </div>
+                    </header>
                     <div className="reflected-fields">
                       <label className="detail-field">
-                        <span>模型族 ID</span>
+                        <span>模型 ID</span>
                         <input
-                          aria-label="模型探测模型族 ID"
+                          aria-label="探测模型 ID"
                           value={modelProbeGroupIdDraft}
                           onChange={(event) =>
                             setModelProbeGroupIdDraft(event.target.value)
@@ -6106,9 +6375,9 @@ function App() {
                         />
                       </label>
                       <label className="detail-field">
-                        <span>显示名称</span>
+                        <span>探测名称</span>
                         <input
-                          aria-label="模型探测模型族名称"
+                          aria-label="探测名称"
                           value={editingModelProbeGroup.name}
                           onChange={(event) =>
                             updateModelProbeGroup(
@@ -6121,20 +6390,6 @@ function App() {
                           }
                         />
                       </label>
-                      <div className="detail-field danger-zone">
-                        <span>分组操作</span>
-                        <button
-                          className="danger-button"
-                          type="button"
-                          onClick={() =>
-                            deleteModelProbeGroup(editingModelProbeGroup.id)
-                          }
-                        >
-                          <Trash2 size={16} />
-                          删除模型族
-                        </button>
-                        <small>不会删除已经创建的模型配置。</small>
-                      </div>
                     </div>
 
                     <section className="model-bindings">
@@ -6219,42 +6474,43 @@ function App() {
                                     ) {
                                       return (
                                         <article
-                                          className="probe-dimension-card"
+                                          className="probe-dimension-card probe-version-card"
                                           key={dimensionKey}
                                         >
-                                          <div className="summary-framework-card-header">
-                                            <div>
+                                          <div className="summary-framework-card-header probe-version-header">
+                                            <div className="probe-dimension-title">
                                               <h4>
                                                 {formatProbeDimensionLabel(
                                                   dimensionKey,
                                                 )}
                                               </h4>
-                                              <span>
-                                                大版本 + 小版本区间展开
-                                              </span>
                                             </div>
-                                            <button
-                                              type="button"
-                                              disabled={
-                                                dimensionKey === "version"
-                                              }
-                                              onClick={() =>
-                                                deleteModelProbeRuleDimension(
-                                                  editingModelProbeGroup.id,
-                                                  rule.id,
-                                                  dimensionKey,
-                                                )
-                                              }
-                                            >
-                                              删除维度
-                                            </button>
+                                            <div className="probe-card-actions">
+                                              <button
+                                                type="button"
+                                                disabled={
+                                                  dimensionKey === "version"
+                                                }
+                                                onClick={() =>
+                                                  deleteModelProbeRuleDimension(
+                                                    editingModelProbeGroup.id,
+                                                    rule.id,
+                                                    dimensionKey,
+                                                  )
+                                                }
+                                              >
+                                                删除维度
+                                              </button>
+                                            </div>
+                                            <span className="probe-dimension-note">
+                                              大版本 + 小版本区间展开
+                                            </span>
                                           </div>
-                                          <div className="probe-dimension-grid">
-                                            <label className="detail-field">
+                                          <div className="probe-version-grid">
+                                            <label className="detail-field probe-major-field">
                                               <span>大版本列表</span>
-                                              <textarea
+                                              <input
                                                 aria-label={`${dimensionKey} 大版本列表`}
-                                                rows={3}
                                                 value={formatModelIdListText(
                                                   dimensionValue.majors,
                                                 )}
@@ -6273,13 +6529,8 @@ function App() {
                                                   )
                                                 }
                                               />
-                                              <small>
-                                                例如只写 5，会配合区间生成
-                                                5、5.1、5.2；小版本 0 不追加
-                                                .0。
-                                              </small>
                                             </label>
-                                            <label className="detail-field number-setting">
+                                            <label className="detail-field number-setting probe-minor-field">
                                               <span>起始小版本</span>
                                               <input
                                                 aria-label={`${dimensionKey} 起始小版本`}
@@ -6302,7 +6553,7 @@ function App() {
                                                 }
                                               />
                                             </label>
-                                            <label className="detail-field number-setting">
+                                            <label className="detail-field number-setting probe-minor-field">
                                               <span>结束小版本</span>
                                               <input
                                                 aria-label={`${dimensionKey} 结束小版本`}
@@ -6326,6 +6577,11 @@ function App() {
                                               />
                                             </label>
                                           </div>
+                                          <small className="probe-version-hint">
+                                            例如只写 5，会配合区间生成
+                                            5、5.1、5.2；小版本 0 不追加
+                                            .0。多个大版本可用空格或逗号分隔。
+                                          </small>
                                         </article>
                                       );
                                     }
@@ -6337,33 +6593,44 @@ function App() {
 
                                     return (
                                       <article
-                                        className="probe-dimension-card"
+                                        className="probe-dimension-card probe-suffix-card"
                                         key={dimensionKey}
                                       >
-                                        <div className="summary-framework-card-header">
-                                          <div>
+                                        <div className="summary-framework-card-header probe-suffix-header">
+                                          <div className="probe-dimension-title">
                                             <h4>
                                               {formatProbeDimensionLabel(
                                                 dimensionKey,
                                               )}
                                             </h4>
-                                            <span>
-                                              按顺序拼接到模型名后；非空词条会自动补
-                                              -，留空表示该段不追加内容
-                                            </span>
                                           </div>
-                                          <button
-                                            type="button"
-                                            onClick={() =>
-                                              deleteModelProbeRuleDimension(
-                                                editingModelProbeGroup.id,
-                                                rule.id,
-                                                dimensionKey,
-                                              )
-                                            }
-                                          >
-                                            删除维度
-                                          </button>
+                                          <div className="probe-card-actions">
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                updateModelProbeRuleDimension(
+                                                  editingModelProbeGroup.id,
+                                                  rule.id,
+                                                  dimensionKey,
+                                                  [...values, ""],
+                                                )
+                                              }
+                                            >
+                                              添加值
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                deleteModelProbeRuleDimension(
+                                                  editingModelProbeGroup.id,
+                                                  rule.id,
+                                                  dimensionKey,
+                                                )
+                                              }
+                                            >
+                                              删除后缀段
+                                            </button>
+                                          </div>
                                         </div>
                                         <div className="probe-value-list">
                                           {values.map((value, valueIndex) => (
@@ -6411,19 +6678,6 @@ function App() {
                                               </button>
                                             </label>
                                           ))}
-                                          <button
-                                            type="button"
-                                            onClick={() =>
-                                              updateModelProbeRuleDimension(
-                                                editingModelProbeGroup.id,
-                                                rule.id,
-                                                dimensionKey,
-                                                [...values, ""],
-                                              )
-                                            }
-                                          >
-                                            添加值
-                                          </button>
                                         </div>
                                       </article>
                                     );
@@ -6587,10 +6841,37 @@ function App() {
 
                 {editingApiProfile ? (
                   <section className="profile-detail">
-                    <div className="section-caption">
-                      <Server size={16} />
-                      <span>连接配置</span>
-                    </div>
+                    <header className="config-detail-header">
+                      <div className="section-caption">
+                        <Server size={16} />
+                        <span>连接配置</span>
+                      </div>
+                      <div className="header-actions">
+                        <label className="compact-toggle">
+                          <input
+                            aria-label="启用连接"
+                            checked={editingApiProfile.enabled}
+                            type="checkbox"
+                            onChange={(event) =>
+                              updateApiProfileField(
+                                editingApiProfile.id,
+                                "enabled",
+                                event.target.checked,
+                              )
+                            }
+                          />
+                          <span>启用</span>
+                        </label>
+                        <button
+                          className="danger-button"
+                          type="button"
+                          onClick={() => deleteApiProfile(editingApiProfile.id)}
+                        >
+                          <Trash2 size={16} />
+                          删除连接
+                        </button>
+                      </div>
+                    </header>
                     <div className="reflected-fields">
                       <label className="detail-field">
                         <span>连接名称</span>
@@ -6677,21 +6958,6 @@ function App() {
                           </button>
                         </div>
                       </label>
-                      <label className="detail-field checkbox-field">
-                        <span>启用连接</span>
-                        <input
-                          aria-label="启用连接"
-                          checked={editingApiProfile.enabled}
-                          type="checkbox"
-                          onChange={(event) =>
-                            updateApiProfileField(
-                              editingApiProfile.id,
-                              "enabled",
-                              event.target.checked,
-                            )
-                          }
-                        />
-                      </label>
                       <label className="detail-field">
                         <span>连接描述</span>
                         <textarea
@@ -6707,20 +6973,6 @@ function App() {
                           }
                         />
                       </label>
-                      <div className="detail-field danger-zone">
-                        <span>连接操作</span>
-                        <button
-                          className="danger-button"
-                          type="button"
-                          onClick={() => deleteApiProfile(editingApiProfile.id)}
-                        >
-                          <Trash2 size={16} />
-                          删除当前连接
-                        </button>
-                        <small>
-                          会删除该连接下的模型配置，并移除引用这些模型的助手绑定；历史消息保留原始快照。
-                        </small>
-                      </div>
                     </div>
 
                     <div className="model-editor-header">
@@ -6783,102 +7035,92 @@ function App() {
                     </div>
 
                     {editingModel ? (
-                      <div className="reflected-fields">
-                        <label className="detail-field">
-                          <span>模型 ID / slug</span>
-                          <input
-                            aria-label="模型 ID"
-                            value={editingModel.id}
-                            onChange={(event) =>
-                              updateModelField(
-                                editingApiProfile.id,
-                                editingModel.id,
-                                "id",
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </label>
-                        <label className="detail-field">
-                          <span>显示名称</span>
-                          <input
-                            aria-label="模型名称"
-                            value={editingModel.name}
-                            onChange={(event) =>
-                              updateModelField(
-                                editingApiProfile.id,
-                                editingModel.id,
-                                "name",
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </label>
-                        <label className="detail-field">
-                          <span>上下文窗口</span>
-                          <input
-                            aria-label="上下文窗口"
-                            inputMode="numeric"
-                            value={editingModel.contextWindow ?? ""}
-                            onChange={(event) =>
-                              updateModelField(
-                                editingApiProfile.id,
-                                editingModel.id,
-                                "contextWindow",
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </label>
-                        <label className="detail-field checkbox-field">
-                          <span>启用模型</span>
-                          <input
-                            aria-label="启用模型"
-                            checked={editingModel.enabled}
-                            type="checkbox"
-                            onChange={(event) =>
-                              updateModelField(
-                                editingApiProfile.id,
-                                editingModel.id,
-                                "enabled",
-                                event.target.checked,
-                              )
-                            }
-                          />
-                        </label>
-                        <label className="detail-field">
-                          <span>模型描述</span>
-                          <textarea
-                            aria-label="模型描述"
-                            rows={3}
-                            value={editingModel.description}
-                            onChange={(event) =>
-                              updateModelField(
-                                editingApiProfile.id,
-                                editingModel.id,
-                                "description",
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </label>
-                        <div className="detail-field danger-zone">
-                          <span>模型操作</span>
-                          <button
-                            className="danger-button"
-                            type="button"
-                            onClick={() =>
-                              deleteModel(editingApiProfile.id, editingModel.id)
-                            }
-                          >
-                            <Trash2 size={16} />
-                            删除当前模型
-                          </button>
-                          <small>
-                            仅删除当前连接下的模型配置和助手绑定；历史消息保留原始快照。
-                          </small>
+                      <>
+                        <header className="config-detail-header compact">
+                          <div className="section-caption">
+                            <span>当前模型详情</span>
+                          </div>
+                          <div className="header-actions">
+                            <label className="compact-toggle">
+                              <input
+                                aria-label="启用模型"
+                                checked={editingModel.enabled}
+                                type="checkbox"
+                                onChange={(event) =>
+                                  updateModelField(
+                                    editingApiProfile.id,
+                                    editingModel.id,
+                                    "enabled",
+                                    event.target.checked,
+                                  )
+                                }
+                              />
+                              <span>启用</span>
+                            </label>
+                            <button
+                              className="danger-button"
+                              type="button"
+                              onClick={() =>
+                                deleteModel(
+                                  editingApiProfile.id,
+                                  editingModel.id,
+                                )
+                              }
+                            >
+                              <Trash2 size={16} />
+                              删除模型
+                            </button>
+                          </div>
+                        </header>
+                        <div className="reflected-fields">
+                          <label className="detail-field">
+                            <span>模型 ID / slug</span>
+                            <input
+                              aria-label="模型 ID"
+                              value={editingModel.id}
+                              onChange={(event) =>
+                                updateModelField(
+                                  editingApiProfile.id,
+                                  editingModel.id,
+                                  "id",
+                                  event.target.value,
+                                )
+                              }
+                            />
+                          </label>
+                          <label className="detail-field">
+                            <span>显示名称</span>
+                            <input
+                              aria-label="模型名称"
+                              value={editingModel.name}
+                              onChange={(event) =>
+                                updateModelField(
+                                  editingApiProfile.id,
+                                  editingModel.id,
+                                  "name",
+                                  event.target.value,
+                                )
+                              }
+                            />
+                          </label>
+                          <label className="detail-field">
+                            <span>模型描述</span>
+                            <textarea
+                              aria-label="模型描述"
+                              rows={3}
+                              value={editingModel.description}
+                              onChange={(event) =>
+                                updateModelField(
+                                  editingApiProfile.id,
+                                  editingModel.id,
+                                  "description",
+                                  event.target.value,
+                                )
+                              }
+                            />
+                          </label>
                         </div>
-                      </div>
+                      </>
                     ) : null}
                   </section>
                 ) : null}
@@ -6920,7 +7162,7 @@ function App() {
                     },
                     {
                       title: "功能助手",
-                      description: "用于总结、压缩等内置语义任务。",
+                      description: "用于上下文总结等内置语义任务。",
                       items: utilityAssistants,
                     },
                   ].map((section) => (
@@ -6999,13 +7241,21 @@ function App() {
                     <h3>{editingAssistant.name}</h3>
                   </div>
                   <div className="header-actions">
-                    <button
-                      type="button"
-                      disabled={editingAssistant.kind !== "chat"}
-                      onClick={() => activateAssistant(editingAssistant.id)}
-                    >
-                      设为当前
-                    </button>
+                    <label className="compact-toggle">
+                      <input
+                        aria-label="启用助手"
+                        checked={editingAssistant.enabled}
+                        type="checkbox"
+                        onChange={(event) =>
+                          updateAssistantField(
+                            editingAssistant.id,
+                            "enabled",
+                            event.target.checked,
+                          )
+                        }
+                      />
+                      <span>启用</span>
+                    </label>
                     <button
                       className="danger-button"
                       type="button"
@@ -7018,66 +7268,92 @@ function App() {
                 </header>
 
                 <div className="reflected-fields">
-                  {assistantFields.map((field) => {
-                    const value = editingAssistant[field.key];
+                  {assistantFields
+                    .filter((field) => field.key !== "enabled")
+                    .map((field) => {
+                      const value = editingAssistant[field.key];
 
-                    if (field.control === "checkbox") {
-                      return (
-                        <label
-                          className="detail-field checkbox-field"
-                          key={field.key}
-                        >
-                          <span>{field.label}</span>
-                          <input
-                            aria-label={field.label}
-                            checked={Boolean(value)}
-                            type="checkbox"
-                            onChange={(event) =>
-                              updateAssistantField(
-                                editingAssistant.id,
-                                field.key,
-                                event.target.checked,
-                              )
-                            }
-                          />
-                        </label>
-                      );
-                    }
+                      if (field.control === "checkbox") {
+                        return (
+                          <label
+                            className="detail-field checkbox-field"
+                            key={field.key}
+                          >
+                            <span>{field.label}</span>
+                            <input
+                              aria-label={field.label}
+                              checked={Boolean(value)}
+                              type="checkbox"
+                              onChange={(event) =>
+                                updateAssistantField(
+                                  editingAssistant.id,
+                                  field.key,
+                                  event.target.checked,
+                                )
+                              }
+                            />
+                          </label>
+                        );
+                      }
 
-                    if (field.control === "select") {
-                      return (
-                        <div className="detail-field" key={field.key}>
-                          <span>{field.label}</span>
-                          <CustomSelect
-                            label={field.label}
-                            value={String(value)}
-                            options={
-                              field.options?.map((option) => ({
-                                value: option.value,
-                                label: option.label,
-                              })) ?? []
-                            }
-                            onChange={(nextValue) =>
-                              updateAssistantField(
-                                editingAssistant.id,
-                                field.key,
-                                nextValue,
-                              )
-                            }
-                          />
-                          {field.helper ? <small>{field.helper}</small> : null}
-                        </div>
-                      );
-                    }
+                      if (field.control === "select") {
+                        return (
+                          <div className="detail-field" key={field.key}>
+                            <span>{field.label}</span>
+                            <CustomSelect
+                              label={field.label}
+                              value={String(value)}
+                              options={
+                                field.options?.map((option) => ({
+                                  value: option.value,
+                                  label: option.label,
+                                })) ?? []
+                              }
+                              onChange={(nextValue) =>
+                                updateAssistantField(
+                                  editingAssistant.id,
+                                  field.key,
+                                  nextValue,
+                                )
+                              }
+                            />
+                            {field.helper ? (
+                              <small>{field.helper}</small>
+                            ) : null}
+                          </div>
+                        );
+                      }
 
-                    if (field.control === "textarea") {
+                      if (field.control === "textarea") {
+                        return (
+                          <label className="detail-field" key={field.key}>
+                            <span>{field.label}</span>
+                            <textarea
+                              aria-label={field.label}
+                              placeholder={field.placeholder}
+                              rows={field.key === "prompt" ? 4 : 3}
+                              value={String(value)}
+                              onChange={(event) =>
+                                updateAssistantField(
+                                  editingAssistant.id,
+                                  field.key,
+                                  event.target.value,
+                                )
+                              }
+                            />
+                            {field.helper ? (
+                              <small>{field.helper}</small>
+                            ) : null}
+                          </label>
+                        );
+                      }
+
                       return (
                         <label className="detail-field" key={field.key}>
                           <span>{field.label}</span>
-                          <textarea
+                          <input
                             aria-label={field.label}
                             placeholder={field.placeholder}
-                            rows={field.key === "prompt" ? 4 : 3}
                             value={String(value)}
                             onChange={(event) =>
                               updateAssistantField(
@@ -7090,27 +7366,7 @@ function App() {
                           {field.helper ? <small>{field.helper}</small> : null}
                         </label>
                       );
-                    }
-
-                    return (
-                      <label className="detail-field" key={field.key}>
-                        <span>{field.label}</span>
-                        <input
-                          aria-label={field.label}
-                          placeholder={field.placeholder}
-                          value={String(value)}
-                          onChange={(event) =>
-                            updateAssistantField(
-                              editingAssistant.id,
-                              field.key,
-                              event.target.value,
-                            )
-                          }
-                        />
-                        {field.helper ? <small>{field.helper}</small> : null}
-                      </label>
-                    );
-                  })}
+                    })}
                 </div>
 
                 {editingAssistant.kind === "chat" ? (
