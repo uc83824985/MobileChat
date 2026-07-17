@@ -1,6 +1,6 @@
 # Mobile UI state
 
-Date: 2026-07-14
+Date: 2026-07-17
 
 ## Current verified state
 
@@ -14,7 +14,7 @@ Date: 2026-07-14
 - Connection compatibility is protocol-specific. A user-configured Grok connection was observed to fail with 404 on Responses while succeeding on Chat Completions, so each connection must preserve the selected protocol instead of assuming one relay-wide default.
 - Web access is protocol-specific and turn-scoped: Responses sends `tools: [{ type: "web_search" }]`; Chat Completions sends `web_search_options: {}` only when the composer's current-turn web option is enabled.
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
-- Web access is now wired as a composer-level temporary request option rather than a static model toggle. Multimodal intent is also kept in the composer as a current-turn placeholder; image/file content sending is still not wired into the request builder.
+- Web access is wired as a composer-level temporary request option rather than a static model toggle. First-stage image input is wired through the composer: the image button opens one file-pick request without acting as a highlighted toggle; desktop paste reads image files from `Ctrl+V`; selected images are previewed locally, stored in the `blobs` store as image cache records, attached to the user message as lightweight references, and serialized into OpenAI-compatible Responses / Chat Completions image content parts when sent. Non-image file input is still not implemented.
 - The composer is a multi-line textarea that grows with content up to a bounded height. A persisted input shortcut setting supports either `Enter` to send with `Shift+Enter` newline, or `Enter` newline with `Ctrl+Enter` send. `Ctrl+J` always inserts a newline to mimic the CLI-style line break shortcut on desktop.
 
 ## Implemented response to mobile feedback
@@ -76,7 +76,8 @@ Date: 2026-07-14
 
 ## Persistence and import/export
 
-- `MobileChatDB` stores settings, API profiles, assistants, reusable context configurations, conversations, messages, and reserved stores for drafts/checkpoints/blobs.
+- `MobileChatDB` stores settings, API profiles, assistants, reusable context configurations, conversations, messages, and stores for drafts/checkpoints/blobs. The current `blobs` implementation stores first-stage image cache records as data URLs plus metadata.
+- Messages can include `imageParts[]` that reference `blobs` records by ID. Clearing image cache keeps message records and image placeholders, but removes preview/retry image payloads.
 - Messages now store `createdAt`, assistant `completedAt`, and assistant `elapsedMs` where available. They are rendered chronologically by creation time, while completed assistant responses show finish time and request duration.
 - Conversations may store `contextSummaries[]` plus `activeContextSummaryId`. The current implementation still manages one active rolling summary, but each record already keeps kind, status, boundary message ID, covered message count, retained raw tail count, framework snapshot, context configuration snapshot, update time, and summary-assistant/model source snapshot.
 - During rapid iteration, persistence accepts only the current MobileChatDB record shape. Older fields are not translated into current configuration; users may reconfigure local profiles/assistants if a breaking schema change lands before the stable version.
@@ -86,6 +87,7 @@ Date: 2026-07-14
 - The current implementation persists normalized full snapshots. This is acceptable for the current small prototype; future large histories should move to dirty-record writes as specified in the architecture document.
 - `.mobilechat` archives contain `manifest.json`, `records.json`, and `checksums.json`.
 - The current export path is credential-free: connection metadata and model definitions are exported, but `apiKey` is cleared.
+- The current default export also excludes image cache blobs to avoid unexpectedly large backups. Message image references remain in records as placeholders; a future explicit media-inclusive export can preserve image payloads.
 - Desktop Playwright verifies title edit → settings edit → autosave → reload → export → local mutation → import → restored records with API key removed.
 
 ## Diagnostics and usage display
@@ -100,10 +102,11 @@ Date: 2026-07-14
 
 - For an OpenAI-compatible Responses route, web access requires an explicit tool configuration such as `tools: [{ "type": "web_search" }]`. MobileChat sends it only when the current composer turn enables “联网”.
 - Prompting “请联网查询” is not sufficient if the request does not declare a search tool or the selected model route does not support it.
-- Image URL/file input should use generic MobileChat content parts locally, then serialize only when the current draft contains those parts and the active adapter/profile/model declares image-input support.
+- Image file input currently uses `accept="image/*"` for mobile/desktop file pickers and also supports desktop clipboard paste, with a first-stage safety cap of 4 images per turn and 8 MB per image. Adding images appends body references such as `[图片1]`; draft thumbnails and message-record thumbnails open an in-app preview dialog and display `图片1 · filename` instead of internal IDs. When an attached image has a live cache record, Responses receives `input_image` parts and Chat Completions receives `image_url` parts, with an adjacent text part such as `附件 [图片1] 对应下面这张图片...` so the model can map the textual placeholder to the binary image content by label and order. If the cache was cleared, requests and summaries fall back to text placeholders such as `[图片1：name，mime，size]`.
+- Context summary jobs do not receive image data URLs. They receive only image metadata placeholders, so image-only messages can still be summarized without inflating summary requests with binary payloads.
 - Streaming can be requested by sending `stream: true`, but true incremental display still requires the gateway to flush SSE events. If the gateway returns JSON, MobileChat falls back to one-shot display.
 - Enabling web access can legitimately increase response latency because the provider or relay may perform hosted search/tool execution before producing the final assistant text. Successful searched responses are therefore not treated as an implementation error solely because they are slower than non-search turns.
-- Debug diagnostics fold current-turn options into the pre-send budget card, for example `模型名 · 联网 · 仅文本`, instead of rendering a separate transient-options card.
+- Debug diagnostics fold current-turn options into the pre-send budget card, for example `模型名 · 联网 · 仅文本` or `模型名 · 不联网 · 2 图`, instead of rendering a separate transient-options card.
 - When a valid `contextSummary` exists, the debug input estimate is based on the projected request (`contextSummary` plus raw tail) rather than the full visible message list.
 - Conversation titles are request metadata and are not semantic memory. Summary requests may receive the title/list summary as positioning context, but the prompt explicitly tells the summary assistant not to write them into the summary body unless the user is discussing those fields as business facts.
 

@@ -99,7 +99,7 @@ MobileChatDB
 - `messages`：规范消息、创建时间、助手回复完成时间、浏览器观测耗时、content parts、分支关系、助手/模型来源快照、usage/debug 观测。渲染顺序必须基于 `createdAt` 或显式序号，不能依赖 IndexedDB `getAll()` 的主键顺序，因为 `assistant-*` / `message-*` 前缀会破坏真实对话顺序。
 - `drafts`：每个对话的未发送草稿。
 - `contextCheckpoints`：不可变压缩检查点。
-- `blobs`：后续多模态附件的二进制内容和元数据。
+- `blobs`：多模态附件缓存和元数据。当前首版图片实现用 data URL 存储图片缓存，消息只保存轻量 `imageParts[]` 引用和 `referenceLabel`（例如 `图片1`）；正文可用 `[图片1]` 引用对应图片。后续可将 payload 迁移为独立二进制条目以降低 Base64 体积。
 
 写入策略采用“内存优先、后台持久化”：
 
@@ -331,10 +331,10 @@ checksums.json
 
 - `manifest.json`：导出格式版本、应用版本、导出时间和导出选项。
 - `records.json`：连接（内部字段仍为 API profiles）、助手、对话、消息、检查点和设置。
-- `blobs/`：可选附件原始二进制，避免 Base64 体积膨胀。
+- `blobs/`：可选附件原始二进制，避免 Base64 体积膨胀。当前首版 `.mobilechat` 默认不导出图片缓存；只有未来显式启用媒体导出时才应包含该目录或等价媒体 payload。
 - `checksums.json`：各条目完整性校验。
 
-完整迁移模式在用户明确确认后包含 API Key；无凭据模式保留 connection/model 元数据但清空秘密字段。当前已实现的是无凭据导出：`.mobilechat` 会保留连接、模型、助手绑定、对话和消息，但清空 `apiKey`。浏览器持久文件句柄不导出。
+完整迁移模式在用户明确确认后包含 API Key；无凭据模式保留 connection/model 元数据但清空秘密字段。当前已实现的是无凭据导出：`.mobilechat` 会保留连接、模型、助手绑定、对话和消息，但清空 `apiKey`，并默认排除图片缓存以避免导出体积失控。浏览器持久文件句柄不导出。
 
 导入必须先隔离解析并验证 ZIP 路径、校验值、格式版本、schema、内部引用与 blob 元数据，再显示预览，最后执行事务性覆盖或带 ID 重映射的合并。跨设备访问指手动导出、传输和导入，不代表实时同步。
 
