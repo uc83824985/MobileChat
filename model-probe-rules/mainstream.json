@@ -1,0 +1,233 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-07-17",
+  "name": "mainstream-agent-model-probe-rules",
+  "description": "Curated mainstream text/chat model probe rules. Rules use a major-version range plus ordered suffix arguments.",
+  "selectionPolicy": [
+    "Probe by model-family group by default; full-manifest probing is allowed but can create many requests.",
+    "Prefer current major families over legacy generations.",
+    "Prefer text/chat/agent/coding models; omit image/audio/video-only models.",
+    "Avoid tiny/nano/legacy/date-stamped variants unless they are common gateway aliases."
+  ],
+  "ruleSyntax": [
+    "Use version as {\"type\":\"minorTenths\",\"majors\":[\"5\"],\"from\":4,\"to\":6}.",
+    "minorTenths value 0 emits the major version without .0, for example grok-4 or gemini-3.",
+    "minorTenths supports optional \"separator\":\"-\" for aliases such as claude-opus-4-8.",
+    "Use arg1/arg2/... as ordered suffix segments; empty string means no suffix at that segment, non-empty values are automatically prefixed with '-' after trimming legacy leading dashes.",
+    "Default rules avoid fixed model aliases; use dimensions even when a range only contains one version."
+  ],
+  "groups": [
+    {
+      "id": "gpt",
+      "provider": "OpenAI / OpenAI-compatible gateways",
+      "rules": [
+        {
+          "template": "gpt-{version}{arg1}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["5"],
+              "from": 4,
+              "to": 6
+            },
+            "arg1": ["", "pro", "mini", "sol", "terra", "luna"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "gpt-codex",
+      "provider": "OpenAI / OpenAI-compatible gateways",
+      "rules": [
+        {
+          "template": "gpt-{version}{arg1}{arg2}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["5"],
+              "from": 4,
+              "to": 6
+            },
+            "arg1": ["codex"],
+            "arg2": ["high", "medium", "low"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "provider": "Anthropic Claude",
+      "rules": [
+        {
+          "template": "claude{arg1}-{version}",
+          "dimensions": {
+            "arg1": ["fable", "sonnet"],
+            "version": {
+              "type": "minorTenths",
+              "majors": ["5"],
+              "from": 0,
+              "to": 0
+            }
+          }
+        },
+        {
+          "template": "claude-opus-{version}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["4"],
+              "from": 8,
+              "to": 8,
+              "separator": "-"
+            }
+          }
+        },
+        {
+          "template": "claude-haiku-{version}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["4"],
+              "from": 5,
+              "to": 5,
+              "separator": "-"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "gemini",
+      "provider": "Google Gemini / Gemini-compatible gateways",
+      "rules": [
+        {
+          "template": "gemini-{version}{arg1}{arg2}{arg3}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["3"],
+              "from": 0,
+              "to": 5
+            },
+            "arg1": ["pro", "flash", "flash-lite"],
+            "arg2": ["preview"],
+            "arg3": ["", "thinking", "thinking-128"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "grok",
+      "provider": "xAI Grok / Grok-compatible gateways",
+      "rules": [
+        {
+          "template": "grok-{version}{arg1}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["4"],
+              "from": 0,
+              "to": 3
+            },
+            "arg1": ["", "fast", "reasoning", "fast-reasoning", "thinking"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "deepseek",
+      "provider": "DeepSeek / DeepSeek-compatible gateways",
+      "rules": [
+        {
+          "template": "deepseek-v{version}{arg1}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["4"],
+              "from": 0,
+              "to": 0
+            },
+            "arg1": ["pro", "flash"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen",
+      "provider": "Qwen / Alibaba Cloud Model Studio-compatible gateways",
+      "rules": [
+        {
+          "template": "qwen{version}{arg1}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["3"],
+              "from": 6,
+              "to": 7
+            },
+            "arg1": ["max", "plus", "flash"]
+          }
+        },
+        {
+          "template": "qwen{version}{arg1}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["3"],
+              "from": 0,
+              "to": 0
+            },
+            "arg1": ["coder"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "kimi",
+      "provider": "Moonshot Kimi",
+      "rules": [
+        {
+          "template": "kimi-k{version}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["3"],
+              "from": 0,
+              "to": 0
+            }
+          }
+        },
+        {
+          "template": "kimi-k{version}{arg1}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["2"],
+              "from": 6,
+              "to": 9
+            },
+            "arg1": ["", "code", "code-highspeed"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "glm",
+      "provider": "Z.ai / Zhipu GLM-compatible gateways",
+      "rules": [
+        {
+          "template": "glm-{version}{arg1}",
+          "dimensions": {
+            "version": {
+              "type": "minorTenths",
+              "majors": ["4", "5"],
+              "from": 2,
+              "to": 7
+            },
+            "arg1": ["", "air", "flash"]
+          }
+        }
+      ]
+    }
+  ]
+}

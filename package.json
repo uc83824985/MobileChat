@@ -14,6 +14,7 @@
     "test:watch": "vitest",
     "test:browser": "playwright test",
     "desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File ./run.ps1",
+    "models:probe": "node ./scripts/probe-models.mjs",
     "mobile:package": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-android.ps1 -PackageOnly",
     "mobile:adb": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-android.ps1",
     "preview": "vite preview"

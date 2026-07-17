@@ -18,6 +18,7 @@ import {
   type ModelRef,
   type StorageInfo,
 } from "../domain";
+import { normalizeModelProbeSettings } from "../modelProbe";
 
 export const MOBILE_CHAT_DB_NAME = "MobileChatDB";
 export const MOBILE_CHAT_DB_VERSION = 1;
@@ -412,6 +413,9 @@ export const normalizeSnapshot = (
         ...defaultUtilityAssistantRefs,
         ...settings.utilityAssistantRefs,
       },
+      modelProbeSettings: normalizeModelProbeSettings(
+        settings.modelProbeSettings,
+      ),
       contextSummaryFramework: normalizeContextSummaryFramework(
         settings.contextSummaryFramework,
       ),

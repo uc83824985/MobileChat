@@ -125,6 +125,41 @@ export type ApiProfile = {
   models: ModelDefinition[];
 };
 
+export type ModelProbeMinorTenthsDimension = {
+  type: "minorTenths";
+  majors: string[];
+  from?: number;
+  to?: number;
+  separator?: "." | "-";
+};
+
+export type ModelProbeDimensionValue =
+  | string
+  | string[]
+  | ModelProbeMinorTenthsDimension
+  | { values: ModelProbeDimensionValue[] };
+
+export type ModelProbeRule = {
+  id: string;
+  template: string;
+  dimensions: Record<string, ModelProbeDimensionValue>;
+  enabled: boolean;
+  description: string;
+};
+
+export type ModelProbeGroup = {
+  id: string;
+  name: string;
+  description: string;
+  rules: ModelProbeRule[];
+};
+
+export type ModelProbeSettings = {
+  groups: ModelProbeGroup[];
+  editingGroupId: string;
+  timeoutMs: number;
+};
+
 export type ModelRef = {
   apiProfileId: string;
   modelId: string;
@@ -180,6 +215,7 @@ export type AppSettings = {
   apiProfileOrder: string[];
   assistantOrder: string[];
   utilityAssistantRefs: UtilityAssistantFeatureRefs;
+  modelProbeSettings: ModelProbeSettings;
   contextSummaryFramework: ContextSummaryFramework;
   contextProfiles: ContextProfile[];
   editingContextProfileId: string;
@@ -216,6 +252,7 @@ export const DEFAULT_CONTEXT_SUMMARY_FRAMEWORK_ID = "default-context-summary";
 export const DEFAULT_CONTEXT_PROFILE_ID = "general-context";
 export const DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES = 8;
 export const DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL = 8;
+export const DEFAULT_MODEL_PROBE_GROUP_ID = "grok";
 export const DEFAULT_MODEL_REF: ModelRef = {
   apiProfileId: DEFAULT_PROFILE_ID,
   modelId: DEFAULT_MODEL_ID,
@@ -224,6 +261,126 @@ export const DEFAULT_MODEL_REF: ModelRef = {
 export const defaultUtilityAssistantRefs: UtilityAssistantFeatureRefs = {
   contextSummaryAssistantId: CONTEXT_SUMMARY_ASSISTANT_ID,
   contextCompressionAssistantId: CONTEXT_COMPRESSION_ASSISTANT_ID,
+};
+
+export const defaultModelProbeSettings: ModelProbeSettings = {
+  groups: [
+    {
+      id: "gpt",
+      name: "GPT 5.x",
+      description: "GPT 5 大版本探测；包含裸模型、mini/pro、Sol/Terra/Luna。",
+      rules: [
+        {
+          id: "gpt-family",
+          template: "gpt-{version}{arg1}",
+          dimensions: {
+            version: { type: "minorTenths", majors: ["5"], from: 4, to: 6 },
+            arg1: ["", "pro", "mini", "sol", "terra", "luna"],
+          },
+          enabled: true,
+          description: "",
+        },
+      ],
+    },
+    {
+      id: "gpt-codex",
+      name: "GPT Codex 5.x",
+      description:
+        "GPT 5 Codex 大版本探测；按 codex 后缀和 high/medium/low 强度展开。",
+      rules: [
+        {
+          id: "gpt-codex",
+          template: "gpt-{version}{arg1}{arg2}",
+          dimensions: {
+            version: { type: "minorTenths", majors: ["5"], from: 4, to: 6 },
+            arg1: ["codex"],
+            arg2: ["high", "medium", "low"],
+          },
+          enabled: true,
+          description: "",
+        },
+      ],
+    },
+    {
+      id: "grok",
+      name: "Grok 4.x",
+      description:
+        "Grok 4 主流文本模型探测；覆盖 fast、reasoning、thinking，忽略 :origin 等特殊别名。",
+      rules: [
+        {
+          id: "grok-4x-mainstream",
+          template: "grok-{version}{arg1}",
+          dimensions: {
+            version: { type: "minorTenths", majors: ["4"], from: 0, to: 3 },
+            arg1: ["", "fast", "reasoning", "fast-reasoning", "thinking"],
+          },
+          enabled: true,
+          description: "",
+        },
+      ],
+    },
+    {
+      id: "gemini",
+      name: "Gemini 3.x",
+      description:
+        "Gemini 3 大版本探测；保留截图里出现的 preview / thinking 主流后缀。",
+      rules: [
+        {
+          id: "gemini-mainstream",
+          template: "gemini-{version}{arg1}{arg2}{arg3}",
+          dimensions: {
+            version: { type: "minorTenths", majors: ["3"], from: 0, to: 5 },
+            arg1: ["pro", "flash", "flash-lite"],
+            arg2: ["preview"],
+            arg3: ["", "thinking", "thinking-128"],
+          },
+          enabled: true,
+          description: "",
+        },
+      ],
+    },
+    {
+      id: "qwen",
+      name: "Qwen 3.x",
+      description: "Qwen 3 大版本探测；仅保留 max/plus/flash 主流后缀。",
+      rules: [
+        {
+          id: "qwen-3x",
+          template: "qwen{version}{arg1}",
+          dimensions: {
+            version: { type: "minorTenths", majors: ["3"], from: 6, to: 7 },
+            arg1: ["max", "plus", "flash"],
+          },
+          enabled: true,
+          description: "",
+        },
+      ],
+    },
+    {
+      id: "glm",
+      name: "GLM 4.x / 5.x",
+      description: "GLM 4 和 5 大版本探测，保留 air / flash 后缀。",
+      rules: [
+        {
+          id: "glm-mainstream",
+          template: "glm-{version}{arg1}",
+          dimensions: {
+            version: {
+              type: "minorTenths",
+              majors: ["4", "5"],
+              from: 2,
+              to: 7,
+            },
+            arg1: ["", "air", "flash"],
+          },
+          enabled: true,
+          description: "",
+        },
+      ],
+    },
+  ],
+  editingGroupId: DEFAULT_MODEL_PROBE_GROUP_ID,
+  timeoutMs: 3000,
 };
 
 export const defaultContextSummaryFramework: ContextSummaryFramework = {
@@ -440,6 +597,7 @@ export const createInitialSettings = (
   apiProfileOrder: initialApiProfiles.map((profile) => profile.id),
   assistantOrder: initialAssistants.map((assistant) => assistant.id),
   utilityAssistantRefs: defaultUtilityAssistantRefs,
+  modelProbeSettings: defaultModelProbeSettings,
   contextSummaryFramework: defaultContextSummaryFramework,
   contextProfiles: [defaultContextProfile],
   editingContextProfileId: defaultContextProfile.id,
