@@ -3,6 +3,7 @@ import type {
   ApiProfile,
   Assistant,
   Conversation,
+  LocalBlobRecord,
   Message,
   ModelDefinition,
 } from "../domain";
@@ -54,6 +55,67 @@ const messages: Message[] = [
     createdAt: "2026-07-13T00:00:00.000Z",
   },
 ];
+
+const imageBlob: LocalBlobRecord = {
+  id: "blob_1",
+  kind: "image",
+  mimeType: "image/png",
+  name: "sample.png",
+  size: 12,
+  dataUrl: "data:image/png;base64,QUJD",
+  createdAt: "2026-07-13T00:00:00.000Z",
+};
+
+const secondImageBlob: LocalBlobRecord = {
+  id: "blob_2",
+  kind: "image",
+  mimeType: "image/jpeg",
+  name: "second.jpg",
+  size: 34,
+  dataUrl: "data:image/jpeg;base64,REVG",
+  createdAt: "2026-07-13T00:01:00.000Z",
+};
+
+const imageMessage: Message = {
+  ...messages[0]!,
+  text: "describe",
+  imageParts: [
+    {
+      id: "image_1",
+      type: "image",
+      blobId: imageBlob.id,
+      mimeType: imageBlob.mimeType,
+      name: imageBlob.name,
+      size: imageBlob.size,
+      referenceLabel: "图片1",
+    },
+  ],
+};
+
+const multiImageMessage: Message = {
+  ...messages[0]!,
+  text: "compare [图片1] and [图片2]",
+  imageParts: [
+    {
+      id: "image_1",
+      type: "image",
+      blobId: imageBlob.id,
+      mimeType: imageBlob.mimeType,
+      name: imageBlob.name,
+      size: imageBlob.size,
+      referenceLabel: "图片1",
+    },
+    {
+      id: "image_2",
+      type: "image",
+      blobId: secondImageBlob.id,
+      mimeType: secondImageBlob.mimeType,
+      name: secondImageBlob.name,
+      size: secondImageBlob.size,
+      referenceLabel: "图片2",
+    },
+  ],
+};
 
 const createStreamResponse = (chunks: string[]) => {
   const encoder = new TextEncoder();
@@ -254,6 +316,95 @@ describe("responsesClient", () => {
     ).toBe("test prompt\n\nprofile instruction");
   });
 
+  it("serializes image parts for Responses requests", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ output_text: "vision ok" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestResponsesChat({
+      apiProfile,
+      assistant,
+      conversation,
+      model,
+      messages: [imageMessage],
+      blobs: [imageBlob],
+      signal: new AbortController().signal,
+      stream: false,
+    });
+
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).input,
+    ).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "describe" },
+          {
+            type: "input_text",
+            text: "附件 [图片1] 对应下面这张图片：sample.png，image/png，12 bytes。",
+          },
+          {
+            type: "input_image",
+            image_url: imageBlob.dataUrl,
+            detail: "auto",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps multiple image references adjacent to their image parts", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ output_text: "multi vision ok" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestResponsesChat({
+      apiProfile,
+      assistant,
+      conversation,
+      model,
+      messages: [multiImageMessage],
+      blobs: [imageBlob, secondImageBlob],
+      signal: new AbortController().signal,
+      stream: false,
+    });
+
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).input[0].content,
+    ).toEqual([
+      {
+        type: "input_text",
+        text: "compare [图片1] and [图片2]",
+      },
+      {
+        type: "input_text",
+        text: "附件 [图片1] 对应下面这张图片：sample.png，image/png，12 bytes。",
+      },
+      {
+        type: "input_image",
+        image_url: imageBlob.dataUrl,
+        detail: "auto",
+      },
+      {
+        type: "input_text",
+        text: "附件 [图片2] 对应下面这张图片：second.jpg，image/jpeg，34 bytes。",
+      },
+      {
+        type: "input_image",
+        image_url: secondImageBlob.dataUrl,
+        detail: "auto",
+      },
+    ]);
+  });
+
   it("supports OpenAI-compatible Chat Completions profiles", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -308,6 +459,49 @@ describe("responsesClient", () => {
       outputTokens: 2,
       totalTokens: 8,
       cachedInputTokens: undefined,
+    });
+  });
+
+  it("serializes image parts for Chat Completions requests", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "chat vision ok" } }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestResponsesChat({
+      apiProfile: {
+        ...apiProfile,
+        protocol: "openai-chat-completions",
+      },
+      assistant,
+      conversation,
+      model,
+      messages: [imageMessage],
+      blobs: [imageBlob],
+      signal: new AbortController().signal,
+      stream: false,
+    });
+
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).messages[1],
+    ).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "describe" },
+        {
+          type: "text",
+          text: "附件 [图片1] 对应下面这张图片：sample.png，image/png，12 bytes。",
+        },
+        {
+          type: "image_url",
+          image_url: { url: imageBlob.dataUrl },
+        },
+      ],
     });
   });
 

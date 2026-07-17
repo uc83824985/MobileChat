@@ -52,7 +52,7 @@ test.beforeEach(async ({ page }) => {
 
 test("opens the mobile chat shell", async ({ page }) => {
   await expect(page.getByRole("region", { name: "当前对话" })).toBeVisible();
-  await expect(page.getByText("Context diagnostics")).toBeVisible();
+  await expect(page.locator(".diagnostics-panel")).toBeVisible();
   await expect(page.getByLabel("选择助手")).toBeVisible();
   await expect(page.getByLabel("选择模型")).toBeVisible();
 

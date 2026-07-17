@@ -68,6 +68,26 @@ export type ResponseUsage = {
   cachedInputTokens?: number;
 };
 
+export type MessageImagePart = {
+  id: string;
+  type: "image";
+  blobId: string;
+  mimeType: string;
+  name: string;
+  size: number;
+  referenceLabel?: string;
+};
+
+export type LocalBlobRecord = {
+  id: string;
+  kind: "image";
+  mimeType: string;
+  name: string;
+  size: number;
+  dataUrl: string;
+  createdAt: string;
+};
+
 export type MessageSourceSnapshot = {
   assistantId: string;
   assistantName: string;
@@ -92,6 +112,7 @@ export type Message = {
   source?: MessageSourceSnapshot;
   providerResponseId?: string;
   usage?: ResponseUsage;
+  imageParts?: MessageImagePart[];
 };
 
 export type AssistantKind = "chat" | "utility";
@@ -238,11 +259,12 @@ export type LocalDataSnapshot = {
   assistants: Assistant[];
   conversations: Conversation[];
   messages: Message[];
+  blobs: LocalBlobRecord[];
 };
 
 export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 
-export const DATABASE_SCHEMA_VERSION = 10;
+export const DATABASE_SCHEMA_VERSION = 11;
 
 export const DEFAULT_PROFILE_ID = "default-profile";
 export const DEFAULT_MODEL_ID = "default-model";
@@ -611,4 +633,5 @@ export const createInitialSnapshot = (): LocalDataSnapshot => ({
   assistants: initialAssistants,
   conversations: initialConversations,
   messages: initialMessages,
+  blobs: [],
 });

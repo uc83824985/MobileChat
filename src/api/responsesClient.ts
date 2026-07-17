@@ -2,7 +2,9 @@ import type {
   ApiProfile,
   Assistant,
   Conversation,
+  LocalBlobRecord,
   Message,
+  MessageImagePart,
   ModelDefinition,
   ResponseUsage,
 } from "../domain";
@@ -14,6 +16,7 @@ export type ResponsesChatRequest = {
   model: ModelDefinition;
   contextInstruction?: string;
   messages: Message[];
+  blobs?: LocalBlobRecord[];
   signal: AbortSignal;
   stream: boolean;
   webSearchEnabled?: boolean;
@@ -143,11 +146,140 @@ export const extractUsage = (payload: unknown): ResponseUsage | undefined => {
   };
 };
 
-const createTextItems = (messages: Message[]) =>
-  messages.map((message) => ({
-    role: message.role,
-    content: message.text,
-  }));
+const createBlobMap = (blobs?: LocalBlobRecord[]) =>
+  new Map((blobs ?? []).map((blob) => [blob.id, blob]));
+
+type AvailableImage = {
+  part: MessageImagePart;
+  blob: LocalBlobRecord;
+  index: number;
+};
+
+const formatImagePlaceholder = (image: {
+  name: string;
+  mimeType: string;
+  size: number;
+  referenceLabel?: string;
+}) =>
+  `[${image.referenceLabel ?? "图片"}：${image.name || "image"}，${
+    image.mimeType || "image/*"
+  }，${image.size || 0} bytes]`;
+
+const createAvailableImages = (
+  imageParts: MessageImagePart[],
+  blobMap: Map<string, LocalBlobRecord>,
+): AvailableImage[] =>
+  imageParts.flatMap((part, index) => {
+    const blob = blobMap.get(part.blobId);
+    return blob ? [{ part, blob, index }] : [];
+  });
+
+const formatAvailableImageReference = ({ part, blob, index }: AvailableImage) =>
+  `附件 [${part.referenceLabel ?? `图片${index + 1}`}] 对应下面这张图片：${
+    part.name || blob.name || "image"
+  }，${part.mimeType || blob.mimeType || "image/*"}，${
+    part.size || blob.size || 0
+  } bytes。`;
+
+const buildTextWithMissingImagePlaceholders = (
+  message: Message,
+  blobMap: Map<string, LocalBlobRecord>,
+) => {
+  const missingImages = (message.imageParts ?? []).filter(
+    (part) => !blobMap.has(part.blobId),
+  );
+  const missingText = missingImages.map(formatImagePlaceholder).join("\n");
+  const text = message.text.trim()
+    ? message.text
+    : (message.imageParts?.length ?? 0) > 0
+      ? "用户发送了图片。"
+      : message.text;
+
+  return [text, missingText].filter(Boolean).join("\n");
+};
+
+const createResponsesItems = (
+  messages: Message[],
+  blobs?: LocalBlobRecord[],
+) => {
+  const blobMap = createBlobMap(blobs);
+
+  return messages.map((message) => {
+    const imageParts =
+      message.role === "user" ? (message.imageParts ?? []) : [];
+    const availableImages = createAvailableImages(imageParts, blobMap);
+
+    if (availableImages.length === 0) {
+      return {
+        role: message.role,
+        content: buildTextWithMissingImagePlaceholders(message, blobMap),
+      };
+    }
+
+    return {
+      role: message.role,
+      content: [
+        {
+          type: "input_text",
+          text: buildTextWithMissingImagePlaceholders(message, blobMap),
+        },
+        ...availableImages.flatMap((availableImage) => [
+          {
+            type: "input_text",
+            text: formatAvailableImageReference(availableImage),
+          },
+          {
+            type: "input_image",
+            image_url: availableImage.blob.dataUrl,
+            detail: "auto",
+          },
+        ]),
+      ],
+    };
+  });
+};
+
+const createChatCompletionItems = (
+  messages: Message[],
+  blobs?: LocalBlobRecord[],
+) => {
+  const blobMap = createBlobMap(blobs);
+
+  return messages.map((message) => {
+    const imageParts =
+      message.role === "user" ? (message.imageParts ?? []) : [];
+    const availableImages = createAvailableImages(imageParts, blobMap);
+
+    if (availableImages.length === 0) {
+      return {
+        role: message.role,
+        content: buildTextWithMissingImagePlaceholders(message, blobMap),
+      };
+    }
+
+    return {
+      role: message.role,
+      content: [
+        {
+          type: "text",
+          text: buildTextWithMissingImagePlaceholders(message, blobMap),
+        },
+        ...availableImages.flatMap((availableImage) => [
+          {
+            type: "text",
+            text: formatAvailableImageReference(availableImage),
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: availableImage.blob.dataUrl,
+            },
+          },
+        ]),
+      ],
+    };
+  });
+};
 
 const combineInstructions = (
   assistantPrompt?: string,
@@ -162,6 +294,7 @@ const buildResponsesRequestBody = ({
   contextInstruction,
   model,
   messages,
+  blobs,
   stream,
   webSearchEnabled,
 }: Pick<
@@ -170,6 +303,7 @@ const buildResponsesRequestBody = ({
   | "contextInstruction"
   | "model"
   | "messages"
+  | "blobs"
   | "stream"
   | "webSearchEnabled"
 >) =>
@@ -177,7 +311,7 @@ const buildResponsesRequestBody = ({
     model: model.id,
     instructions:
       combineInstructions(assistant.prompt, contextInstruction) || undefined,
-    input: createTextItems(messages),
+    input: createResponsesItems(messages, blobs),
     tools: webSearchEnabled ? [{ type: "web_search" }] : undefined,
     store: false,
     stream,
@@ -188,6 +322,7 @@ const buildChatCompletionsRequestBody = ({
   contextInstruction,
   model,
   messages,
+  blobs,
   stream,
   webSearchEnabled,
 }: Pick<
@@ -196,6 +331,7 @@ const buildChatCompletionsRequestBody = ({
   | "contextInstruction"
   | "model"
   | "messages"
+  | "blobs"
   | "stream"
   | "webSearchEnabled"
 >) =>
@@ -214,7 +350,7 @@ const buildChatCompletionsRequestBody = ({
             },
           ]
         : []),
-      ...createTextItems(messages),
+      ...createChatCompletionItems(messages, blobs),
     ],
     stream,
   });
@@ -505,6 +641,7 @@ export const requestResponsesChat = async ({
   contextInstruction,
   model,
   messages,
+  blobs,
   signal,
   stream,
   webSearchEnabled = false,
@@ -533,6 +670,7 @@ export const requestResponsesChat = async ({
           contextInstruction,
           model,
           messages,
+          blobs,
           stream,
           webSearchEnabled,
         })
@@ -541,6 +679,7 @@ export const requestResponsesChat = async ({
           contextInstruction,
           model,
           messages,
+          blobs,
           stream,
           webSearchEnabled,
         });

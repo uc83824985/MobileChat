@@ -63,6 +63,7 @@ describe("MobileChat persistence", () => {
     ).toBe(defaultContextProfile.id);
     expect(snapshot.conversations[0]?.title).toBe("新对话 1");
     expect(snapshot.messages).toEqual([]);
+    expect(snapshot.blobs).toEqual([]);
   });
 
   it("does not reseed initial records over an existing empty database state", async () => {
@@ -361,6 +362,48 @@ describe("MobileChat persistence", () => {
     expect(restoredMessages.every((message) => message.createdAt)).toBe(true);
   });
 
+  it("persists image message parts and local blob cache", async () => {
+    const snapshot = createInitialSnapshot();
+    const blob = {
+      id: "blob-image-1",
+      kind: "image" as const,
+      mimeType: "image/png",
+      name: "shot.png",
+      size: 16,
+      dataUrl: "data:image/png;base64,QUJD",
+      createdAt: "2026-07-16T00:00:00.000Z",
+    };
+    const message = {
+      id: "message-with-image",
+      conversationId: "initial-conversation",
+      role: "user" as const,
+      label: "用户",
+      text: "看图",
+      createdAt: "2026-07-16T00:00:00.000Z",
+      imageParts: [
+        {
+          id: "image-part-1",
+          type: "image" as const,
+          blobId: blob.id,
+          mimeType: blob.mimeType,
+          name: blob.name,
+          size: blob.size,
+          referenceLabel: "图片1",
+        },
+      ],
+    };
+
+    await saveSnapshot({
+      ...snapshot,
+      messages: [message],
+      blobs: [blob],
+    });
+    const restored = await loadSnapshot();
+
+    expect(restored.messages[0]?.imageParts).toEqual(message.imageParts);
+    expect(restored.blobs).toEqual([blob]);
+  });
+
   it("round-trips a credential-free .mobilechat archive and replaces local data", async () => {
     const snapshot = createInitialSnapshot();
     const exportedSnapshot: LocalDataSnapshot = {
@@ -389,5 +432,38 @@ describe("MobileChat persistence", () => {
       restored.assistants.find((assistant) => assistant.id === "architect")
         ?.name,
     ).toBe("导出助手");
+  });
+
+  it("omits image blobs from default archive export unless explicitly included", async () => {
+    const snapshot = createInitialSnapshot();
+    const blob = {
+      id: "blob-image-1",
+      kind: "image" as const,
+      mimeType: "image/png",
+      name: "shot.png",
+      size: 16,
+      dataUrl: "data:image/png;base64,QUJD",
+      createdAt: "2026-07-16T00:00:00.000Z",
+    };
+    const snapshotWithBlob: LocalDataSnapshot = {
+      ...snapshot,
+      blobs: [blob],
+    };
+
+    const defaultArchive = await createMobileChatArchive(snapshotWithBlob, {
+      includeCredentials: false,
+    });
+    const explicitBlobArchive = await createMobileChatArchive(
+      snapshotWithBlob,
+      {
+        includeCredentials: false,
+        includeBlobs: true,
+      },
+    );
+
+    expect((await readMobileChatArchive(defaultArchive)).blobs).toEqual([]);
+    expect((await readMobileChatArchive(explicitBlobArchive)).blobs).toEqual([
+      blob,
+    ]);
   });
 });

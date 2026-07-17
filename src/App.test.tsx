@@ -678,7 +678,7 @@ describe("App", () => {
     fireEvent.click(screen.getByText("设置"));
     fireEvent.click(screen.getByText("新增连接"));
     expectCustomSelectValue("选择连接", "连接 2");
-    expect(screen.getByLabelText("模型描述")).toHaveValue("");
+    expect(screen.queryByLabelText("模型描述")).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("上移 连接 连接 2"));
     expect(screen.getByLabelText("上移 连接 连接 2")).toBeDisabled();
     fireEvent.click(screen.getByText("删除当前连接"));

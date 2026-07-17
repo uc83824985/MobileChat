@@ -96,6 +96,7 @@ const sanitizeSnapshot = (
 
   return {
     ...normalized,
+    blobs: options.includeBlobs ? normalized.blobs : [],
     apiProfiles: normalized.apiProfiles.map((profile) => ({
       ...profile,
       apiKey: options.includeCredentials ? profile.apiKey : "",

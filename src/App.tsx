@@ -6,6 +6,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  ImageIcon,
   KeyRound,
   MessageSquarePlus,
   Palette,
@@ -25,6 +26,7 @@ import {
 } from "lucide-react";
 import {
   type ChangeEvent,
+  type ClipboardEvent,
   useCallback,
   type KeyboardEvent,
   useEffect,
@@ -59,9 +61,11 @@ import {
   DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
   DEFAULT_MODEL_REF,
   defaultAssistant,
+  type LocalBlobRecord,
   type LocalDataSnapshot,
   type LayoutMode,
   type Message,
+  type MessageImagePart,
   type ModelDefinition,
   type ModelProbeDimensionValue,
   type ModelProbeGroup,
@@ -109,6 +113,15 @@ type ResolvedModel = {
   ref: ModelRef;
   key: string;
 };
+type DraftImage = MessageImagePart & {
+  previewUrl: string;
+};
+type ImagePreviewState = {
+  src: string;
+  label: string;
+  name: string;
+  size: number;
+} | null;
 
 const UI_PREFERENCES_STORAGE_KEY = "mobilechat:ui-preferences";
 const AUTOSAVE_DELAY_MS = 400;
@@ -122,6 +135,9 @@ const PANEL_SWIPE_EDGE_GUARD_PX = 32;
 const PANEL_SWIPE_TRIGGER_PX = 64;
 const PANEL_SWIPE_VERTICAL_LIMIT_PX = 56;
 const MODEL_PROBE_CONCURRENCY = 8;
+const MAX_DRAFT_IMAGES = 4;
+const MAX_DRAFT_IMAGE_BYTES = 8 * 1024 * 1024;
+const IMAGE_INPUT_ACCEPT = "image/*";
 const PANEL_SWIPE_IGNORE_SELECTOR = [
   "a",
   "button",
@@ -202,6 +218,54 @@ const isNearHorizontalViewportEdge = (clientX: number) => {
 const sortMessagesByCreatedAt = (messages: Message[]) =>
   [...messages].sort(compareMessagesByCreatedAt);
 
+const getMessageImageParts = (message: Message) => message.imageParts ?? [];
+
+const hasMessageContent = (message: Message) =>
+  Boolean(message.text.trim()) || getMessageImageParts(message).length > 0;
+
+const formatBytes = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+
+  if (bytes < 1024) {
+    return `${Math.round(bytes)} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+};
+
+const formatMessageImageMarker = (part: MessageImagePart) =>
+  `[${part.referenceLabel ?? "图片"}：${part.name || "image"}，${
+    part.mimeType || "image/*"
+  }，${formatBytes(part.size)}]`;
+
+const readImageReferenceNumber = (label?: string) => {
+  const match = label?.match(/^图片(\d+)$/);
+  return match ? Number(match[1]) : 0;
+};
+
+const readFileAsDataUrl = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("图片读取失败：FileReader 未返回 data URL。"));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("图片读取失败。"));
+    reader.readAsDataURL(file);
+  });
+
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const readBootUiPreferences = ():
   { themeMode?: ThemeMode; layoutMode?: LayoutMode } | undefined => {
   if (typeof window === "undefined") {
@@ -244,15 +308,7 @@ const createEmptyApiProfile = (index: number): ApiProfile => ({
   apiKey: "",
   protocol: "openai-responses",
   enabled: true,
-  models: [
-    {
-      id: "new-model",
-      name: "新模型",
-      description: "",
-      contextWindow: 128000,
-      enabled: true,
-    },
-  ],
+  models: [],
 });
 
 const createEmptyAssistant = (
@@ -615,11 +671,20 @@ const resolveUtilityAssistantModel = (
   return activeModel;
 };
 
-const estimateTokenCount = (messages: Message[], draft = "") => {
+const estimateTokenCount = (
+  messages: Message[],
+  draft = "",
+  draftImageCount = 0,
+) => {
   const textLength =
     messages.reduce((sum, message) => sum + message.text.length, 0) +
     draft.length;
-  return Math.max(1, Math.ceil(textLength / 2));
+  const imageCount =
+    messages.reduce(
+      (sum, message) => sum + getMessageImageParts(message).length,
+      0,
+    ) + draftImageCount;
+  return Math.max(1, Math.ceil(textLength / 2) + imageCount * 800);
 };
 
 const formatObservedUsage = (usage?: ResponseUsage) => {
@@ -666,9 +731,15 @@ const formatTranscriptMessage = (message: Message, index: number) => {
     message.role === "assistant" && message.source
       ? ` · ${message.source.assistantName} / ${message.source.modelName}`
       : "";
+  const imageText = getMessageImageParts(message)
+    .map(formatMessageImageMarker)
+    .join("\n");
+  const messageText = [message.text.trim(), imageText]
+    .filter(Boolean)
+    .join("\n");
 
   return `#${index + 1} ${roleLabel}${source}${time ? ` · ${time}` : ""}\n${
-    message.text.trim() || "[空消息]"
+    messageText || "[空消息]"
   }`;
 };
 
@@ -1049,6 +1120,7 @@ function App() {
     bootSnapshot.conversations,
   );
   const [messages, setMessages] = useState<Message[]>(bootSnapshot.messages);
+  const [blobs, setBlobs] = useState<LocalBlobRecord[]>(bootSnapshot.blobs);
   const [assistants, setAssistants] = useState<Assistant[]>(
     bootSnapshot.assistants,
   );
@@ -1104,8 +1176,6 @@ function App() {
   );
   const [nextTurnWebSearchEnabled, setNextTurnWebSearchEnabled] =
     useState(false);
-  const [nextTurnMultimodalEnabled, setNextTurnMultimodalEnabled] =
-    useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dataInspectorOpen, setDataInspectorOpen] = useState(false);
@@ -1113,6 +1183,9 @@ function App() {
     bootSnapshot.settings.debugEnabled,
   );
   const [draft, setDraft] = useState("");
+  const [draftImages, setDraftImages] = useState<DraftImage[]>([]);
+  const [composerNotice, setComposerNotice] = useState("");
+  const [imagePreview, setImagePreview] = useState<ImagePreviewState>(null);
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [scrollShortcutTarget, setScrollShortcutTarget] = useState<
     "top" | "bottom"
@@ -1160,6 +1233,7 @@ function App() {
   const latestSnapshotRef = useRef<LocalDataSnapshot>(bootSnapshot);
   const contextSummaryJobRunningRef = useRef(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const messageThreadRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const drawerSwipeRef = useRef<{
@@ -1182,7 +1256,7 @@ function App() {
 
   useEffect(() => {
     resizeComposerInput();
-  }, [draft, resizeComposerInput, viewportProfile]);
+  }, [draft, draftImages.length, resizeComposerInput, viewportProfile]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1325,6 +1399,17 @@ function App() {
       ),
     [activeConversation?.id, messages],
   );
+  const blobMap = useMemo(
+    () => new Map(blobs.map((blob) => [blob.id, blob])),
+    [blobs],
+  );
+  const imageCacheStats = useMemo(
+    () => ({
+      count: blobs.filter((blob) => blob.kind === "image").length,
+      bytes: blobs.reduce((sum, blob) => sum + blob.size, 0),
+    }),
+    [blobs],
+  );
   const activeProjectedMessages = useMemo(
     () =>
       activeConversation
@@ -1463,6 +1548,8 @@ function App() {
           total + (conversation.contextSummaries?.length ?? 0),
         0,
       ),
+      imageBlobs: imageCacheStats.count,
+      imageBlobBytes: imageCacheStats.bytes,
       rawTailMessages: contextSummaryRawTailMessages,
       autoSummaryInterval: contextSummaryAutoMessageInterval,
     }),
@@ -1475,6 +1562,8 @@ function App() {
       contextSummaryAutoMessageInterval,
       contextSummaryRawTailMessages,
       conversations,
+      imageCacheStats.bytes,
+      imageCacheStats.count,
       messages.length,
     ],
   );
@@ -1576,6 +1665,7 @@ function App() {
           activeContextInstruction
             ? `${activeContextInstruction}\n${draft}`
             : draft,
+          draftImages.length,
         )} tokens`,
       ],
       [
@@ -1590,7 +1680,7 @@ function App() {
         "发送前预算",
         `${activeResolvedModel?.model.name ?? "未选择模型"} · ${
           nextTurnWebSearchEnabled ? "联网" : "不联网"
-        } · ${nextTurnMultimodalEnabled ? "多模态预留" : "仅文本"}`,
+        } · ${draftImages.length > 0 ? `${draftImages.length} 图` : "仅文本"}`,
       ],
       ["发送后 usage", formatObservedUsage(lastObservedUsage)],
     ],
@@ -1599,8 +1689,8 @@ function App() {
       activeContextInstruction,
       activeResolvedModel?.model.name,
       draft,
+      draftImages.length,
       lastObservedUsage,
-      nextTurnMultimodalEnabled,
       nextTurnWebSearchEnabled,
     ],
   );
@@ -1776,8 +1866,9 @@ function App() {
       assistants,
       conversations,
       messages,
+      blobs,
     }),
-    [apiProfiles, appSettings, assistants, conversations, messages],
+    [apiProfiles, appSettings, assistants, blobs, conversations, messages],
   );
 
   const applySnapshot = useCallback((snapshot: LocalDataSnapshot) => {
@@ -1785,6 +1876,7 @@ function App() {
     setAssistants(snapshot.assistants);
     setConversations(snapshot.conversations);
     setMessages(snapshot.messages);
+    setBlobs(snapshot.blobs);
     setActiveConversationId(snapshot.settings.activeConversationId);
     setActiveAssistantId(snapshot.settings.activeAssistantId);
     setActiveModelRef(snapshot.settings.activeModelRef);
@@ -1812,6 +1904,9 @@ function App() {
     setContextProfiles(snapshot.settings.contextProfiles);
     setEditingContextProfileId(snapshot.settings.editingContextProfileId);
     setLastSuccessfulExportAt(snapshot.settings.lastSuccessfulExportAt);
+    setDraftImages([]);
+    setComposerNotice("");
+    setImagePreview(null);
     setStorageInfo({
       persisted: snapshot.settings.storagePersisted ?? null,
       usage: snapshot.settings.storageUsage,
@@ -2092,6 +2187,8 @@ function App() {
     setShowArchived(false);
     setDrawerOpen(false);
     setDraft("");
+    setDraftImages([]);
+    setComposerNotice("");
     setEditingTitleConversationId(null);
     setTitleDraft("");
     stopResponse("已停止上一条未完成回复。");
@@ -2101,6 +2198,8 @@ function App() {
     setActiveConversationId(conversationId);
     setDrawerOpen(false);
     setDraft("");
+    setDraftImages([]);
+    setComposerNotice("");
     setEditingTitleConversationId(null);
     setTitleDraft("");
     stopResponse("已停止上一条未完成回复。");
@@ -2257,6 +2356,33 @@ function App() {
         (message) => message.conversationId !== deletedConversation.id,
       ),
     );
+    const deletedConversationBlobIds = new Set(
+      messages
+        .filter((message) => message.conversationId === deletedConversation.id)
+        .flatMap((message) =>
+          getMessageImageParts(message).map((part) => part.blobId),
+        ),
+    );
+    if (deletedConversationBlobIds.size > 0) {
+      setBlobs((current) =>
+        current.filter((blob) => {
+          if (!deletedConversationBlobIds.has(blob.id)) {
+            return true;
+          }
+          const referencedByRemainingMessage = messages.some(
+            (message) =>
+              message.conversationId !== deletedConversation.id &&
+              getMessageImageParts(message).some(
+                (part) => part.blobId === blob.id,
+              ),
+          );
+          const referencedByDraft = draftImages.some(
+            (image) => image.blobId === blob.id,
+          );
+          return referencedByRemainingMessage || referencedByDraft;
+        }),
+      );
+    }
     setActiveConversationId(nextConversation?.id ?? "");
     setShowArchived(
       deletedConversation.archived && remainingArchived.length > 0,
@@ -2264,6 +2390,8 @@ function App() {
     setConversationSearch("");
     setDrawerOpen(false);
     setDraft("");
+    setDraftImages([]);
+    setComposerNotice("");
     setEditingTitleConversationId(null);
     setTitleDraft("");
   };
@@ -2333,6 +2461,207 @@ function App() {
         error instanceof Error ? error.message : "导入 .mobilechat 失败",
       );
     }
+  };
+
+  const clearImageCache = () => {
+    if (imageCacheStats.count === 0) {
+      setBackupMessage("当前没有图片缓存。");
+      return;
+    }
+
+    if (
+      !confirmDestructiveAction(
+        `清理 ${imageCacheStats.count} 张本地图片缓存？消息中的图片占位会保留，但旧图片不能继续预览或随重试再次发送。`,
+      )
+    ) {
+      return;
+    }
+
+    setBlobs([]);
+    setDraftImages([]);
+    setComposerNotice("");
+    setImagePreview(null);
+    setBackupMessage(
+      `已清理 ${imageCacheStats.count} 张图片缓存（${formatBytes(
+        imageCacheStats.bytes,
+      )}）。`,
+    );
+  };
+
+  const addDraftImageFiles = async (files: File[]) => {
+    if (files.length === 0 || activeConversationReadOnly || pendingMessageId) {
+      return;
+    }
+
+    const availableSlots = Math.max(0, MAX_DRAFT_IMAGES - draftImages.length);
+    if (availableSlots === 0) {
+      setComposerNotice(`每轮最多附加 ${MAX_DRAFT_IMAGES} 张图片。`);
+      return;
+    }
+
+    const acceptedFiles = files.slice(0, availableSlots);
+    const skipped = files.length - acceptedFiles.length;
+    const now = new Date().toISOString();
+    const nextBlobs: LocalBlobRecord[] = [];
+    const nextDraftImages: DraftImage[] = [];
+    const notices: string[] = [];
+    const currentMaxReferenceNumber = draftImages.reduce(
+      (max, image) =>
+        Math.max(max, readImageReferenceNumber(image.referenceLabel)),
+      0,
+    );
+
+    for (const file of acceptedFiles) {
+      if (!file.type.startsWith("image/")) {
+        notices.push(`已跳过非图片文件：${file.name}`);
+        continue;
+      }
+
+      if (file.size > MAX_DRAFT_IMAGE_BYTES) {
+        notices.push(
+          `已跳过过大的图片：${file.name}（${formatBytes(file.size)}）`,
+        );
+        continue;
+      }
+
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        const blobId = createId("blob");
+        const referenceLabel = `图片${
+          currentMaxReferenceNumber + nextDraftImages.length + 1
+        }`;
+        const imagePart: MessageImagePart = {
+          id: createId("image"),
+          type: "image",
+          blobId,
+          mimeType: file.type || "image/*",
+          name: file.name || `${referenceLabel}.png`,
+          size: file.size,
+          referenceLabel,
+        };
+        nextBlobs.push({
+          id: blobId,
+          kind: "image",
+          mimeType: imagePart.mimeType,
+          name: imagePart.name,
+          size: imagePart.size,
+          dataUrl,
+          createdAt: now,
+        });
+        nextDraftImages.push({
+          ...imagePart,
+          previewUrl: dataUrl,
+        });
+      } catch (error) {
+        notices.push(
+          error instanceof Error ? error.message : `图片读取失败：${file.name}`,
+        );
+      }
+    }
+
+    if (nextBlobs.length > 0) {
+      setBlobs((current) => [...current, ...nextBlobs]);
+      setDraftImages((current) => [...current, ...nextDraftImages]);
+      setDraft((current) => {
+        const references = nextDraftImages
+          .map((image) => `[${image.referenceLabel ?? "图片"}]`)
+          .join("\n");
+        if (!references) {
+          return current;
+        }
+        return current.trim()
+          ? `${current.replace(/\s*$/, "")}\n${references}`
+          : references;
+      });
+    }
+
+    if (skipped > 0) {
+      notices.push(
+        `已达到每轮 ${MAX_DRAFT_IMAGES} 张上限，跳过 ${skipped} 个文件。`,
+      );
+    }
+    setComposerNotice(notices.join("；"));
+  };
+
+  const handleDraftImageInput = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    await addDraftImageFiles(files);
+  };
+
+  const handleComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const filesFromItems = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
+    const filesFromList = Array.from(event.clipboardData.files).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+    const seen = new Set<string>();
+    const files = [...filesFromList, ...filesFromItems].filter((file) => {
+      const key = `${file.name}:${file.type}:${file.size}:${file.lastModified}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+    if (files.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    void addDraftImageFiles(files);
+  };
+
+  const removeDraftImage = (imageId: string) => {
+    const target = draftImages.find((image) => image.id === imageId);
+    if (!target) {
+      return;
+    }
+
+    setDraftImages((current) =>
+      current.filter((image) => image.id !== imageId),
+    );
+    if (target.referenceLabel) {
+      const markerPattern = new RegExp(
+        `(^|\\n)\\[${escapeRegExp(target.referenceLabel)}\\](?=\\n|$)`,
+        "g",
+      );
+      setDraft((current) =>
+        current
+          .replace(markerPattern, "")
+          .replace(/\n{3,}/g, "\n\n")
+          .trimStart(),
+      );
+    }
+    const blobStillReferencedByMessage = messages.some((message) =>
+      getMessageImageParts(message).some(
+        (part) => part.blobId === target.blobId,
+      ),
+    );
+    if (!blobStillReferencedByMessage) {
+      setBlobs((current) =>
+        current.filter((blob) => blob.id !== target.blobId),
+      );
+    }
+    setComposerNotice("");
+  };
+
+  const openImagePreview = ({
+    src,
+    label,
+    name,
+    size,
+  }: {
+    src: string;
+    label: string;
+    name: string;
+    size: number;
+  }) => {
+    setImagePreview({ src, label, name, size });
   };
 
   const createAssistant = () => {
@@ -2496,7 +2825,7 @@ function App() {
 
     setApiProfiles((current) => [...current, newProfile]);
     setEditingApiProfileId(newProfile.id);
-    setEditingModelId(newProfile.models[0]?.id ?? "");
+    setEditingModelId("");
   };
 
   const moveApiProfile = (profileId: string, direction: -1 | 1) => {
@@ -3022,7 +3351,7 @@ function App() {
     const nextModel: ModelDefinition = {
       id: result.modelId,
       name: result.modelId,
-      description: `由模型探测模型族「${editingModelProbeGroup?.name ?? result.groupId}」创建。`,
+      description: "",
       contextWindow: 128000,
       enabled: true,
     };
@@ -3335,9 +3664,32 @@ function App() {
     const shouldClearContextSummary =
       boundaryIndex >= 0 && targetIndex >= 0 && targetIndex <= boundaryIndex;
 
+    const deletedBlobIds = new Set(
+      getMessageImageParts(targetMessage).map((part) => part.blobId),
+    );
     setMessages((current) =>
       current.filter((message) => message.id !== messageId),
     );
+    if (deletedBlobIds.size > 0) {
+      setBlobs((current) =>
+        current.filter((blob) => {
+          if (!deletedBlobIds.has(blob.id)) {
+            return true;
+          }
+          const referencedByOtherMessage = messages.some(
+            (message) =>
+              message.id !== messageId &&
+              getMessageImageParts(message).some(
+                (part) => part.blobId === blob.id,
+              ),
+          );
+          const referencedByDraft = draftImages.some(
+            (image) => image.blobId === blob.id,
+          );
+          return referencedByOtherMessage || referencedByDraft;
+        }),
+      );
+    }
     if (shouldClearContextSummary) {
       setConversations((current) =>
         current.map((conversation) =>
@@ -3412,6 +3764,7 @@ function App() {
         conversation,
         model: summaryResolvedModel.model,
         messages: [summaryRequestMessage],
+        blobs: [],
         signal: controller.signal,
         stream: false,
         webSearchEnabled: false,
@@ -3428,7 +3781,8 @@ function App() {
         ),
       );
       const latestSummarizableMessages = latestConversationMessages.filter(
-        (message) => message.status !== "streaming" && message.text.trim(),
+        (message) =>
+          message.status !== "streaming" && hasMessageContent(message),
       );
       let latestBoundaryIndex = latestSummarizableMessages.findIndex(
         (message) => message.id === boundaryMessage.id,
@@ -3553,7 +3907,7 @@ function App() {
     }
 
     const summarizableMessages = activeMessages.filter(
-      (message) => message.status !== "streaming" && message.text.trim(),
+      (message) => message.status !== "streaming" && hasMessageContent(message),
     );
     if (summarizableMessages.length === 0) {
       setContextSummaryStatus("当前没有可总结的已完成消息。");
@@ -3644,7 +3998,8 @@ function App() {
 
     const summarizableMessages = sortMessagesByCreatedAt(
       messageSnapshot.filter(
-        (message) => message.status !== "streaming" && message.text.trim(),
+        (message) =>
+          message.status !== "streaming" && hasMessageContent(message),
       ),
     );
     if (summarizableMessages.length === 0) {
@@ -3755,7 +4110,6 @@ function App() {
 
     abortControllerRef.current = controller;
     setNextTurnWebSearchEnabled(false);
-    setNextTurnMultimodalEnabled(false);
     setLastObservedUsage(undefined);
     setMessages((current) => [
       ...current.filter((message) => !idsToRemove.has(message.id)),
@@ -3784,6 +4138,7 @@ function App() {
           activeConversation,
           requestMessages,
         ),
+        blobs,
         signal: controller.signal,
         stream: streamingEnabled,
         webSearchEnabled: requestWebSearchEnabled,
@@ -3916,7 +4271,6 @@ function App() {
 
     abortControllerRef.current = controller;
     setNextTurnWebSearchEnabled(false);
-    setNextTurnMultimodalEnabled(false);
     setLastObservedUsage(undefined);
     setMessages((current) => [
       ...current.filter((message) => !idsToRemove.has(message.id)),
@@ -3945,6 +4299,7 @@ function App() {
           activeConversation,
           requestMessages,
         ),
+        blobs,
         signal: controller.signal,
         stream: streamingEnabled,
         webSearchEnabled: requestWebSearchEnabled,
@@ -4025,10 +4380,11 @@ function App() {
 
   const sendMessage = async () => {
     const text = draft.trim();
+    const outgoingImages = draftImages;
     const resolvedModel = activeResolvedModel;
 
     if (
-      !text ||
+      (!text && outgoingImages.length === 0) ||
       !activeConversation ||
       activeConversationReadOnly ||
       pendingMessageId
@@ -4047,6 +4403,8 @@ function App() {
         status: "error",
       };
       setDraft("");
+      setDraftImages([]);
+      setComposerNotice("");
       setMessages((current) => [...current, assistantMessage]);
       return;
     }
@@ -4064,6 +4422,9 @@ function App() {
       createdAt: userCreatedAt,
       status: "complete",
       source,
+      imageParts: outgoingImages.map(
+        ({ previewUrl: _previewUrl, ...part }) => part,
+      ),
     };
     const assistantMessage: Message = {
       id: createId("assistant"),
@@ -4080,8 +4441,9 @@ function App() {
 
     abortControllerRef.current = controller;
     setDraft("");
+    setDraftImages([]);
+    setComposerNotice("");
     setNextTurnWebSearchEnabled(false);
-    setNextTurnMultimodalEnabled(false);
     setLastObservedUsage(undefined);
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setPendingMessageId(assistantMessage.id);
@@ -4090,7 +4452,7 @@ function App() {
         conversation.id === activeConversation.id
           ? {
               ...conversation,
-              summary: `最近消息：${text.slice(0, 28)}`,
+              summary: `最近消息：${(text || `${outgoingImages.length} 张图片`).slice(0, 28)}`,
             }
           : conversation,
       ),
@@ -4107,6 +4469,7 @@ function App() {
           ...activeMessages,
           userMessage,
         ]),
+        blobs,
         signal: controller.signal,
         stream: streamingEnabled,
         webSearchEnabled: requestWebSearchEnabled,
@@ -4296,7 +4659,16 @@ function App() {
                       : ""}
                   </span>
                 </header>
-                <p>{message.text.trim() || "[空消息]"}</p>
+                <p>
+                  {[
+                    message.text.trim(),
+                    ...getMessageImageParts(message).map(
+                      formatMessageImageMarker,
+                    ),
+                  ]
+                    .filter(Boolean)
+                    .join("\n") || "[空消息]"}
+                </p>
               </article>
             );
           })}
@@ -4574,6 +4946,46 @@ function App() {
                       {message.status === "error" ? " · 错误" : ""}
                     </div>
                     <p>{message.text}</p>
+                    {getMessageImageParts(message).length > 0 ? (
+                      <div className="message-images" aria-label="消息图片">
+                        {getMessageImageParts(message).map((part, index) => {
+                          const blob = blobMap.get(part.blobId);
+                          const imageLabel =
+                            part.referenceLabel ?? `图片${index + 1}`;
+                          return blob ? (
+                            <button
+                              className="message-image"
+                              key={part.id}
+                              type="button"
+                              title={`${part.name} · ${formatBytes(part.size)}`}
+                              onClick={() =>
+                                openImagePreview({
+                                  src: blob.dataUrl,
+                                  label: imageLabel,
+                                  name: part.name,
+                                  size: part.size,
+                                })
+                              }
+                            >
+                              <img src={blob.dataUrl} alt={part.name} />
+                              <span>
+                                {imageLabel} · {part.name}
+                              </span>
+                            </button>
+                          ) : (
+                            <div
+                              className="message-image missing"
+                              key={part.id}
+                            >
+                              <ImageIcon size={18} />
+                              <span>
+                                {imageLabel} · {part.name} · 图片缓存已清理
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                     {completedTime || elapsedText ? (
                       <div className="message-meta">
                         {completedTime ? (
@@ -4752,22 +5164,73 @@ function App() {
             <StopCircle size={20} />
           </button>
           <div className="composer-stack">
+            {draftImages.length > 0 ? (
+              <div className="draft-images" aria-label="待发送图片">
+                {draftImages.map((image, index) => {
+                  const imageLabel = image.referenceLabel ?? `图片${index + 1}`;
+                  return (
+                    <div className="draft-image" key={image.id}>
+                      <button
+                        className="draft-image-preview"
+                        type="button"
+                        title={`${imageLabel} · ${image.name} · ${formatBytes(
+                          image.size,
+                        )}`}
+                        onClick={() =>
+                          openImagePreview({
+                            src: image.previewUrl,
+                            label: imageLabel,
+                            name: image.name,
+                            size: image.size,
+                          })
+                        }
+                      >
+                        <img src={image.previewUrl} alt={image.name} />
+                        <span>
+                          {imageLabel} · {image.name}
+                        </span>
+                      </button>
+                      <button
+                        className="draft-image-remove"
+                        type="button"
+                        aria-label={`移除${imageLabel} ${image.name}`}
+                        onClick={() => removeDraftImage(image.id)}
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+            {composerNotice ? (
+              <p className="composer-notice">{composerNotice}</p>
+            ) : null}
             <textarea
               ref={composerInputRef}
               rows={2}
               placeholder={
                 activeConversationReadOnly
                   ? "归档对话仅浏览，恢复后可继续"
-                  : nextTurnMultimodalEnabled
-                    ? "当前仍仅发送文本；图片/文件内容选择后续接入"
+                  : draftImages.length > 0
+                    ? "输入图片说明或直接发送"
                     : "输入消息"
               }
               disabled={activeConversationReadOnly}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={sendOnEnter}
+              onPaste={handleComposerPaste}
             />
             <div className="turn-options" aria-label="本轮选项">
+              <input
+                ref={imageInputRef}
+                className="file-input-hidden"
+                type="file"
+                accept={IMAGE_INPUT_ACCEPT}
+                multiple
+                onChange={handleDraftImageInput}
+              />
               <button
                 className={`option-chip ${
                   nextTurnWebSearchEnabled ? "active" : ""
@@ -4786,22 +5249,20 @@ function App() {
                 联网
               </button>
               <button
-                className={`option-chip ${
-                  nextTurnMultimodalEnabled ? "active" : ""
-                }`}
+                className="option-chip"
                 type="button"
-                aria-label="本轮多模态"
-                aria-pressed={nextTurnMultimodalEnabled}
+                aria-label="上传图片"
+                aria-pressed={false}
                 disabled={
                   activeConversationReadOnly || Boolean(pendingMessageId)
                 }
-                onClick={() =>
-                  setNextTurnMultimodalEnabled((enabled) => !enabled)
-                }
-                title="当前是单轮临时开关预留；图片/文件选择与发送后续接入。"
+                onClick={() => {
+                  imageInputRef.current?.click();
+                }}
+                title="上传本轮图片；桌面端也支持 Ctrl+V 粘贴剪贴板图片。"
               >
-                <Plus size={14} />
-                多模态
+                <ImageIcon size={14} />
+                图片
               </button>
             </div>
           </div>
@@ -4810,7 +5271,7 @@ function App() {
             type="button"
             aria-label="发送"
             disabled={
-              !draft.trim() ||
+              (!draft.trim() && draftImages.length === 0) ||
               activeConversationReadOnly ||
               Boolean(pendingMessageId)
             }
@@ -4944,6 +5405,44 @@ function App() {
                 <pre>{formatInspectorJson(appSettings)}</pre>
               </details>
             </section>
+          </section>
+        </div>
+      ) : null}
+
+      {imagePreview ? (
+        <div
+          className="modal-backdrop image-preview-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setImagePreview(null);
+            }
+          }}
+        >
+          <section
+            className="image-preview-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="image-preview-title"
+          >
+            <header>
+              <div>
+                <p className="eyebrow">Image preview</p>
+                <h2 id="image-preview-title">{imagePreview.label}</h2>
+                <span>
+                  {imagePreview.name} · {formatBytes(imagePreview.size)}
+                </span>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="关闭图片预览"
+                onClick={() => setImagePreview(null)}
+              >
+                <X size={18} />
+              </button>
+            </header>
+            <img src={imagePreview.src} alt={imagePreview.name} />
           </section>
         </div>
       ) : null}
@@ -5449,6 +5948,13 @@ function App() {
                   <strong>{archiveSizeText}</strong>
                 </div>
                 <div>
+                  <span>图片缓存</span>
+                  <strong>
+                    {imageCacheStats.count} 张 ·{" "}
+                    {formatBytes(imageCacheStats.bytes)}
+                  </strong>
+                </div>
+                <div>
                   <span>最后导出</span>
                   <strong>
                     {lastSuccessfulExportAt
@@ -5468,6 +5974,14 @@ function App() {
                 >
                   <Upload size={16} />
                   导入并替换
+                </button>
+                <button
+                  type="button"
+                  disabled={imageCacheStats.count === 0}
+                  onClick={clearImageCache}
+                >
+                  <Trash2 size={16} />
+                  清理图片缓存
                 </button>
                 <input
                   ref={importInputRef}

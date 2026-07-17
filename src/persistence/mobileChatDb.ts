@@ -13,6 +13,7 @@ import {
   DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
   DEFAULT_MODEL_REF,
   initialApiProfiles,
+  type LocalBlobRecord,
   type LocalDataSnapshot,
   type Message,
   type ModelRef,
@@ -47,6 +48,7 @@ type SnapshotInput = Omit<
   assistants?: Assistant[];
   conversations?: Conversation[];
   messages?: Message[];
+  blobs?: LocalBlobRecord[];
 };
 
 const requestToPromise = <T>(request: IDBRequest<T>): Promise<T> =>
@@ -249,7 +251,49 @@ const normalizeMessages = (messages: Message[], now: string): Message[] =>
   messages.map((message) => ({
     ...message,
     createdAt: message.createdAt ?? now,
+    imageParts: Array.isArray(message.imageParts)
+      ? message.imageParts.map((part) => ({
+          id: part.id,
+          type: "image",
+          blobId: part.blobId,
+          mimeType: part.mimeType,
+          name: part.name ?? "image",
+          size:
+            typeof part.size === "number" && Number.isFinite(part.size)
+              ? Math.max(0, part.size)
+              : 0,
+          referenceLabel:
+            typeof part.referenceLabel === "string"
+              ? part.referenceLabel
+              : undefined,
+        }))
+      : undefined,
   }));
+
+const normalizeBlobs = (blobs?: LocalBlobRecord[]): LocalBlobRecord[] =>
+  Array.isArray(blobs)
+    ? blobs
+        .filter(
+          (blob) =>
+            blob &&
+            blob.kind === "image" &&
+            typeof blob.id === "string" &&
+            typeof blob.dataUrl === "string" &&
+            blob.dataUrl.startsWith("data:image/"),
+        )
+        .map((blob) => ({
+          id: blob.id,
+          kind: "image",
+          mimeType: blob.mimeType || "image/*",
+          name: blob.name || "image",
+          size:
+            typeof blob.size === "number" && Number.isFinite(blob.size)
+              ? Math.max(0, blob.size)
+              : 0,
+          dataUrl: blob.dataUrl,
+          createdAt: blob.createdAt || new Date().toISOString(),
+        }))
+    : [];
 
 const normalizeContextSummaryRawTailMessages = (value: unknown) => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -368,6 +412,7 @@ export const normalizeSnapshot = (
   const messages = snapshot.messages
     ? normalizeMessages(snapshot.messages, now)
     : initialSnapshot.messages;
+  const blobs = normalizeBlobs(snapshot.blobs);
   const firstConversation = conversations.find(
     (conversation) => !conversation.archived,
   );
@@ -436,6 +481,7 @@ export const normalizeSnapshot = (
     assistants,
     conversations,
     messages,
+    blobs,
   };
 };
 
@@ -454,7 +500,6 @@ export const replaceSnapshot = async (
   transaction.objectStore("settings").put(nextSnapshot.settings);
   transaction.objectStore("drafts").clear();
   transaction.objectStore("contextCheckpoints").clear();
-  transaction.objectStore("blobs").clear();
 
   replaceAll<ApiProfile>(
     transaction.objectStore("apiProfiles"),
@@ -471,6 +516,10 @@ export const replaceSnapshot = async (
   replaceAll<Message>(
     transaction.objectStore("messages"),
     nextSnapshot.messages,
+  );
+  replaceAll<LocalBlobRecord>(
+    transaction.objectStore("blobs"),
+    nextSnapshot.blobs,
   );
 
   await transactionDone(transaction);
@@ -492,7 +541,14 @@ export const saveSnapshot = async (
 export const loadSnapshot = async (): Promise<LocalDataSnapshot> => {
   const db = await openMobileChatDb();
   const transaction = db.transaction(
-    ["settings", "apiProfiles", "assistants", "conversations", "messages"],
+    [
+      "settings",
+      "apiProfiles",
+      "assistants",
+      "conversations",
+      "messages",
+      "blobs",
+    ],
     "readonly",
   );
   const settingsRequest = transaction.objectStore("settings").get("app");
@@ -502,14 +558,16 @@ export const loadSnapshot = async (): Promise<LocalDataSnapshot> => {
     .objectStore("conversations")
     .getAll();
   const messagesRequest = transaction.objectStore("messages").getAll();
+  const blobsRequest = transaction.objectStore("blobs").getAll();
 
-  const [settings, apiProfiles, assistants, conversations, messages] =
+  const [settings, apiProfiles, assistants, conversations, messages, blobs] =
     await Promise.all([
       requestToPromise<PartialSettings | undefined>(settingsRequest),
       requestToPromise<ApiProfile[]>(apiProfilesRequest),
       requestToPromise<Assistant[]>(assistantsRequest),
       requestToPromise<Conversation[]>(conversationsRequest),
       requestToPromise<Message[]>(messagesRequest),
+      requestToPromise<LocalBlobRecord[]>(blobsRequest),
     ]);
   await transactionDone(transaction);
   db.close();
@@ -526,6 +584,7 @@ export const loadSnapshot = async (): Promise<LocalDataSnapshot> => {
     assistants,
     conversations,
     messages,
+    blobs,
   });
 };
 
