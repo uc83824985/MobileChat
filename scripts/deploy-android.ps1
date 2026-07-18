@@ -38,6 +38,81 @@ $IndexedDbName = "MobileChatDB"
 $SigningAlias = "mobilechat-local-dev"
 $SigningPassword = "mobilechat-local-dev"
 
+function Get-NpmExecutable {
+    $NpmCmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if ($NpmCmd) {
+        return $NpmCmd.Source
+    }
+
+    $Npm = Get-Command npm -ErrorAction SilentlyContinue
+    if (-not $Npm) {
+        throw "npm was not found in PATH. Install Node.js LTS, then retry."
+    }
+
+    return $Npm.Source
+}
+
+function Test-NodeToolInstalled {
+    param([Parameter(Mandatory = $true)][string]$ToolName)
+
+    $BinDir = Join-Path $RepoRoot "node_modules\.bin"
+    $ToolCandidates = @(
+        (Join-Path $BinDir $ToolName),
+        (Join-Path $BinDir "$ToolName.cmd"),
+        (Join-Path $BinDir "$ToolName.ps1")
+    )
+
+    foreach ($Candidate in $ToolCandidates) {
+        if (Test-Path -LiteralPath $Candidate) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Invoke-Npm {
+    param([Parameter(Mandatory = $true)][string[]]$NpmArgs)
+
+    $Npm = Get-NpmExecutable
+    & $Npm @NpmArgs | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) {
+        throw "npm command failed: npm $($NpmArgs -join ' ')"
+    }
+}
+
+function Ensure-NodeDependencies {
+    if ((Test-NodeToolInstalled -ToolName "tsc") -and (Test-NodeToolInstalled -ToolName "vite")) {
+        return
+    }
+
+    $PackageJsonPath = Join-Path $RepoRoot "package.json"
+    if (-not (Test-Path -LiteralPath $PackageJsonPath)) {
+        throw "package.json was not found at $PackageJsonPath."
+    }
+
+    Push-Location $RepoRoot
+    try {
+        $PackageLockPath = Join-Path $RepoRoot "package-lock.json"
+        if (Test-Path -LiteralPath $PackageLockPath) {
+            Write-Host "Node dependencies are missing; installing with npm ci..."
+            Invoke-Npm -NpmArgs @("ci")
+        } else {
+            Write-Host "Node dependencies are missing; installing with npm install..."
+            Invoke-Npm -NpmArgs @("install")
+        }
+    } finally {
+        Pop-Location
+    }
+
+    if (-not (Test-NodeToolInstalled -ToolName "tsc")) {
+        throw "TypeScript compiler was not found after installing dependencies. Check npm install output."
+    }
+    if (-not (Test-NodeToolInstalled -ToolName "vite")) {
+        throw "Vite was not found after installing dependencies. Check npm install output."
+    }
+}
+
 function Invoke-Adb {
     param([Parameter(Mandatory = $true)][string[]]$AdbArgs)
 
@@ -336,10 +411,8 @@ function New-PackageZip {
     try {
         if (-not $SkipBuild) {
             Write-Host "Building MobileChat local file bundle..."
-            npm run build:mobile-file | ForEach-Object { Write-Host $_ }
-            if ($LASTEXITCODE -ne 0) {
-                throw "npm run build:mobile-file failed."
-            }
+            Ensure-NodeDependencies
+            Invoke-Npm -NpmArgs @("run", "build:mobile-file")
         }
 
         $LayoutDir = New-MobileFileLayout
@@ -467,10 +540,8 @@ function New-WebViewApk {
     try {
         if (-not $SkipBuild) {
             Write-Host "Building MobileChat WebView bundle..."
-            npm run build:mobile-file | ForEach-Object { Write-Host $_ }
-            if ($LASTEXITCODE -ne 0) {
-                throw "npm run build:mobile-file failed."
-            }
+            Ensure-NodeDependencies
+            Invoke-Npm -NpmArgs @("run", "build:mobile-file")
         }
 
         Copy-WebViewAssets
