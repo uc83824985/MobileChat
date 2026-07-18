@@ -268,6 +268,34 @@ describe("App", () => {
     });
   });
 
+  it("exports mobilechat archives through the Android WebView bridge", async () => {
+    const saveArchive = vi.fn((_fileName: string, _base64Data: string) =>
+      JSON.stringify({
+        ok: true,
+        path: "/sdcard/Download/MobileChat/mobilechat-test.mobilechat",
+      }),
+    );
+    window.MobileChatAndroid = {
+      saveArchive,
+    };
+
+    render(<App />);
+
+    fireEvent.click(screen.getByText("设置"));
+    fireEvent.click(screen.getByText("导出 .mobilechat"));
+
+    await waitFor(() => expect(saveArchive).toHaveBeenCalledTimes(1));
+    const [fileName, base64Data] = saveArchive.mock.calls[0] ?? ["", ""];
+    expect(String(fileName)).toMatch(/^mobilechat-.*\.mobilechat$/);
+    expect(typeof base64Data).toBe("string");
+    expect(String(base64Data).length).toBeGreaterThan(0);
+    expect(
+      await screen.findByText(
+        "已导出到 /sdcard/Download/MobileChat/mobilechat-test.mobilechat",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("shows only cache usage after a buffered streaming response", async () => {
     vi.stubGlobal(
       "fetch",

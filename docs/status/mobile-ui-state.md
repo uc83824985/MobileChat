@@ -97,6 +97,7 @@ Date: 2026-07-17
 - `.mobilechat` archives contain `manifest.json`, `records.json`, and `checksums.json`.
 - The current export path is credential-free: connection metadata and model definitions are exported, but `apiKey` is cleared.
 - The current default export also excludes image cache blobs to avoid unexpectedly large backups. Message image references remain in records as placeholders; a future explicit media-inclusive export can preserve image payloads.
+- In the Android WebView APK, export uses the `MobileChatAndroid.saveArchive(...)` bridge and saves the `.mobilechat` file under `/sdcard/Download/MobileChat/` by default. Ordinary browsers keep the standard browser download behavior.
 - Desktop Playwright verifies title edit → settings edit → autosave → reload → export → local mutation → import → restored records with API key removed.
 
 ## Diagnostics and usage display

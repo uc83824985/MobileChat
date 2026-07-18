@@ -3,11 +3,16 @@ package com.uc83824985.mobilechat;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.MediaStore;
+import android.util.Base64;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -26,8 +31,19 @@ import androidx.annotation.Nullable;
 import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewClientCompat;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+
 public class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST_CODE = 22018;
+    private static final String EXPORT_DIRECTORY_NAME = "MobileChat";
+    private static final String MOBILECHAT_ARCHIVE_EXTENSION = ".mobilechat";
+    private static final String MOBILECHAT_ARCHIVE_MIME_TYPE = "application/vnd.mobilechat+zip";
 
     private WebView webView;
     private boolean statusBarHidden = false;
@@ -133,11 +149,119 @@ public class MainActivity extends Activity {
 
     private final class MobileChatAndroidBridge {
         @JavascriptInterface
+        public String saveArchive(String fileName, String base64Data) {
+            try {
+                String safeFileName = sanitizeArchiveFileName(fileName);
+                byte[] data = Base64.decode(base64Data, Base64.DEFAULT);
+                String path = saveArchiveBytes(safeFileName, data);
+                return createBridgeResult(true, path, null);
+            } catch (Exception error) {
+                return createBridgeResult(false, null, error.getMessage());
+            }
+        }
+
+        @JavascriptInterface
         public void setStatusBarHidden(boolean enabled) {
             runOnUiThread(() -> {
                 statusBarHidden = enabled;
                 applyStatusBarVisibility();
             });
+        }
+    }
+
+    private String sanitizeArchiveFileName(@Nullable String fileName) {
+        String fallbackName = "mobilechat-export" + MOBILECHAT_ARCHIVE_EXTENSION;
+        if (fileName == null) {
+            return fallbackName;
+        }
+
+        String sanitized = fileName
+            .replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]+", "_")
+            .trim();
+        if (sanitized.isEmpty()) {
+            return fallbackName;
+        }
+        if (!sanitized.endsWith(MOBILECHAT_ARCHIVE_EXTENSION)) {
+            sanitized = sanitized + MOBILECHAT_ARCHIVE_EXTENSION;
+        }
+        return sanitized;
+    }
+
+    private String saveArchiveBytes(String fileName, byte[] data) throws IOException {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return saveArchiveWithMediaStore(fileName, data);
+        }
+        return saveArchiveToLegacyDownloads(fileName, data);
+    }
+
+    private String saveArchiveWithMediaStore(String fileName, byte[] data) throws IOException {
+        ContentResolver resolver = getContentResolver();
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
+        values.put(MediaStore.Downloads.MIME_TYPE, MOBILECHAT_ARCHIVE_MIME_TYPE);
+        values.put(
+            MediaStore.Downloads.RELATIVE_PATH,
+            Environment.DIRECTORY_DOWNLOADS + File.separator + EXPORT_DIRECTORY_NAME
+        );
+        values.put(MediaStore.Downloads.IS_PENDING, 1);
+
+        Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+        if (uri == null) {
+            throw new IOException("无法创建下载文件。");
+        }
+
+        try (OutputStream outputStream = resolver.openOutputStream(uri)) {
+            if (outputStream == null) {
+                throw new IOException("无法打开下载文件。");
+            }
+            outputStream.write(data);
+        } catch (IOException error) {
+            resolver.delete(uri, null, null);
+            throw error;
+        }
+
+        ContentValues publishedValues = new ContentValues();
+        publishedValues.put(MediaStore.Downloads.IS_PENDING, 0);
+        resolver.update(uri, publishedValues, null, null);
+
+        return "/sdcard/"
+            + Environment.DIRECTORY_DOWNLOADS
+            + "/"
+            + EXPORT_DIRECTORY_NAME
+            + "/"
+            + fileName;
+    }
+
+    @SuppressWarnings("deprecation")
+    private String saveArchiveToLegacyDownloads(String fileName, byte[] data) throws IOException {
+        File directory = new File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            EXPORT_DIRECTORY_NAME
+        );
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw new IOException("无法创建导出目录：" + directory.getAbsolutePath());
+        }
+
+        File outputFile = new File(directory, fileName);
+        try (FileOutputStream outputStream = new FileOutputStream(outputFile)) {
+            outputStream.write(data);
+        }
+        return outputFile.getAbsolutePath();
+    }
+
+    private String createBridgeResult(boolean ok, @Nullable String path, @Nullable String error) {
+        try {
+            JSONObject result = new JSONObject();
+            result.put("ok", ok);
+            if (path != null) {
+                result.put("path", path);
+            }
+            if (error != null) {
+                result.put("error", error);
+            }
+            return result.toString();
+        } catch (JSONException ignored) {
+            return ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"Android bridge failed.\"}";
         }
     }
 

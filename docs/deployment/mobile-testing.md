@@ -32,6 +32,20 @@ The launcher label and `android/Icon.jpg` can be changed later. They affect the 
 
 The settings item **沉浸显示（Android）** is implemented by the Android wrapper through the local `MobileChatAndroid.setStatusBarHidden(...)` bridge. It hides Android system bars and allows the WebView to draw into short-edge cutout areas so landscape layouts can use the space normally reserved for the status/cutout letterbox. It does not affect desktop windows, ordinary browsers, the HTTPS PWA route, or the local-file smoke route.
 
+The settings export action **导出 .mobilechat** is implemented by the Android wrapper through `MobileChatAndroid.saveArchive(...)`. In the WebView APK it writes the backup to:
+
+```text
+/sdcard/Download/MobileChat/
+```
+
+For example:
+
+```text
+/sdcard/Download/MobileChat/mobilechat-YYYY-MM-DDTHH-MM-SS.mobilechat
+```
+
+This is a normal user-visible download folder, not the private WebView IndexedDB directory. Ordinary desktop/mobile browsers still use their own browser download behavior.
+
 Normal APK upgrades preserve local data when all of these remain true:
 
 - the APK is installed over the previous app with the same `applicationId`;

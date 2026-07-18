@@ -139,6 +139,7 @@ type StreamingTextChunks = Record<string, string[]>;
 declare global {
   interface Window {
     MobileChatAndroid?: {
+      saveArchive?: (fileName: string, base64Data: string) => string;
       setStatusBarHidden?: (enabled: boolean) => void;
     };
   }
@@ -3187,13 +3188,60 @@ function App() {
     void saveCurrentSnapshot();
   };
 
-  const downloadArchive = (blob: Blob) => {
+  const blobToBase64 = (blob: Blob) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result ?? "");
+        const commaIndex = result.indexOf(",");
+        resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+      };
+      reader.onerror = () =>
+        reject(reader.error ?? new Error("无法读取导出文件。"));
+      reader.readAsDataURL(blob);
+    });
+
+  const saveArchiveWithAndroidBridge = async (blob: Blob, fileName: string) => {
+    const saveArchive = window.MobileChatAndroid?.saveArchive;
+    if (!saveArchive) {
+      return null;
+    }
+
+    const base64Data = await blobToBase64(blob);
+    const rawResult = saveArchive(fileName, base64Data);
+
+    try {
+      const result = JSON.parse(rawResult) as {
+        ok?: boolean;
+        path?: string;
+        error?: string;
+      };
+      if (!result.ok) {
+        throw new Error(result.error || "Android 保存导出文件失败。");
+      }
+      return result.path || `/sdcard/Download/MobileChat/${fileName}`;
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error("Android 保存接口返回了无法解析的结果。");
+      }
+      throw error;
+    }
+  };
+
+  const downloadArchive = async (blob: Blob) => {
+    const fileName = createArchiveDownloadName();
+    const androidPath = await saveArchiveWithAndroidBridge(blob, fileName);
+    if (androidPath) {
+      return `已导出到 ${androidPath}`;
+    }
+
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = createArchiveDownloadName();
+    link.download = fileName;
     link.click();
     URL.revokeObjectURL(url);
+    return "已生成 credential-free .mobilechat 导出文件";
   };
 
   const exportBackup = async () => {
@@ -3205,13 +3253,13 @@ function App() {
       const archive = await createMobileChatArchive(committedSnapshot, {
         includeCredentials: false,
       });
-      downloadArchive(archive);
+      const exportMessage = await downloadArchive(archive);
 
       const exportedAt = new Date().toISOString();
       const snapshotWithExportTime =
         await updateLastSuccessfulExport(exportedAt);
       applySnapshot(snapshotWithExportTime);
-      setBackupMessage("已生成 credential-free .mobilechat 导出文件");
+      setBackupMessage(exportMessage);
     } catch (error) {
       setBackupMessage(
         error instanceof Error ? error.message : "导出 .mobilechat 失败",
