@@ -22,7 +22,7 @@ launcher label: 对话助手
 WebView origin: https://appassets.androidplatform.net
 entry URL: https://appassets.androidplatform.net/app/index.html
 IndexedDB name: MobileChatDB
-local signing key: .local/android-signing/mobilechat-dev.jks
+repository signing key: android/signing/mobilechat-dev.jks
 launcher icon source: android/Icon.jpg
 ```
 
@@ -55,7 +55,7 @@ Normal APK upgrades preserve local data when all of these remain true:
 - the user does not clear app data, uninstall the app, or clear WebView/app storage;
 - schema changes remain compatible with the current rapid-iteration rules.
 
-The deployment script uses `adb install -r -d` and never uninstalls the app. If installation fails because the signature differs, export a `.mobilechat` backup before taking any manual uninstall/reinstall path.
+The deployment script uses `adb install -r -d` and never uninstalls the app. If installation fails because the signature differs, export a `.mobilechat` backup before taking any manual uninstall/reinstall path. The repository carries a stable development signing key so normal clones build update-compatible APKs.
 
 Some vendor ROMs require a separate phone-side permission for ADB installation. If `adb install` returns `INSTALL_FAILED_USER_RESTRICTED`, enable options such as **USB 安装**, **通过 USB 安装应用**, or the vendor-specific security setting, then rerun the script.
 
@@ -75,11 +75,11 @@ npm run mobile:adb
 
 The default deploy flow:
 
-1. checks whether the newest `artifacts/mobilechat-webview-*.apk` already matches the current source, Android shell, and build files;
+1. checks whether the newest `artifacts/mobilechat-webview-*.apk` already matches the current source, Android shell, build files, and signing key hash;
 2. reuses that APK when it is current;
 3. otherwise runs the local WebView bundle build;
 4. copies the generated frontend into `android/app/src/main/assets`;
-5. creates a stable local signing key if `.local/android-signing/mobilechat-dev.jks` does not exist;
+5. verifies the repository signing key exists;
 6. builds the Android APK;
 7. installs it with `adb install -r -d`;
 8. opens `com.uc83824985.mobilechat/.MainActivity`.
@@ -99,15 +99,25 @@ Output is written under `artifacts/`, for example:
 artifacts/mobilechat-webview-YYYYMMDD.apk
 ```
 
-## Signing key handling
-
-The local signing key is generated once at:
+The script writes a matching sidecar hash next to the APK:
 
 ```text
-.local/android-signing/mobilechat-dev.jks
+artifacts/mobilechat-webview-YYYYMMDD.apk.signing.sha256
 ```
 
-This file is intentionally ignored by Git. Keep a backup of it if you care about preserving app data across machine rebuilds. Losing the key means Android will reject future upgrades signed by a new key; the safe recovery path is:
+If the repository signing key changes, the existing APK is treated as stale and rebuilt.
+
+Having a stable signing key does not skip frontend or APK packaging after source changes. It only removes the old "generate/copy local key" step and allows the script to safely reuse an existing APK when the source inputs and signing hash already match.
+
+## Signing key handling
+
+The stable development signing key is committed at:
+
+```text
+android/signing/mobilechat-dev.jks
+```
+
+Use the same file for every development machine and CI build. This is intentionally a public development key for this personal testing app. Changing it after installation makes Android reject in-place upgrades. The safe recovery path is:
 
 1. open the existing app;
 2. export a `.mobilechat` backup;

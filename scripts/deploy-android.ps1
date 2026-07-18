@@ -25,8 +25,7 @@ $ArtifactDir = Join-Path $RepoRoot $OutputDir
 $MobileLayoutDir = Join-Path $RepoRoot ".tmp\mobile-layout"
 $AndroidProjectDir = Join-Path $RepoRoot "android"
 $AndroidAssetsAppDir = Join-Path $AndroidProjectDir "app\src\main\assets"
-$LocalSigningDir = Join-Path $RepoRoot ".local\android-signing"
-$LocalKeystorePath = Join-Path $LocalSigningDir "mobilechat-dev.jks"
+$AndroidSigningKeyPath = Join-Path $AndroidProjectDir "signing\mobilechat-dev.jks"
 
 # Persistence-critical constants. Do not change after installing on a phone unless
 # the user has exported data and accepts creating a new app/WebView storage bucket.
@@ -35,8 +34,6 @@ $AndroidAssetOrigin = "https://appassets.androidplatform.net"
 $AndroidAssetPath = "/app/"
 $AndroidEntryUrl = "${AndroidAssetOrigin}${AndroidAssetPath}index.html"
 $IndexedDbName = "MobileChatDB"
-$SigningAlias = "mobilechat-local-dev"
-$SigningPassword = "mobilechat-local-dev"
 
 function Get-NpmExecutable {
     $NpmCmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
@@ -181,6 +178,48 @@ function Get-NewestWriteTimeUtc {
     return $Newest
 }
 
+function Get-SigningKeyHash {
+    if (-not (Test-Path -LiteralPath $AndroidSigningKeyPath)) {
+        return ""
+    }
+
+    return (Get-FileHash -LiteralPath $AndroidSigningKeyPath -Algorithm SHA256).Hash
+}
+
+function Get-ApkSigningHashPath {
+    param([Parameter(Mandatory = $true)][string]$ApkPath)
+
+    return "$ApkPath.signing.sha256"
+}
+
+function Write-ApkSigningHash {
+    param([Parameter(Mandatory = $true)][string]$ApkPath)
+
+    $SigningHash = Get-SigningKeyHash
+    if (-not $SigningHash) {
+        throw "Cannot write APK signing hash because signing key is missing: $AndroidSigningKeyPath"
+    }
+
+    Set-Content -LiteralPath (Get-ApkSigningHashPath $ApkPath) -Value $SigningHash -Encoding ascii -NoNewline
+}
+
+function Test-ApkSigningHashMatches {
+    param([System.IO.FileInfo]$Apk)
+
+    if ($null -eq $Apk -or -not (Test-Path -LiteralPath $AndroidSigningKeyPath)) {
+        return $false
+    }
+
+    $HashPath = Get-ApkSigningHashPath $Apk.FullName
+    if (-not (Test-Path -LiteralPath $HashPath)) {
+        return $false
+    }
+
+    $ExpectedHash = (Get-Content -Raw -Encoding ascii -LiteralPath $HashPath).Trim()
+    $CurrentHash = Get-SigningKeyHash
+    return $ExpectedHash -and $CurrentHash -and ($ExpectedHash -eq $CurrentHash)
+}
+
 function Get-SharedInputPaths {
     return @(
         (Join-Path $RepoRoot "src"),
@@ -214,6 +253,9 @@ function Get-LocalFilePackageInputPaths {
 
 function Get-WebViewPackageInputPaths {
     $Paths = @(Get-SharedInputPaths)
+    if (Test-Path -LiteralPath $AndroidSigningKeyPath) {
+        $Paths += $AndroidSigningKeyPath
+    }
     $AndroidFiles = Get-ChildItem -LiteralPath $AndroidProjectDir -Recurse -File -Force -ErrorAction SilentlyContinue |
         Where-Object {
             $FullName = $_.FullName
@@ -274,6 +316,9 @@ function Test-WebViewApkIsCurrent {
     param([System.IO.FileInfo]$Apk)
 
     if ($null -eq $Apk) {
+        return $false
+    }
+    if (-not (Test-ApkSigningHashMatches $Apk)) {
         return $false
     }
 
@@ -456,34 +501,11 @@ function Ensure-JavaHome {
 }
 
 function Ensure-AndroidSigningKeystore {
-    Ensure-JavaHome
-    if (Test-Path -LiteralPath $LocalKeystorePath) {
+    if (Test-Path -LiteralPath $AndroidSigningKeyPath) {
         return
     }
 
-    New-Item -ItemType Directory -Force -Path $LocalSigningDir | Out-Null
-    $Keytool = Join-Path $env:JAVA_HOME "bin\keytool.exe"
-    if (-not (Test-Path -LiteralPath $Keytool)) {
-        throw "keytool was not found under JAVA_HOME: $env:JAVA_HOME"
-    }
-
-    Write-Host "Creating stable local Android signing key:"
-    Write-Host $LocalKeystorePath
-    & $Keytool `
-        -genkeypair `
-        -v `
-        -keystore $LocalKeystorePath `
-        -storepass $SigningPassword `
-        -keypass $SigningPassword `
-        -alias $SigningAlias `
-        -keyalg RSA `
-        -keysize 2048 `
-        -validity 10000 `
-        -dname "CN=MobileChat Local Dev,O=MobileChat,C=CN" |
-        ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to create Android signing keystore."
-    }
+    throw "Android signing key was not found: $AndroidSigningKeyPath. The stable MobileChat WebView signing key must be present in the repository before packaging."
 }
 
 function Get-GradleExecutable {
@@ -566,7 +588,12 @@ function New-WebViewApk {
         if (Test-Path -LiteralPath $ApkPath) {
             Remove-Item -LiteralPath $ApkPath -Force
         }
+        $ApkSigningHashPath = Get-ApkSigningHashPath $ApkPath
+        if (Test-Path -LiteralPath $ApkSigningHashPath) {
+            Remove-Item -LiteralPath $ApkSigningHashPath -Force
+        }
         Copy-Item -LiteralPath $BuiltApk -Destination $ApkPath -Force
+        Write-ApkSigningHash -ApkPath $ApkPath
 
         Write-Host "Packaged WebView APK:"
         Write-Host $ApkPath
@@ -681,7 +708,7 @@ function Invoke-WebViewDeployment {
     Write-Host "  WebView origin: $AndroidAssetOrigin"
     Write-Host "  entry URL: $AndroidEntryUrl"
     Write-Host "  IndexedDB name: $IndexedDbName"
-    Write-Host "  signing key: $LocalKeystorePath"
+    Write-Host "  signing key: $AndroidSigningKeyPath"
 
     if ($PackageOnly) {
         Write-Host ""

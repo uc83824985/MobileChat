@@ -3202,13 +3202,15 @@ function App() {
     });
 
   const saveArchiveWithAndroidBridge = async (blob: Blob, fileName: string) => {
-    const saveArchive = window.MobileChatAndroid?.saveArchive;
-    if (!saveArchive) {
+    if (!window.MobileChatAndroid?.saveArchive) {
       return null;
     }
 
     const base64Data = await blobToBase64(blob);
-    const rawResult = saveArchive(fileName, base64Data);
+    const rawResult = window.MobileChatAndroid.saveArchive(
+      fileName,
+      base64Data,
+    );
 
     try {
       const result = JSON.parse(rawResult) as {

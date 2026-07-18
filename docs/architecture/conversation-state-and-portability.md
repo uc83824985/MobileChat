@@ -115,7 +115,7 @@ IndexedDB 是异步 API，正常的小记录写入不应阻塞主线程。手机
 
 首次完成配置后，应用应调用 `navigator.storage.persist()` 请求 persistent storage，并用 `navigator.storage.estimate()` 在设置/调试区显示用量、quota 和持久化状态。即使请求成功，用户清理站点数据、卸载浏览器或更换 origin 仍会导致本地数据不可用，所以 `.mobilechat` 导出仍是必要兜底。
 
-手机端重复迭代的默认入口改为固定包名的 Android WebView 壳，而不是裸 `file://` / `content://` 文件快捷方式。WebView 壳必须从第一版起固定这些持久化关键常量：`applicationId = com.uc83824985.mobilechat`、签名 key、`https://appassets.androidplatform.net` origin、`/app/index.html` 入口路径和 `MobileChatDB` 数据库名。脚本只允许用 `adb install -r` 覆盖升级，不主动卸载、不清 app data。若更换签名 key 或包名，Android 会拒绝覆盖安装；若更换 WebView origin 或 IndexedDB 名称，旧数据仍在设备上但新代码看不到，表现为“数据丢失”。
+手机端重复迭代的默认入口改为固定包名的 Android WebView 壳，而不是裸 `file://` / `content://` 文件快捷方式。WebView 壳必须从第一版起固定这些持久化关键常量：`applicationId = com.uc83824985.mobilechat`、仓库内稳定签名 key `android/signing/mobilechat-dev.jks`、`https://appassets.androidplatform.net` origin、`/app/index.html` 入口路径和 `MobileChatDB` 数据库名。脚本只允许用 `adb install -r` 覆盖升级，不主动卸载、不清 app data。若更换签名 key 或包名，Android 会拒绝覆盖安装；若更换 WebView origin 或 IndexedDB 名称，旧数据仍在设备上但新代码看不到，表现为“数据丢失”。
 
 Android 壳可以提供窄范围的可选 JavaScript bridge，用于仅在原生壳中有意义的显示行为。例如 **沉浸显示（Android）** 会调用 `MobileChatAndroid.setStatusBarHidden(...)`，隐藏系统栏并允许 WebView 扩展到横屏短边 cutout 区域；普通桌面浏览器、GitHub Pages PWA 和本地文件 smoke test 没有该 bridge，设置只会被持久化，不改变窗口或浏览器 chrome。
 

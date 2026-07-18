@@ -8,7 +8,7 @@ def immutableAssetDomain = providers.gradleProperty("MOBILECHAT_WEBVIEW_ASSET_DO
 def immutableAssetPath = providers.gradleProperty("MOBILECHAT_WEBVIEW_ASSET_PATH").get()
 def immutableEntryUrl = providers.gradleProperty("MOBILECHAT_WEBVIEW_ENTRY_URL").get()
 def immutableIndexedDbName = providers.gradleProperty("MOBILECHAT_JS_INDEXED_DB_NAME").get()
-def localKeystorePath = rootProject.file("../.local/android-signing/mobilechat-dev.jks")
+def repositoryKeystorePath = rootProject.file("signing/mobilechat-dev.jks")
 def iconSourcePath = rootProject.file("Icon.jpg")
 def generatedIconResDir = layout.buildDirectory.dir("generated/res/mobilechatIcon")
 
@@ -34,7 +34,7 @@ android {
 
     signingConfigs {
         localDev {
-            storeFile localKeystorePath
+            storeFile repositoryKeystorePath
             storePassword "mobilechat-local-dev"
             keyAlias "mobilechat-local-dev"
             keyPassword "mobilechat-local-dev"
