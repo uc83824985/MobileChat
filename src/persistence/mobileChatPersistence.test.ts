@@ -4,6 +4,7 @@ import {
   CONTEXT_SUMMARY_ASSISTANT_ID,
   createInitialSnapshot,
   defaultContextProfile,
+  defaultContextProfileWorkflowDraft,
   defaultContextSummaryFramework,
   defaultUtilityAssistantRefs,
   type LocalDataSnapshot,
@@ -47,6 +48,9 @@ describe("MobileChat persistence", () => {
       ),
     ).toEqual(["严格记忆", "精确事实", "模糊记忆", "探索记录", "当前状态"]);
     expect(snapshot.settings.contextProfiles).toEqual([defaultContextProfile]);
+    expect(snapshot.settings.contextProfileWorkflowDraft).toEqual(
+      defaultContextProfileWorkflowDraft,
+    );
     expect(snapshot.settings.editingContextProfileId).toBe(
       defaultContextProfile.id,
     );
@@ -278,6 +282,9 @@ describe("MobileChat persistence", () => {
         hideMobileStatusBar: true,
         streamingEnabled: false,
         composerSubmitMode: "ctrl-enter-send",
+        contextProfileWorkflowDraft: {
+          standardOutput: "workflow standard output",
+        },
         contextSummaryRawTailMessages: 3,
         activeModelRef: {
           apiProfileId: "default-profile",
@@ -330,6 +337,9 @@ describe("MobileChat persistence", () => {
     expect(restored.settings.hideMobileStatusBar).toBe(true);
     expect(restored.settings.streamingEnabled).toBe(false);
     expect(restored.settings.composerSubmitMode).toBe("ctrl-enter-send");
+    expect(restored.settings.contextProfileWorkflowDraft).toEqual({
+      standardOutput: "workflow standard output",
+    });
     expect(restored.settings.contextSummaryRawTailMessages).toBe(3);
     expect(restored.settings.activeModelRef.modelId).toBe("persisted-model");
     expect(restored.apiProfiles[0]?.apiKey).toBe("local-only-key");

@@ -51,12 +51,14 @@ import {
   type Conversation,
   type ContextProfile,
   type ContextProfileDimensionOverride,
+  type ContextProfileWorkflowDraft,
   type ContextSummaryFramework,
   type ContextSummaryRecord,
   CONTEXT_SUMMARY_ASSISTANT_ID,
   createId,
   createInitialSnapshot,
   defaultContextProfile,
+  defaultContextProfileWorkflowDraft,
   defaultContextSummaryFramework,
   defaultModelProbeSettings,
   DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS,
@@ -77,6 +79,7 @@ import {
   type ModelProbeSettings,
   type ModelRef,
   modelRefKey,
+  normalizeMessageQuoteTemplate,
   parseModelRefKey,
   type ResponseUsage,
   type SaveStatus,
@@ -592,6 +595,30 @@ const formatMessageQuote = (template: string, content: string) => {
   return `${normalizedTemplate.replace(/\s+$/u, "")}\n${normalizedContent}`;
 };
 
+const copyTextToClipboard = async (text: string) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("当前浏览器不允许写入剪贴板。");
+    }
+  } finally {
+    document.body.removeChild(textarea);
+  }
+};
+
 const themeLabels: Record<ThemeMode, string> = {
   system: "跟随系统",
   light: "亮色",
@@ -891,6 +918,272 @@ const formatContextProfile = (
       ].join("\n");
     })
     .join("\n\n");
+
+const formatBlankable = (value: string | undefined, fallback = "未填写") =>
+  value?.trim() ? value.trim() : fallback;
+
+const formatContextProfileWorkflowDimensions = (
+  framework: ContextSummaryFramework,
+  profile: ContextProfile,
+) =>
+  framework.sections
+    .map((section) => {
+      const override = getContextProfileOverride(profile, section.id);
+      const enabled = isContextProfileDimensionEnabled(profile, section.id);
+      return [
+        `### ${section.title}`,
+        `- dimensionId: ${section.id}`,
+        `- 当前启用：${enabled ? "是" : "否"}`,
+        `- 系统说明：${section.instruction}`,
+        `- 当前重载：${formatBlankable(override?.instruction)}`,
+      ].join("\n");
+    })
+    .join("\n\n");
+
+type ContextProfileWorkflowPromptMode = "start" | "export";
+
+const buildContextProfileWorkflowPrompt = ({
+  mode,
+  framework,
+  profile,
+  assistant,
+}: {
+  mode: ContextProfileWorkflowPromptMode;
+  framework: ContextSummaryFramework;
+  profile: ContextProfile;
+  assistant: Assistant;
+}) => {
+  const frameworkDefinitions = framework.sections
+    .map(
+      (section) => `- ${section.title} (${section.id})：${section.instruction}`,
+    )
+    .join("\n");
+
+  const assistantReference = [
+    `- 名称：${assistant.name}`,
+    `- 类型：${assistant.kind}`,
+    `- 描述：${formatBlankable(assistant.description)}`,
+    `- Prompt：${formatBlankable(assistant.prompt)}`,
+    `- 初始消息：${formatBlankable(assistant.initialMessage)}`,
+  ].join("\n");
+
+  if (mode === "start") {
+    return `# MobileChat 上下文配置讨论起始说明
+
+你是 MobileChat 的上下文配置设计助手。本次对话目标是：和用户一起讨论并设计一份“用于特定用途的新上下文配置”。
+
+MobileChat 只支持单对话内记忆；上下文配置用于指导普通聊天请求和上下文总结助手如何保留信息。请先用自然语言讨论，不要直接导出 JSON。等用户提供“导出说明”后，再输出可被 MobileChat 解析的最终配置。
+
+## 固定五维定义
+
+${frameworkDefinitions}
+
+## 当前聊天助手参考
+
+${assistantReference}
+
+## 讨论方式
+
+这是一个收敛式配置访谈，不是头脑风暴菜单。请避免一次性列出大量备选项、完整模板、玩法菜单或“如果你想 A/B/C/D”的分支。
+
+请按下面规则推进：
+- 如果用户已经给出用途，先给一个“推荐方向”，不要同时给多套方案。
+- 每轮最多追问 3 个关键问题；如果问题不影响首版配置，可以先不问。
+- 如果必须给备选，最多 3 个，并明确推荐其中 1 个。
+- 不要主动展开长清单、角色卡模板、流程菜单、快速路径合集；除非用户明确要求“多给几个选项”。
+- 讨论阶段只输出自然语言判断和待确认点，不输出最终 JSON。
+- 当用户确认方案后，等待用户粘贴“导出说明”再生成标准输出。
+
+推荐回复结构：
+1. 当前判断：用 2-4 句概括你对用途和记忆边界的理解。
+2. 推荐配置方向：按五维度给非常短的草案，每维不超过 1 句；不确定的维度写“暂不强化”。
+3. 需要确认：只列 1-3 个会明显影响配置的问题。
+`;
+  }
+
+  return `# MobileChat 上下文配置导出说明
+
+你是 MobileChat 的上下文配置设计助手。请基于本次对话里已经讨论出的用途、规范、应用场景和助手职责，导出一份可被 MobileChat 直接解析的新上下文配置。
+
+MobileChat 只支持单对话内记忆；上下文配置用于指导普通聊天请求和上下文总结助手如何保留信息。
+
+## 固定五维框架
+
+${frameworkDefinitions}
+
+## 当前聊天助手
+
+${assistantReference}
+
+## 当前上下文配置参考
+
+- 名称：${profile.name}
+- 描述：${formatBlankable(profile.description)}
+- summaryMaxChars：${normalizeContextProfileSummaryMaxChars(profile.summaryMaxChars)}
+
+${formatContextProfileWorkflowDimensions(framework, profile)}
+
+## 输出格式
+
+先用很短的「设计说明」解释取舍，然后必须输出一个 \`json\` 代码块。JSON 只允许下面这些字段，不要新增维度 ID：
+
+\`\`\`json
+{
+  "name": "配置名称",
+  "description": "配置描述",
+  "summaryMaxChars": 6000,
+  "dimensions": {
+    "strict_memory": { "enabled": true, "instruction": "" },
+    "precise_facts": { "enabled": true, "instruction": "" },
+    "fuzzy_memory": { "enabled": true, "instruction": "" },
+    "exploration_log": { "enabled": true, "instruction": "" },
+    "current_state": { "enabled": true, "instruction": "" }
+  }
+}
+\`\`\`
+
+约束：
+- instruction 是写给总结助手和聊天助手看的配置说明，不是用户正文。
+- 只写当前业务/玩法/助手场景需要补充的分类规则；能沿用系统说明的维度可留空。
+- 如果某个维度对该场景没有价值，可以 enabled=false。
+- summaryMaxChars 应按场景预算建议：简单工具助手偏短，角色扮演、世界状态、长期项目可更长。
+- 输出应能直接粘贴回 MobileChat 的「配置解析区」并解析生成新上下文配置。
+`;
+};
+
+type ParsedContextProfileWorkflowOutput = Pick<
+  ContextProfile,
+  "name" | "description" | "summaryMaxChars" | "dimensionOverrides"
+>;
+
+const isUnknownRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const readWorkflowString = (value: unknown) =>
+  typeof value === "string" ? value : "";
+
+const extractBalancedJsonObject = (text: string): string | undefined => {
+  const start = text.indexOf("{");
+  if (start < 0) {
+    return undefined;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, index + 1);
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const extractContextProfileWorkflowJson = (text: string) => {
+  const fencedBlocks = Array.from(
+    text.matchAll(/```(?:json)?\s*([\s\S]*?)```/giu),
+  ).map((match) => match[1]?.trim() ?? "");
+
+  for (const block of fencedBlocks) {
+    if (!block) {
+      continue;
+    }
+    try {
+      JSON.parse(block);
+      return block;
+    } catch {
+      // Try the next fenced block.
+    }
+  }
+
+  const trimmed = text.trim();
+  try {
+    JSON.parse(trimmed);
+    return trimmed;
+  } catch {
+    return extractBalancedJsonObject(trimmed);
+  }
+};
+
+const parseContextProfileWorkflowOutput = (
+  text: string,
+  framework: ContextSummaryFramework,
+): ParsedContextProfileWorkflowOutput => {
+  const jsonText = extractContextProfileWorkflowJson(text);
+  if (!jsonText) {
+    throw new Error("未找到可解析的 JSON 配置块。");
+  }
+
+  const parsed = JSON.parse(jsonText) as unknown;
+  if (!isUnknownRecord(parsed)) {
+    throw new Error("JSON 顶层必须是对象。");
+  }
+
+  const dimensions = isUnknownRecord(parsed.dimensions)
+    ? parsed.dimensions
+    : {};
+  const dimensionOverrides = framework.sections.flatMap((section) => {
+    const dimension = dimensions[section.id];
+    if (!isUnknownRecord(dimension)) {
+      return [];
+    }
+
+    const enabled =
+      typeof dimension.enabled === "boolean" ? dimension.enabled : true;
+    const instruction = readWorkflowString(dimension.instruction);
+
+    if (enabled && !instruction.trim()) {
+      return [];
+    }
+
+    return [
+      {
+        dimensionId: section.id,
+        enabled,
+        instruction,
+      },
+    ];
+  });
+
+  return {
+    name: readWorkflowString(parsed.name).trim() || "Agent 生成上下文配置",
+    description: readWorkflowString(parsed.description),
+    summaryMaxChars: normalizeContextProfileSummaryMaxChars(
+      Number(parsed.summaryMaxChars),
+    ),
+    dimensionOverrides,
+  };
+};
 
 const buildContextProfileInstruction = (
   framework: ContextSummaryFramework,
@@ -1282,8 +1575,7 @@ function App() {
   const [composerSubmitMode, setComposerSubmitMode] =
     useState<ComposerSubmitMode>(bootSnapshot.settings.composerSubmitMode);
   const [messageQuoteTemplate, setMessageQuoteTemplate] = useState(
-    bootSnapshot.settings.messageQuoteTemplate ||
-      DEFAULT_MESSAGE_QUOTE_TEMPLATE,
+    normalizeMessageQuoteTemplate(bootSnapshot.settings.messageQuoteTemplate),
   );
   const [contextSummaryRawTailMessages, setContextSummaryRawTailMessages] =
     useState(bootSnapshot.settings.contextSummaryRawTailMessages);
@@ -1302,6 +1594,10 @@ function App() {
   const [contextProfiles, setContextProfiles] = useState<ContextProfile[]>(
     bootSnapshot.settings.contextProfiles,
   );
+  const [contextProfileWorkflowDraft, setContextProfileWorkflowDraft] =
+    useState<ContextProfileWorkflowDraft>(
+      bootSnapshot.settings.contextProfileWorkflowDraft,
+    );
   const [editingContextProfileId, setEditingContextProfileId] = useState(
     bootSnapshot.settings.editingContextProfileId,
   );
@@ -1350,6 +1646,8 @@ function App() {
   });
   const [archiveSizeText, setArchiveSizeText] = useState("估算中");
   const [backupMessage, setBackupMessage] = useState("");
+  const [contextProfileWorkflowStatus, setContextProfileWorkflowStatus] =
+    useState("");
   const [lastObservedUsage, setLastObservedUsage] = useState<
     ResponseUsage | undefined
   >();
@@ -2162,6 +2460,7 @@ function App() {
       modelProbeSettings,
       contextSummaryFramework,
       contextProfiles,
+      contextProfileWorkflowDraft,
       editingContextProfileId,
       lastSuccessfulExportAt,
       storagePersisted: storageInfo.persisted,
@@ -2179,6 +2478,7 @@ function App() {
       contextSummaryRawTailMessages,
       contextSummaryFramework,
       contextProfiles,
+      contextProfileWorkflowDraft,
       debugEnabled,
       editingAssistantId,
       editingContextProfileId,
@@ -2229,7 +2529,7 @@ function App() {
     setStreamingEnabled(snapshot.settings.streamingEnabled);
     setComposerSubmitMode(snapshot.settings.composerSubmitMode);
     setMessageQuoteTemplate(
-      snapshot.settings.messageQuoteTemplate || DEFAULT_MESSAGE_QUOTE_TEMPLATE,
+      normalizeMessageQuoteTemplate(snapshot.settings.messageQuoteTemplate),
     );
     setContextSummaryRawTailMessages(
       snapshot.settings.contextSummaryRawTailMessages,
@@ -2242,6 +2542,9 @@ function App() {
     setModelProbeSettings(snapshot.settings.modelProbeSettings);
     setContextSummaryFramework(snapshot.settings.contextSummaryFramework);
     setContextProfiles(snapshot.settings.contextProfiles);
+    setContextProfileWorkflowDraft(
+      snapshot.settings.contextProfileWorkflowDraft,
+    );
     setEditingContextProfileId(snapshot.settings.editingContextProfileId);
     setLastSuccessfulExportAt(snapshot.settings.lastSuccessfulExportAt);
     setDraftImages([]);
@@ -4106,6 +4409,67 @@ function App() {
           : assistant,
       ),
     );
+  };
+
+  const updateContextProfileWorkflowField = (
+    key: keyof ContextProfileWorkflowDraft,
+    value: string,
+  ) => {
+    setContextProfileWorkflowDraft((current) => ({
+      ...current,
+      [key]: value,
+    }));
+    setContextProfileWorkflowStatus("");
+  };
+
+  const copyContextProfileWorkflowPrompt = async (
+    mode: ContextProfileWorkflowPromptMode,
+  ) => {
+    const prompt = buildContextProfileWorkflowPrompt({
+      mode,
+      framework: contextSummaryFramework,
+      profile: editingContextProfile,
+      assistant: editingAssistant,
+    });
+
+    try {
+      await copyTextToClipboard(prompt);
+      setContextProfileWorkflowStatus(
+        mode === "start" ? "已复制起始说明。" : "已复制导出说明。",
+      );
+    } catch (error) {
+      setContextProfileWorkflowStatus(
+        error instanceof Error
+          ? error.message
+          : "复制失败，请手动选中提示词内容。",
+      );
+    }
+  };
+
+  const createContextProfileFromWorkflowOutput = () => {
+    try {
+      const parsedProfile = parseContextProfileWorkflowOutput(
+        contextProfileWorkflowDraft.standardOutput,
+        contextSummaryFramework,
+      );
+      const newProfile: ContextProfile = {
+        id: createId("context-profile"),
+        ...parsedProfile,
+      };
+      setContextProfiles((current) => [...current, newProfile]);
+      setEditingContextProfileId(newProfile.id);
+      setContextProfileWorkflowStatus(
+        `已解析并新建上下文配置「${newProfile.name}」。`,
+      );
+    } catch (error) {
+      setContextProfileWorkflowStatus(
+        error instanceof Error
+          ? error.message
+          : "解析失败，请检查标准输出 JSON。",
+      );
+    } finally {
+      setContextProfileWorkflowDraft(defaultContextProfileWorkflowDraft);
+    }
   };
 
   const deleteMessage = (messageId: string) => {
@@ -5989,6 +6353,30 @@ function App() {
                 <ImageIcon size={14} />
                 图片
               </button>
+              <button
+                className="option-chip"
+                type="button"
+                aria-label="引用选中文本到输入框"
+                disabled={
+                  activeConversationReadOnly ||
+                  !selectedMessageText ||
+                  Boolean(pendingMessageId)
+                }
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  if (selectedMessageText) {
+                    insertSelectedMessageQuote(selectedMessageText.messageId);
+                  }
+                }}
+                title={
+                  selectedMessageText
+                    ? "将当前选中的消息片段插入输入框"
+                    : "先选中消息中的文本片段"
+                }
+              >
+                <TextQuote size={14} />
+                引用
+              </button>
             </div>
           </div>
           <button
@@ -6266,7 +6654,7 @@ function App() {
                   />
                 </div>
               </div>
-              <label className="settings-row quote-template-setting wide-setting">
+              <label className="settings-row quote-template-setting">
                 <span>引用格式</span>
                 <textarea
                   aria-label="引用格式"
@@ -6276,10 +6664,7 @@ function App() {
                     setMessageQuoteTemplate(event.target.value)
                   }
                 />
-                <small>
-                  使用 {"{content}"}{" "}
-                  表示当前选中的消息片段；未选中文本时引用不可用。
-                </small>
+                <small>{"{content}"} 引用消息片段</small>
               </label>
               <div className="settings-row compact theme-select">
                 <span>布局模式</span>
@@ -6465,6 +6850,70 @@ function App() {
               <p className="summary-framework-note">
                 聊天助手引用这里的上下文配置；全局总结助手会按当前聊天助手绑定的配置执行总结，不需要为每个聊天助手单独配置总结助手。
               </p>
+              <section
+                className="context-profile-workflow-panel"
+                aria-label="上下文配置工作流"
+              >
+                <header>
+                  <div>
+                    <p className="eyebrow">Workflow</p>
+                    <h3>配置建议工作流</h3>
+                  </div>
+                  <div className="header-actions">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void copyContextProfileWorkflowPrompt("start")
+                      }
+                    >
+                      复制起始说明
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void copyContextProfileWorkflowPrompt("export")
+                      }
+                    >
+                      复制导出说明
+                    </button>
+                    <button
+                      type="button"
+                      disabled={
+                        !contextProfileWorkflowDraft.standardOutput.trim()
+                      }
+                      onClick={createContextProfileFromWorkflowOutput}
+                    >
+                      解析并新建配置
+                    </button>
+                  </div>
+                </header>
+                <p className="summary-framework-note">
+                  分两步使用：先复制起始说明到任意 agent
+                  中自然语言讨论用途、规范、应用场景和助手职责；确认后再复制导出说明，让
+                  agent 输出可解析
+                  JSON。最后把结果粘贴到这里解析成新的上下文配置。解析只会新建配置，不会覆盖当前配置。
+                </p>
+                <label className="detail-field context-profile-workflow-output">
+                  <span>配置解析区</span>
+                  <textarea
+                    aria-label="上下文配置解析区"
+                    rows={8}
+                    placeholder="粘贴包含配置 JSON 的 agent 输出；支持 Markdown json 代码块。"
+                    value={contextProfileWorkflowDraft.standardOutput}
+                    onChange={(event) =>
+                      updateContextProfileWorkflowField(
+                        "standardOutput",
+                        event.target.value,
+                      )
+                    }
+                  />
+                </label>
+                {contextProfileWorkflowStatus ? (
+                  <p className="backup-message">
+                    {contextProfileWorkflowStatus}
+                  </p>
+                ) : null}
+              </section>
               <div className="profile-layout">
                 <aside className="profile-directory">
                   <div className="assistant-config-select">

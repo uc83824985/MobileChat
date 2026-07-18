@@ -185,9 +185,7 @@ describe("App", () => {
     configureApiProfile();
 
     fireEvent.click(screen.getByText("设置"));
-    expect(screen.getByLabelText("引用格式")).toHaveValue(
-      "引用内容：\n{content}",
-    );
+    expect(screen.getByLabelText("引用格式")).toHaveValue("“{content}”：");
     fireEvent.change(screen.getByLabelText("引用格式"), {
       target: { value: "> {content}" },
     });
@@ -205,7 +203,11 @@ describe("App", () => {
     const userQuoteButton = within(userMessage).getByRole("button", {
       name: "引用选中文本",
     });
+    const composerQuoteButton = screen.getByRole("button", {
+      name: "引用选中文本到输入框",
+    });
     expect(userQuoteButton).toBeDisabled();
+    expect(composerQuoteButton).toBeDisabled();
 
     const textNode = userText.firstChild;
     expect(textNode).toBeTruthy();
@@ -218,8 +220,9 @@ describe("App", () => {
     fireEvent.mouseUp(screen.getByLabelText("消息列表"));
 
     expect(userQuoteButton).toBeEnabled();
-    fireEvent.mouseDown(userQuoteButton);
-    fireEvent.click(userQuoteButton);
+    expect(composerQuoteButton).toBeEnabled();
+    fireEvent.mouseDown(composerQuoteButton);
+    fireEvent.click(composerQuoteButton);
 
     expect(screen.getByPlaceholderText("输入消息")).toHaveValue("> critical");
   });
@@ -760,6 +763,96 @@ describe("App", () => {
     expect(
       screen.queryByRole("dialog", { name: "设置" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("parses an agent standard output into a new context profile", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByText("设置"));
+
+    fireEvent.click(screen.getByText("复制起始说明"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const startPrompt = String(writeText.mock.calls[0]?.[0]);
+    expect(startPrompt).toContain("MobileChat 上下文配置讨论起始说明");
+    expect(startPrompt).toContain("固定五维定义");
+    expect(startPrompt).toContain("不要直接导出 JSON");
+    expect(startPrompt).toContain("收敛式配置访谈");
+    expect(startPrompt).toContain("每轮最多追问 3 个关键问题");
+    expect(startPrompt).toContain("如果必须给备选，最多 3 个");
+    expect(startPrompt).toContain("严格记忆");
+    expect(screen.getByText("已复制起始说明。")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("复制导出说明"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    const exportPrompt = String(writeText.mock.calls[1]?.[0]);
+    expect(exportPrompt).toContain("MobileChat 上下文配置导出说明");
+    expect(exportPrompt).toContain("JSON 只允许");
+    expect(exportPrompt).toContain('"strict_memory"');
+    expect(screen.getByText("已复制导出说明。")).toBeInTheDocument();
+
+    const parseArea = screen.getByLabelText("上下文配置解析区");
+    fireEvent.change(parseArea, {
+      target: {
+        value: `设计说明：跑团需要保留规则和当前场面，压缩临时闲聊。
+
+\`\`\`json
+{
+  "name": "跑团上下文",
+  "description": "用于跑团主持",
+  "summaryMaxChars": 12000,
+  "dimensions": {
+    "strict_memory": { "enabled": true, "instruction": "记录不可违背的团规和回复格式。" },
+    "precise_facts": { "enabled": true, "instruction": "记录角色属性、世界规则和数值。" },
+    "fuzzy_memory": { "enabled": false, "instruction": "" },
+    "exploration_log": { "enabled": true, "instruction": "记录随机事件、尝试路线和未确认线索。" },
+    "current_state": { "enabled": true, "instruction": "记录当前场景、行动顺序和待确认问题。" }
+  }
+}
+\`\`\``,
+      },
+    });
+    fireEvent.click(screen.getByText("解析并新建配置"));
+
+    expect(
+      screen.getByText("已解析并新建上下文配置「跑团上下文」。"),
+    ).toBeInTheDocument();
+    expect(parseArea).toHaveValue("");
+    expectCustomSelectValue("选择上下文配置", "跑团上下文");
+    expect(screen.getByLabelText("上下文配置名称")).toHaveValue("跑团上下文");
+    expect(screen.getByLabelText("上下文总结字数上限")).toHaveValue(12000);
+    expect(screen.getByLabelText("严格记忆上下文重载说明")).toHaveValue(
+      "记录不可违背的团规和回复格式。",
+    );
+    expect(screen.getByLabelText("精确事实上下文重载说明")).toHaveValue(
+      "记录角色属性、世界规则和数值。",
+    );
+    expect(screen.getByLabelText("启用模糊记忆上下文维度")).not.toBeChecked();
+    expect(screen.getByLabelText("探索记录上下文重载说明")).toHaveValue(
+      "记录随机事件、尝试路线和未确认线索。",
+    );
+  });
+
+  it("clears the context profile parse area after parse failure", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByText("设置"));
+    const parseArea = screen.getByLabelText("上下文配置解析区");
+    fireEvent.change(parseArea, {
+      target: { value: "这不是 JSON 配置" },
+    });
+
+    fireEvent.click(screen.getByText("解析并新建配置"));
+
+    expect(
+      screen.getByText("未找到可解析的 JSON 配置块。"),
+    ).toBeInTheDocument();
+    expect(parseArea).toHaveValue("");
   });
 
   it("keeps the floating scroll shortcut focused on returning to the bottom", () => {

@@ -1305,7 +1305,7 @@ button:disabled {
 .quote-template-setting {
   align-items: stretch;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .quote-template-setting textarea {
@@ -1322,7 +1322,6 @@ button:disabled {
 .quote-template-setting small {
   color: var(--text-muted);
   font-size: 12px;
-  grid-column: 2;
   line-height: 1.35;
 }
 
@@ -1829,7 +1828,27 @@ button:disabled {
   font-size: 18px;
 }
 
+.context-profile-workflow-panel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.context-profile-workflow-panel header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.context-profile-workflow-panel h3 {
+  font-size: 17px;
+}
+
 .summary-framework-panel header button,
+.context-profile-workflow-panel header button,
 .summary-framework-card button {
   background: var(--button);
   border-radius: 8px;
@@ -1837,9 +1856,14 @@ button:disabled {
   padding: 8px 10px;
 }
 
+.context-profile-workflow-panel header button:disabled,
 .summary-framework-card button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.context-profile-workflow-output textarea {
+  min-height: 180px;
 }
 
 .summary-framework-note {
@@ -2636,6 +2660,11 @@ button:disabled {
 
 .mobile-layout .quote-template-setting small {
   grid-column: auto;
+}
+
+.mobile-layout .context-profile-workflow-panel header {
+  align-items: stretch;
+  flex-direction: column;
 }
 
 .mobile-layout .summary-policy-setting {

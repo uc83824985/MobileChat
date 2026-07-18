@@ -7,18 +7,19 @@ import {
   createInitialSnapshot,
   DATABASE_SCHEMA_VERSION,
   defaultContextProfile,
+  defaultContextProfileWorkflowDraft,
   defaultContextSummaryFramework,
   defaultUtilityAssistantRefs,
   DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS,
   DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL,
   DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
-  DEFAULT_MESSAGE_QUOTE_TEMPLATE,
   DEFAULT_MODEL_REF,
   initialApiProfiles,
   type LocalBlobRecord,
   type LocalDataSnapshot,
   type Message,
   type ModelRef,
+  normalizeMessageQuoteTemplate,
   type StorageInfo,
 } from "../domain";
 import { normalizeModelProbeSettings } from "../modelProbe";
@@ -379,6 +380,15 @@ const normalizeContextProfiles = (
       }))
     : [defaultContextProfile];
 
+const normalizeContextProfileWorkflowDraft = (
+  draft?: Partial<AppSettings["contextProfileWorkflowDraft"]>,
+): AppSettings["contextProfileWorkflowDraft"] => ({
+  standardOutput:
+    typeof draft?.standardOutput === "string"
+      ? draft.standardOutput
+      : defaultContextProfileWorkflowDraft.standardOutput,
+});
+
 const normalizeConversation = (conversation: Conversation): Conversation => {
   const contextSummaries =
     Array.isArray(conversation.contextSummaries) &&
@@ -475,11 +485,9 @@ export const normalizeSnapshot = (
       composerSubmitMode:
         settings.composerSubmitMode ??
         initialSnapshot.settings.composerSubmitMode,
-      messageQuoteTemplate:
-        typeof settings.messageQuoteTemplate === "string" &&
-        settings.messageQuoteTemplate.trim()
-          ? settings.messageQuoteTemplate
-          : DEFAULT_MESSAGE_QUOTE_TEMPLATE,
+      messageQuoteTemplate: normalizeMessageQuoteTemplate(
+        settings.messageQuoteTemplate,
+      ),
       contextSummaryRawTailMessages: normalizeContextSummaryRawTailMessages(
         settings.contextSummaryRawTailMessages,
       ),
@@ -507,6 +515,9 @@ export const normalizeSnapshot = (
       storageUsage: settings.storageUsage,
       storageQuota: settings.storageQuota,
       contextProfiles,
+      contextProfileWorkflowDraft: normalizeContextProfileWorkflowDraft(
+        settings.contextProfileWorkflowDraft,
+      ),
       editingContextProfileId:
         contextProfiles.find(
           (profile) => profile.id === settings.editingContextProfileId,

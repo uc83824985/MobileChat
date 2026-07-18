@@ -81,6 +81,16 @@ The system SHALL support lightweight per-conversation `ContextSummary` records t
 - **THEN** that dimension is excluded from regular chat context injection and context-summary prompts
 - **AND** any previously edited dimension guidance remains stored for preview and later re-enable but is not editable while disabled
 
+#### Scenario: Create a context profile from agent standard output
+- **WHEN** the user copies the Context Profile start prompt
+- **THEN** the prompt explains the fixed five-section framework and asks an external agent to discuss a new purpose-specific Context Profile in natural language before exporting JSON
+- **AND** the prompt instructs the external agent to keep the discussion convergent by giving one recommended direction, asking no more than three key clarification questions per turn, and avoiding large option menus unless the user explicitly asks for them
+- **WHEN** the user later copies the export prompt and pastes an agent response containing a JSON configuration into the configuration parse area
+- **THEN** the pasted standard output is autosaved as settings data before parsing
+- **AND** the parser creates a new Context Profile using the parsed name, description, summary budget, enabled dimensions, and dimension guidance
+- **AND** parsing does not overwrite the currently selected Context Profile, chat requests, or context-summary prompts
+- **AND** the configuration parse area is cleared after either a successful or failed parse attempt
+
 #### Scenario: Preview the current summary
 - **WHEN** a valid `ContextSummary` exists and debug mode is enabled
 - **THEN** the system provides a local preview action that displays the stored summary without making a provider request

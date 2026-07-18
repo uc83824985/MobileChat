@@ -41,6 +41,10 @@ export type ContextProfile = {
   dimensionOverrides: ContextProfileDimensionOverride[];
 };
 
+export type ContextProfileWorkflowDraft = {
+  standardOutput: string;
+};
+
 export type ContextSummaryRecord = {
   id: string;
   kind: ContextSummaryKind;
@@ -241,6 +245,7 @@ export type AppSettings = {
   modelProbeSettings: ModelProbeSettings;
   contextSummaryFramework: ContextSummaryFramework;
   contextProfiles: ContextProfile[];
+  contextProfileWorkflowDraft: ContextProfileWorkflowDraft;
   editingContextProfileId: string;
   lastSuccessfulExportAt?: string;
   storagePersisted?: boolean | null;
@@ -275,7 +280,20 @@ export const DEFAULT_CONTEXT_PROFILE_ID = "general-context";
 export const DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES = 8;
 export const DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL = 8;
 export const DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS = 6000;
-export const DEFAULT_MESSAGE_QUOTE_TEMPLATE = "引用内容：\n{content}";
+export const LEGACY_MESSAGE_QUOTE_TEMPLATE = "引用内容：\n{content}";
+export const DEFAULT_MESSAGE_QUOTE_TEMPLATE = "“{content}”：";
+
+export const normalizeMessageQuoteTemplate = (template: unknown) => {
+  if (typeof template !== "string" || !template.trim()) {
+    return DEFAULT_MESSAGE_QUOTE_TEMPLATE;
+  }
+
+  if (template === LEGACY_MESSAGE_QUOTE_TEMPLATE) {
+    return DEFAULT_MESSAGE_QUOTE_TEMPLATE;
+  }
+
+  return template;
+};
 export const DEFAULT_MODEL_PROBE_GROUP_ID = "grok";
 export const DEFAULT_MODEL_REF: ModelRef = {
   apiProfileId: DEFAULT_PROFILE_ID,
@@ -459,6 +477,10 @@ export const defaultContextProfile: ContextProfile = {
   dimensionOverrides: [],
 };
 
+export const defaultContextProfileWorkflowDraft: ContextProfileWorkflowDraft = {
+  standardOutput: "",
+};
+
 export const modelRefKey = (ref: ModelRef) =>
   `${ref.apiProfileId}::${ref.modelId}`;
 
@@ -596,6 +618,7 @@ export const createInitialSettings = (
   modelProbeSettings: defaultModelProbeSettings,
   contextSummaryFramework: defaultContextSummaryFramework,
   contextProfiles: [defaultContextProfile],
+  contextProfileWorkflowDraft: defaultContextProfileWorkflowDraft,
   editingContextProfileId: defaultContextProfile.id,
   storagePersisted: null,
   updatedAt: now,
