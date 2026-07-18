@@ -12,6 +12,7 @@ import {
   DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS,
   DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL,
   DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
+  DEFAULT_MESSAGE_QUOTE_TEMPLATE,
   DEFAULT_MODEL_REF,
   initialApiProfiles,
   type LocalBlobRecord,
@@ -26,6 +27,12 @@ import { normalizeModelProbeSettings } from "../modelProbe";
 // inside the same browser/WebView origin and will look like data loss.
 export const MOBILE_CHAT_DB_NAME = "MobileChatDB";
 export const MOBILE_CHAT_DB_VERSION = 1;
+
+const LEGACY_SEEDED_MODEL_ID = "default-model";
+
+const isLegacySeededDefaultModelRef = (ref: ModelRef) =>
+  ref.apiProfileId === DEFAULT_MODEL_REF.apiProfileId &&
+  ref.modelId === LEGACY_SEEDED_MODEL_ID;
 
 const STORES = [
   "meta",
@@ -146,12 +153,20 @@ const cloneApiProfiles = (apiProfiles: ApiProfile[]): ApiProfile[] =>
     apiKey: profile.apiKey,
     protocol: profile.protocol,
     enabled: profile.enabled,
-    models: profile.models.map((model) => ({
-      id: model.id,
-      name: model.name,
-      description: model.description,
-      enabled: model.enabled,
-    })),
+    models: profile.models
+      .filter(
+        (model) =>
+          !(
+            profile.id === DEFAULT_MODEL_REF.apiProfileId &&
+            model.id === LEGACY_SEEDED_MODEL_ID
+          ),
+      )
+      .map((model) => ({
+        id: model.id,
+        name: model.name,
+        description: model.description,
+        enabled: model.enabled,
+      })),
   }));
 
 const findModelInProfiles = (apiProfiles: ApiProfile[], ref: ModelRef) => {
@@ -199,9 +214,9 @@ const normalizeAssistant = (
   apiProfiles: ApiProfile[],
   contextProfiles: AppSettings["contextProfiles"],
 ): Assistant => {
-  const modelBindings = Array.isArray(assistant.modelBindings)
-    ? assistant.modelBindings
-    : [];
+  const modelBindings = (
+    Array.isArray(assistant.modelBindings) ? assistant.modelBindings : []
+  ).filter((binding) => !isLegacySeededDefaultModelRef(binding));
   const hasDefault = modelBindings.some((binding) => binding.isDefault);
   const contextProfileId =
     contextProfiles.find((profile) => profile.id === assistant.contextProfileId)
@@ -440,7 +455,11 @@ export const normalizeSnapshot = (
         settings.activeAssistantId ??
         firstAssistant?.id ??
         initialSnapshot.settings.activeAssistantId,
-      activeModelRef: settings.activeModelRef ?? DEFAULT_MODEL_REF,
+      activeModelRef:
+        settings.activeModelRef &&
+        !isLegacySeededDefaultModelRef(settings.activeModelRef)
+          ? settings.activeModelRef
+          : DEFAULT_MODEL_REF,
       editingAssistantId:
         settings.editingAssistantId ??
         settings.activeAssistantId ??
@@ -456,6 +475,11 @@ export const normalizeSnapshot = (
       composerSubmitMode:
         settings.composerSubmitMode ??
         initialSnapshot.settings.composerSubmitMode,
+      messageQuoteTemplate:
+        typeof settings.messageQuoteTemplate === "string" &&
+        settings.messageQuoteTemplate.trim()
+          ? settings.messageQuoteTemplate
+          : DEFAULT_MESSAGE_QUOTE_TEMPLATE,
       contextSummaryRawTailMessages: normalizeContextSummaryRawTailMessages(
         settings.contextSummaryRawTailMessages,
       ),

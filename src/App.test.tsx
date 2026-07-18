@@ -3,6 +3,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
   waitFor,
 } from "@testing-library/react";
 import "fake-indexeddb/auto";
@@ -25,6 +26,7 @@ describe("App", () => {
   const configureApiProfile = ({
     baseUrl = "https://api.example.test/v1",
     apiKey = "",
+    createModel = true,
   } = {}) => {
     fireEvent.click(screen.getByText("设置"));
     fireEvent.change(screen.getByLabelText("Base URL"), {
@@ -34,6 +36,10 @@ describe("App", () => {
       fireEvent.change(screen.getByLabelText("API Key"), {
         target: { value: apiKey },
       });
+    }
+    if (createModel) {
+      fireEvent.click(screen.getByText("新增模型"));
+      fireEvent.click(screen.getByLabelText("允许模型 默认连接 new-model-1"));
     }
     fireEvent.click(screen.getByLabelText("关闭设置"));
   };
@@ -79,6 +85,41 @@ describe("App", () => {
     expect(screen.getByRole("main")).toHaveClass("mobile-layout");
   });
 
+  it("expands and collapses diagnostics with vertical swipes", () => {
+    window.localStorage.setItem(
+      "mobilechat:ui-preferences",
+      JSON.stringify({ layoutMode: "mobile" }),
+    );
+
+    render(<App />);
+
+    const diagnosticsPanel = screen.getByLabelText("调试诊断");
+    expect(diagnosticsPanel).toHaveClass("collapsed");
+
+    fireEvent.touchStart(diagnosticsPanel, {
+      touches: [{ clientX: 160, clientY: 500 }],
+    });
+    fireEvent.touchEnd(diagnosticsPanel, {
+      changedTouches: [{ clientX: 160, clientY: 430 }],
+    });
+
+    expect(diagnosticsPanel).toHaveClass("expanded");
+
+    const diagnosticsBody = diagnosticsPanel.querySelector(
+      ".diagnostics-body",
+    ) as HTMLElement;
+    diagnosticsBody.scrollTop = 0;
+
+    fireEvent.touchStart(diagnosticsBody, {
+      touches: [{ clientX: 160, clientY: 430 }],
+    });
+    fireEvent.touchEnd(diagnosticsBody, {
+      changedTouches: [{ clientX: 160, clientY: 500 }],
+    });
+
+    expect(diagnosticsPanel).toHaveClass("collapsed");
+  });
+
   it("edits the active conversation title from the chat header", () => {
     render(<App />);
 
@@ -113,6 +154,7 @@ describe("App", () => {
 
   it("supports multiline composer shortcuts and configurable submit mode", () => {
     render(<App />);
+    configureApiProfile();
 
     const composer = screen.getByPlaceholderText(
       "输入消息",
@@ -136,6 +178,50 @@ describe("App", () => {
     expect(
       screen.getByText("键盘发送", { selector: ".message p" }),
     ).toBeInTheDocument();
+  });
+
+  it("quotes only the selected message fragment into the composer", async () => {
+    render(<App />);
+    configureApiProfile();
+
+    fireEvent.click(screen.getByText("设置"));
+    expect(screen.getByLabelText("引用格式")).toHaveValue(
+      "引用内容：\n{content}",
+    );
+    fireEvent.change(screen.getByLabelText("引用格式"), {
+      target: { value: "> {content}" },
+    });
+    fireEvent.click(screen.getByLabelText("关闭设置"));
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "alpha critical beta" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    const userText = await screen.findByText("alpha critical beta", {
+      selector: ".message.user [data-message-text]",
+    });
+    const userMessage = userText.closest("article") as HTMLElement;
+    const userQuoteButton = within(userMessage).getByRole("button", {
+      name: "引用选中文本",
+    });
+    expect(userQuoteButton).toBeDisabled();
+
+    const textNode = userText.firstChild;
+    expect(textNode).toBeTruthy();
+    const range = document.createRange();
+    range.setStart(textNode as Node, "alpha ".length);
+    range.setEnd(textNode as Node, "alpha critical".length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    fireEvent.mouseUp(screen.getByLabelText("消息列表"));
+
+    expect(userQuoteButton).toBeEnabled();
+    fireEvent.mouseDown(userQuoteButton);
+    fireEvent.click(userQuoteButton);
+
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("> critical");
   });
 
   it("shows only cache usage after a buffered streaming response", async () => {
@@ -171,6 +257,58 @@ describe("App", () => {
     expect(screen.getByText("cache 0/5")).toBeInTheDocument();
     expect(screen.getByText(/用时 /)).toBeInTheDocument();
     expect(screen.queryByText(/in 5 \/ out/)).not.toBeInTheDocument();
+  });
+
+  it("renders streamed text as append-only chunks", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hello "}\n\n',
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(
+            'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"world"}\n\n',
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(
+            'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_stream","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}\n\n',
+          ),
+        );
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(stream, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      ),
+    );
+    render(<App />);
+    configureApiProfile({ apiKey: "test-key" });
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "stream chunks" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    const messageList = screen.getByLabelText("消息列表");
+    await waitFor(() => expect(messageList).toHaveTextContent("hello world"));
+    const assistantMessages = messageList.querySelectorAll(
+      "article.message.assistant",
+    );
+    const assistantMessage = assistantMessages[
+      assistantMessages.length - 1
+    ] as HTMLElement;
+    expect(
+      assistantMessage.querySelectorAll("[data-message-text] span"),
+    ).toHaveLength(2);
   });
 
   it("marks cache usage as not returned when the relay omits cached tokens", async () => {
@@ -225,6 +363,7 @@ describe("App", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<App />);
+    configureApiProfile();
 
     expect(screen.getByText("显示总结")).toBeDisabled();
 
@@ -238,7 +377,7 @@ describe("App", () => {
       ).toBeInTheDocument();
     }
 
-    configureApiProfile({ apiKey: "test-key" });
+    configureApiProfile({ apiKey: "test-key", createModel: false });
 
     fireEvent.click(screen.getByText("总结上下文"));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
@@ -328,6 +467,8 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("API Key"), {
       target: { value: "test-key" },
     });
+    fireEvent.click(screen.getByText("新增模型"));
+    fireEvent.click(screen.getByLabelText("允许模型 默认连接 new-model-1"));
     fireEvent.change(screen.getByLabelText("上下文总结字数上限"), {
       target: { value: "500" },
     });
@@ -534,7 +675,8 @@ describe("App", () => {
       screen.queryByRole("combobox", { name: "该助手默认模型" }),
     ).not.toBeInTheDocument();
     chooseCustomSelectOption("功能助手模型策略", "指定模型");
-    expectCustomSelectValue("该助手默认模型", "默认连接 / 默认模型");
+    expect(getCustomSelect("该助手默认模型")).toBeDisabled();
+    expectCustomSelectValue("该助手默认模型", "未选择");
     chooseCustomSelectOption("功能助手模型策略", "跟随当前对话模型");
     expect(
       screen.queryByRole("combobox", { name: "该助手默认模型" }),
@@ -620,7 +762,12 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("updates the floating scroll shortcut after manual thread scrolling", () => {
+  it("keeps the floating scroll shortcut focused on returning to the bottom", () => {
+    window.localStorage.setItem(
+      "mobilechat:ui-preferences",
+      JSON.stringify({ layoutMode: "mobile" }),
+    );
+
     render(<App />);
 
     const messageThread = screen.getByLabelText("消息列表");
@@ -640,10 +787,55 @@ describe("App", () => {
 
     fireEvent.scroll(messageThread);
     expect(screen.getByLabelText("回到消息底部")).toBeInTheDocument();
+    expect(screen.getByLabelText("回到消息顶部")).toBeInTheDocument();
 
     messageThread.scrollTop = 800;
     fireEvent.scroll(messageThread);
+    expect(screen.queryByLabelText("回到消息底部")).not.toBeInTheDocument();
     expect(screen.getByLabelText("回到消息顶部")).toBeInTheDocument();
+  });
+
+  it("scrolls to the bottom immediately after sending a message", async () => {
+    const requestAnimationFrameSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
+      () => undefined,
+    );
+    vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+
+    render(<App />);
+
+    const messageThread = screen.getByLabelText("消息列表");
+    const threadScrollTo = vi.fn();
+    Object.defineProperty(messageThread, "scrollHeight", {
+      configurable: true,
+      value: 1200,
+    });
+    Object.defineProperty(messageThread, "clientHeight", {
+      configurable: true,
+      value: 200,
+    });
+    Object.defineProperty(messageThread, "scrollTo", {
+      configurable: true,
+      value: threadScrollTo,
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "触发滚动" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    await waitFor(() =>
+      expect(threadScrollTo).toHaveBeenCalledWith({
+        top: 1200,
+        behavior: "smooth",
+      }),
+    );
+    expect(requestAnimationFrameSpy).toHaveBeenCalled();
   });
 
   it("edits API profiles, models, and assistant model bindings", () => {
@@ -652,12 +844,14 @@ describe("App", () => {
     fireEvent.click(screen.getByText("设置"));
 
     expect(
-      screen.getByRole("button", { name: "编辑模型 默认模型" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: /编辑模型/ }),
+    ).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Base URL"), {
       target: { value: "https://api.example.test/v1" },
     });
+    fireEvent.click(screen.getByText("新增模型"));
+    expect(screen.getByLabelText("模型名称")).toHaveValue("new-model-1");
     fireEvent.change(screen.getByLabelText("模型名称"), {
       target: { value: "主模型" },
     });
@@ -778,6 +972,11 @@ describe("App", () => {
       expect(
         screen.getByText("second regex topic").closest("article"),
       ).toHaveClass("search-active"),
+    );
+
+    fireEvent.change(searchInput, { target: { value: "p" } });
+    expect(screen.getAllByText("ok")[0]?.closest("article")).not.toHaveClass(
+      "search-hit",
     );
   });
 

@@ -231,6 +231,7 @@ export type AppSettings = {
   hideMobileStatusBar: boolean;
   streamingEnabled: boolean;
   composerSubmitMode: ComposerSubmitMode;
+  messageQuoteTemplate: string;
   contextSummaryRawTailMessages: number;
   contextSummaryAutoMessageInterval: number;
   debugEnabled: boolean;
@@ -268,17 +269,17 @@ export type SaveStatus = "loading" | "unsaved" | "saving" | "saved" | "failed";
 export const DATABASE_SCHEMA_VERSION = 13;
 
 export const DEFAULT_PROFILE_ID = "default-profile";
-export const DEFAULT_MODEL_ID = "default-model";
 export const CONTEXT_SUMMARY_ASSISTANT_ID = "context-summary-gpt54";
 export const DEFAULT_CONTEXT_SUMMARY_FRAMEWORK_ID = "default-context-summary";
 export const DEFAULT_CONTEXT_PROFILE_ID = "general-context";
 export const DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES = 8;
 export const DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL = 8;
 export const DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS = 6000;
+export const DEFAULT_MESSAGE_QUOTE_TEMPLATE = "引用内容：\n{content}";
 export const DEFAULT_MODEL_PROBE_GROUP_ID = "grok";
 export const DEFAULT_MODEL_REF: ModelRef = {
   apiProfileId: DEFAULT_PROFILE_ID,
-  modelId: DEFAULT_MODEL_ID,
+  modelId: "",
 };
 
 export const defaultUtilityAssistantRefs: UtilityAssistantFeatureRefs = {
@@ -469,16 +470,6 @@ export const parseModelRefKey = (key: string): ModelRef => {
   };
 };
 
-const defaultBinding = (isDefault = false): AssistantModelBinding => ({
-  apiProfileId: DEFAULT_PROFILE_ID,
-  modelId: DEFAULT_MODEL_ID,
-  enabled: true,
-  isDefault,
-  apiProfileNameSnapshot: "默认连接",
-  modelNameSnapshot: "默认模型",
-  modelDescriptionSnapshot: "请在设置页编辑模型 ID 和连接信息。",
-});
-
 export const initialApiProfiles: ApiProfile[] = [
   {
     id: DEFAULT_PROFILE_ID,
@@ -488,14 +479,7 @@ export const initialApiProfiles: ApiProfile[] = [
     apiKey: "",
     protocol: "openai-responses",
     enabled: true,
-    models: [
-      {
-        id: DEFAULT_MODEL_ID,
-        name: "默认模型",
-        description: "",
-        enabled: true,
-      },
-    ],
+    models: [],
   },
 ];
 
@@ -504,7 +488,7 @@ export const defaultAssistant: Assistant = {
   name: "默认助手",
   description: "",
   kind: "chat",
-  modelBindings: [defaultBinding(true)],
+  modelBindings: [],
   contextProfileId: DEFAULT_CONTEXT_PROFILE_ID,
   prompt: "",
   initialMessage: "",
@@ -518,7 +502,7 @@ export const contextSummaryAssistant: Assistant = {
     "内置功能助手预设：为单个对话生成可继续使用的上下文总结，不参与普通聊天。",
   kind: "utility",
   utilityModelStrategy: "follow-conversation",
-  modelBindings: [defaultBinding(true)],
+  modelBindings: [],
   contextProfileId: DEFAULT_CONTEXT_PROFILE_ID,
   prompt:
     "你是 MobileChat 的上下文总结助手。你的任务是把一个单独对话的旧消息整理成后续请求可使用的上下文总结。只保留对继续对话有用的信息：目标、已确认决策、约束、待办、术语定义、重要代码/配置发现、未解决问题。不要新增事实，不要评价，不要输出寒暄。总结是滚动重写，不是追加流水账；请主动合并重复信息、删除过期探索过程，并严格遵守请求中的字数预算。输出中文 Markdown，结构清晰但尽量紧凑。",
@@ -601,6 +585,7 @@ export const createInitialSettings = (
   hideMobileStatusBar: false,
   streamingEnabled: true,
   composerSubmitMode: "enter-send",
+  messageQuoteTemplate: DEFAULT_MESSAGE_QUOTE_TEMPLATE,
   contextSummaryRawTailMessages: DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
   contextSummaryAutoMessageInterval:
     DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL,

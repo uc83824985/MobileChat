@@ -1302,6 +1302,30 @@ button:disabled {
   white-space: nowrap;
 }
 
+.quote-template-setting {
+  align-items: stretch;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.quote-template-setting textarea {
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-strong);
+  font: inherit;
+  min-height: 72px;
+  padding: 8px 9px;
+  resize: vertical;
+}
+
+.quote-template-setting small {
+  color: var(--text-muted);
+  font-size: 12px;
+  grid-column: 2;
+  line-height: 1.35;
+}
+
 .theme-select {
   gap: 12px;
   pointer-events: none;
@@ -2492,10 +2516,12 @@ button:disabled {
 
 .mobile-layout .chat-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   row-gap: 10px;
 }
 
+.mobile-layout .chat-top-button,
 .mobile-layout .chat-settings-button {
   justify-self: end;
 }
@@ -2604,6 +2630,14 @@ button:disabled {
   grid-column: auto;
 }
 
+.mobile-layout .quote-template-setting {
+  grid-template-columns: 1fr;
+}
+
+.mobile-layout .quote-template-setting small {
+  grid-column: auto;
+}
+
 .mobile-layout .summary-policy-setting {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -2685,7 +2719,8 @@ button:disabled {
 
   .chat-header {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 8px;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
   }
 
   .desktop-layout .chat-header {

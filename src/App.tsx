@@ -1,5 +1,6 @@
 import {
   Archive,
+  ArrowUpToLine,
   Bot,
   Check,
   Database,
@@ -20,6 +21,7 @@ import {
   Settings,
   SlidersHorizontal,
   StopCircle,
+  TextQuote,
   Trash2,
   Upload,
   X,
@@ -60,6 +62,7 @@ import {
   DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS,
   DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL,
   DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
+  DEFAULT_MESSAGE_QUOTE_TEMPLATE,
   DEFAULT_MODEL_REF,
   defaultAssistant,
   type LocalBlobRecord,
@@ -123,6 +126,11 @@ type ImagePreviewState = {
   name: string;
   size: number;
 } | null;
+type MessageTextSelection = {
+  messageId: string;
+  text: string;
+} | null;
+type StreamingTextChunks = Record<string, string[]>;
 
 declare global {
   interface Window {
@@ -143,6 +151,8 @@ const CONSTRAINED_VIEWPORT_MAX_HEIGHT_PX = 560;
 const PANEL_SWIPE_EDGE_GUARD_PX = 32;
 const PANEL_SWIPE_TRIGGER_PX = 64;
 const PANEL_SWIPE_VERTICAL_LIMIT_PX = 56;
+const DIAGNOSTICS_SWIPE_TRIGGER_PX = 52;
+const DIAGNOSTICS_SWIPE_HORIZONTAL_LIMIT_PX = 72;
 const MODEL_PROBE_CONCURRENCY = 8;
 const MAX_DRAFT_IMAGES = 4;
 const MAX_DRAFT_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -566,6 +576,22 @@ function moveListItemById<T extends { id: string }>(
 const confirmDestructiveAction = (message: string) =>
   typeof window === "undefined" || window.confirm(message);
 
+const normalizeQuotedText = (text: string) =>
+  text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+
+const formatMessageQuote = (template: string, content: string) => {
+  const normalizedContent = normalizeQuotedText(content);
+  const normalizedTemplate = template.trim()
+    ? template
+    : DEFAULT_MESSAGE_QUOTE_TEMPLATE;
+
+  if (normalizedTemplate.includes("{content}")) {
+    return normalizedTemplate.replaceAll("{content}", normalizedContent);
+  }
+
+  return `${normalizedTemplate.replace(/\s+$/u, "")}\n${normalizedContent}`;
+};
+
 const themeLabels: Record<ThemeMode, string> = {
   system: "跟随系统",
   light: "亮色",
@@ -802,17 +828,7 @@ const formatTranscriptMessage = (message: Message, index: number) => {
 };
 
 const formatMessageSearchText = (message: Message) =>
-  [
-    message.label,
-    message.role,
-    message.status,
-    message.text,
-    formatMessageTime(message.createdAt),
-    formatMessageTime(message.completedAt),
-    message.source?.assistantName,
-    message.source?.modelName,
-    ...getMessageImageParts(message).map(formatMessageImageMarker),
-  ]
+  [message.text, ...getMessageImageParts(message).map(formatMessageImageMarker)]
     .filter(Boolean)
     .join("\n");
 
@@ -1265,6 +1281,10 @@ function App() {
   );
   const [composerSubmitMode, setComposerSubmitMode] =
     useState<ComposerSubmitMode>(bootSnapshot.settings.composerSubmitMode);
+  const [messageQuoteTemplate, setMessageQuoteTemplate] = useState(
+    bootSnapshot.settings.messageQuoteTemplate ||
+      DEFAULT_MESSAGE_QUOTE_TEMPLATE,
+  );
   const [contextSummaryRawTailMessages, setContextSummaryRawTailMessages] =
     useState(bootSnapshot.settings.contextSummaryRawTailMessages);
   const [
@@ -1297,10 +1317,13 @@ function App() {
   const [draftImages, setDraftImages] = useState<DraftImage[]>([]);
   const [composerNotice, setComposerNotice] = useState("");
   const [imagePreview, setImagePreview] = useState<ImagePreviewState>(null);
+  const [selectedMessageText, setSelectedMessageText] =
+    useState<MessageTextSelection>(null);
+  const [streamingTextChunks, setStreamingTextChunks] =
+    useState<StreamingTextChunks>({});
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
-  const [scrollShortcutTarget, setScrollShortcutTarget] = useState<
-    "top" | "bottom"
-  >("top");
+  const [isMessageThreadAwayFromBottom, setIsMessageThreadAwayFromBottom] =
+    useState(false);
   const [conversationSearch, setConversationSearch] = useState("");
   const [conversationSearchRegexEnabled, setConversationSearchRegexEnabled] =
     useState(false);
@@ -1353,10 +1376,20 @@ function App() {
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const messageThreadRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const shouldFollowMessageBottomRef = useRef(true);
+  const userThreadScrollIntentRef = useRef(false);
+  const scrollFollowFrameRef = useRef<number | null>(null);
+  const streamingFullTextRef = useRef<Record<string, string>>({});
   const drawerSwipeRef = useRef<{
     mode: "open-panel" | "close-drawer" | "close-settings";
     startX: number;
     startY: number;
+  } | null>(null);
+  const diagnosticsSwipeRef = useRef<{
+    mode: "expand" | "collapse";
+    startX: number;
+    startY: number;
+    bodyScrollTop: number;
   } | null>(null);
 
   const resizeComposerInput = useCallback(() => {
@@ -1418,7 +1451,45 @@ function App() {
     }
   }, [debugEnabled]);
 
-  const updateScrollShortcutTarget = useCallback(() => {
+  const scrollMessageThreadToBottom = useCallback(
+    (behavior: ScrollBehavior = "smooth") => {
+      const thread = messageThreadRef.current;
+      thread?.scrollTo?.({ top: thread.scrollHeight, behavior });
+      if (document.body.scrollHeight > window.innerHeight) {
+        window.scrollTo?.({
+          top: document.body.scrollHeight,
+          behavior,
+        });
+      }
+      setIsMessageThreadAwayFromBottom(false);
+    },
+    [],
+  );
+
+  const scheduleScrollMessageThreadToBottom = useCallback(
+    (behavior: ScrollBehavior = "smooth") => {
+      if (scrollFollowFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFollowFrameRef.current);
+      }
+
+      scrollFollowFrameRef.current = window.requestAnimationFrame(() => {
+        scrollFollowFrameRef.current = null;
+        scrollMessageThreadToBottom(behavior);
+      });
+    },
+    [scrollMessageThreadToBottom],
+  );
+
+  const startFollowingMessageBottom = useCallback(
+    (behavior: ScrollBehavior = "smooth") => {
+      shouldFollowMessageBottomRef.current = true;
+      userThreadScrollIntentRef.current = false;
+      scheduleScrollMessageThreadToBottom(behavior);
+    },
+    [scheduleScrollMessageThreadToBottom],
+  );
+
+  const updateMessageThreadScrollState = useCallback(() => {
     const thread = messageThreadRef.current;
     const threadMaxScrollTop = thread
       ? thread.scrollHeight - thread.clientHeight
@@ -1426,14 +1497,18 @@ function App() {
     const threadScrollable = threadMaxScrollTop > SCROLL_EDGE_THRESHOLD_PX;
 
     if (threadScrollable && thread) {
-      if (thread.scrollTop <= SCROLL_EDGE_THRESHOLD_PX) {
-        setScrollShortcutTarget("bottom");
+      const awayFromBottom =
+        thread.scrollTop < threadMaxScrollTop - SCROLL_EDGE_THRESHOLD_PX;
+      setIsMessageThreadAwayFromBottom(awayFromBottom);
+      if (!awayFromBottom) {
+        shouldFollowMessageBottomRef.current = true;
+        userThreadScrollIntentRef.current = false;
         return;
       }
-      if (thread.scrollTop >= threadMaxScrollTop - SCROLL_EDGE_THRESHOLD_PX) {
-        setScrollShortcutTarget("top");
-        return;
+      if (pendingMessageId && userThreadScrollIntentRef.current) {
+        shouldFollowMessageBottomRef.current = false;
       }
+      return;
     }
 
     const scrollElement = document.scrollingElement ?? document.documentElement;
@@ -1441,14 +1516,27 @@ function App() {
     const pageScrollable = pageMaxScrollTop > SCROLL_EDGE_THRESHOLD_PX;
 
     if (pageScrollable) {
-      if (window.scrollY <= SCROLL_EDGE_THRESHOLD_PX) {
-        setScrollShortcutTarget("bottom");
+      const awayFromBottom =
+        window.scrollY < pageMaxScrollTop - SCROLL_EDGE_THRESHOLD_PX;
+      setIsMessageThreadAwayFromBottom(awayFromBottom);
+      if (!awayFromBottom) {
+        shouldFollowMessageBottomRef.current = true;
+        userThreadScrollIntentRef.current = false;
         return;
       }
-      if (window.scrollY >= pageMaxScrollTop - SCROLL_EDGE_THRESHOLD_PX) {
-        setScrollShortcutTarget("top");
+      if (pendingMessageId && userThreadScrollIntentRef.current) {
+        shouldFollowMessageBottomRef.current = false;
       }
+      return;
     }
+
+    setIsMessageThreadAwayFromBottom(false);
+    shouldFollowMessageBottomRef.current = true;
+    userThreadScrollIntentRef.current = false;
+  }, [pendingMessageId]);
+
+  const markManualMessageThreadScrollIntent = useCallback(() => {
+    userThreadScrollIntentRef.current = true;
   }, []);
 
   const activeAssistant = useMemo(
@@ -1985,6 +2073,73 @@ function App() {
   const cancelDrawerSwipe = useCallback(() => {
     drawerSwipeRef.current = null;
   }, []);
+
+  const handleDiagnosticsSwipeStart = useCallback(
+    (event: TouchEvent<HTMLElement>) => {
+      if (!diagnosticsPanelCollapsible) {
+        diagnosticsSwipeRef.current = null;
+        return;
+      }
+
+      const touch = event.touches[0];
+      if (!touch) {
+        diagnosticsSwipeRef.current = null;
+        return;
+      }
+
+      const targetElement = getElementTarget(event.target);
+      const diagnosticsBody = targetElement?.closest(".diagnostics-body");
+      const bodyScrollTop =
+        diagnosticsBody instanceof HTMLElement ? diagnosticsBody.scrollTop : 0;
+
+      diagnosticsSwipeRef.current = {
+        mode: diagnosticsPanelExpanded ? "collapse" : "expand",
+        startX: touch.clientX,
+        startY: touch.clientY,
+        bodyScrollTop,
+      };
+    },
+    [diagnosticsPanelCollapsible, diagnosticsPanelExpanded],
+  );
+
+  const handleDiagnosticsSwipeEnd = useCallback(
+    (event: TouchEvent<HTMLElement>) => {
+      const swipe = diagnosticsSwipeRef.current;
+      diagnosticsSwipeRef.current = null;
+
+      if (!swipe || !diagnosticsPanelCollapsible) {
+        return;
+      }
+
+      const touch = event.changedTouches[0];
+      if (!touch) {
+        return;
+      }
+
+      const deltaX = touch.clientX - swipe.startX;
+      const deltaY = touch.clientY - swipe.startY;
+      if (Math.abs(deltaX) > DIAGNOSTICS_SWIPE_HORIZONTAL_LIMIT_PX) {
+        return;
+      }
+
+      if (swipe.mode === "expand" && deltaY <= -DIAGNOSTICS_SWIPE_TRIGGER_PX) {
+        setMobileDiagnosticsExpanded(true);
+      }
+
+      if (
+        swipe.mode === "collapse" &&
+        swipe.bodyScrollTop <= SCROLL_EDGE_THRESHOLD_PX &&
+        deltaY >= DIAGNOSTICS_SWIPE_TRIGGER_PX
+      ) {
+        setMobileDiagnosticsExpanded(false);
+      }
+    },
+    [diagnosticsPanelCollapsible],
+  );
+
+  const cancelDiagnosticsSwipe = useCallback(() => {
+    diagnosticsSwipeRef.current = null;
+  }, []);
   const appSettings = useMemo(
     () => ({
       ...bootSnapshot.settings,
@@ -1997,6 +2152,7 @@ function App() {
       hideMobileStatusBar,
       streamingEnabled,
       composerSubmitMode,
+      messageQuoteTemplate,
       contextSummaryRawTailMessages,
       contextSummaryAutoMessageInterval,
       debugEnabled,
@@ -2029,6 +2185,7 @@ function App() {
       hideMobileStatusBar,
       layoutMode,
       lastSuccessfulExportAt,
+      messageQuoteTemplate,
       modelProbeSettings,
       streamingEnabled,
       storageInfo.persisted,
@@ -2071,6 +2228,9 @@ function App() {
     setHideMobileStatusBar(snapshot.settings.hideMobileStatusBar);
     setStreamingEnabled(snapshot.settings.streamingEnabled);
     setComposerSubmitMode(snapshot.settings.composerSubmitMode);
+    setMessageQuoteTemplate(
+      snapshot.settings.messageQuoteTemplate || DEFAULT_MESSAGE_QUOTE_TEMPLATE,
+    );
     setContextSummaryRawTailMessages(
       snapshot.settings.contextSummaryRawTailMessages,
     );
@@ -2087,6 +2247,9 @@ function App() {
     setDraftImages([]);
     setComposerNotice("");
     setImagePreview(null);
+    setSelectedMessageText(null);
+    setStreamingTextChunks({});
+    streamingFullTextRef.current = {};
     setStorageInfo({
       persisted: snapshot.settings.storagePersisted ?? null,
       usage: snapshot.settings.storageUsage,
@@ -2142,16 +2305,30 @@ function App() {
   }, [hideMobileStatusBar]);
 
   useEffect(() => {
-    updateScrollShortcutTarget();
-    window.addEventListener("scroll", updateScrollShortcutTarget, {
+    updateMessageThreadScrollState();
+    window.addEventListener("scroll", updateMessageThreadScrollState, {
       passive: true,
     });
-    window.addEventListener("resize", updateScrollShortcutTarget);
+    window.addEventListener("resize", updateMessageThreadScrollState);
     return () => {
-      window.removeEventListener("scroll", updateScrollShortcutTarget);
-      window.removeEventListener("resize", updateScrollShortcutTarget);
+      window.removeEventListener("scroll", updateMessageThreadScrollState);
+      window.removeEventListener("resize", updateMessageThreadScrollState);
     };
-  }, [activeMessages.length, updateScrollShortcutTarget]);
+  }, [activeMessages.length, updateMessageThreadScrollState]);
+
+  useEffect(() => {
+    if (pendingMessageId && shouldFollowMessageBottomRef.current) {
+      scheduleScrollMessageThreadToBottom("auto");
+      return;
+    }
+
+    updateMessageThreadScrollState();
+  }, [
+    activeMessages,
+    pendingMessageId,
+    scheduleScrollMessageThreadToBottom,
+    updateMessageThreadScrollState,
+  ]);
 
   useEffect(() => {
     setContextSummaryPreviewOpen(false);
@@ -2313,6 +2490,9 @@ function App() {
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current);
       }
+      if (scrollFollowFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFollowFrameRef.current);
+      }
     };
   }, []);
 
@@ -2346,6 +2526,126 @@ function App() {
     },
     [pendingMessageId],
   );
+
+  const appendStreamingMessageText = useCallback(
+    (messageId: string, delta: string, fullText: string) => {
+      const previousText = streamingFullTextRef.current[messageId] ?? "";
+      let nextDelta = delta;
+
+      if (!nextDelta && fullText.startsWith(previousText)) {
+        nextDelta = fullText.slice(previousText.length);
+      }
+
+      if (previousText && fullText && !fullText.startsWith(previousText)) {
+        streamingFullTextRef.current[messageId] = fullText;
+        setStreamingTextChunks((current) => ({
+          ...current,
+          [messageId]: [fullText],
+        }));
+        return;
+      }
+
+      if (!nextDelta) {
+        return;
+      }
+
+      streamingFullTextRef.current[messageId] =
+        fullText || `${previousText}${nextDelta}`;
+      setStreamingTextChunks((current) => ({
+        ...current,
+        [messageId]: [...(current[messageId] ?? []), nextDelta],
+      }));
+    },
+    [],
+  );
+
+  const finalizeStreamingMessageText = useCallback(
+    (messageId: string, finalText: string) => {
+      const previousText = streamingFullTextRef.current[messageId];
+      if (!previousText || !finalText) {
+        return;
+      }
+
+      if (finalText === previousText) {
+        return;
+      }
+
+      appendStreamingMessageText(
+        messageId,
+        finalText.startsWith(previousText)
+          ? finalText.slice(previousText.length)
+          : finalText,
+        finalText,
+      );
+    },
+    [appendStreamingMessageText],
+  );
+
+  const clearStreamingMessageText = useCallback((messageId: string) => {
+    delete streamingFullTextRef.current[messageId];
+    setStreamingTextChunks((current) => {
+      if (!current[messageId]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[messageId];
+      return next;
+    });
+  }, []);
+
+  const captureMessageTextSelection = useCallback(() => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      setSelectedMessageText(null);
+      return;
+    }
+
+    const selectedText = normalizeQuotedText(selection.toString());
+    if (!selectedText) {
+      setSelectedMessageText(null);
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const startElement =
+      range.startContainer instanceof Element
+        ? range.startContainer
+        : range.startContainer.parentElement;
+    const endElement =
+      range.endContainer instanceof Element
+        ? range.endContainer
+        : range.endContainer.parentElement;
+    const startTextElement = startElement?.closest<HTMLElement>(
+      "[data-message-text]",
+    );
+    const endTextElement = endElement?.closest<HTMLElement>(
+      "[data-message-text]",
+    );
+
+    if (
+      !startTextElement ||
+      startTextElement !== endTextElement ||
+      !messageThreadRef.current?.contains(startTextElement)
+    ) {
+      setSelectedMessageText(null);
+      return;
+    }
+
+    const messageElement =
+      startTextElement.closest<HTMLElement>("[data-message-id]");
+    const messageId = messageElement?.dataset.messageId;
+    if (!messageId) {
+      setSelectedMessageText(null);
+      return;
+    }
+
+    setSelectedMessageText({ messageId, text: selectedText });
+  }, []);
+
+  const captureMessageTextSelectionAfterTouch = useCallback(() => {
+    window.setTimeout(captureMessageTextSelection, 0);
+  }, [captureMessageTextSelection]);
 
   const activateAssistant = (assistantId: string) => {
     const nextAssistant =
@@ -3822,6 +4122,7 @@ function App() {
       abortControllerRef.current = null;
       setPendingMessageId(null);
     }
+    clearStreamingMessageText(messageId);
 
     const targetConversation = conversations.find(
       (conversation) => conversation.id === targetMessage.conversationId,
@@ -4300,6 +4601,7 @@ function App() {
     const idsToRemove = new Set(
       activeMessages.slice(messageIndex).map((message) => message.id),
     );
+    idsToRemove.forEach(clearStreamingMessageText);
     const resolvedModel = activeResolvedModel;
 
     if (!resolvedModel) {
@@ -4316,6 +4618,7 @@ function App() {
         ...current.filter((message) => !idsToRemove.has(message.id)),
         errorMessage,
       ]);
+      startFollowingMessageBottom();
       return;
     }
 
@@ -4343,6 +4646,7 @@ function App() {
       assistantMessage,
     ]);
     setPendingMessageId(assistantMessage.id);
+    startFollowingMessageBottom();
     setConversations((current) =>
       current.map((conversation) =>
         conversation.id === activeConversation.id
@@ -4372,6 +4676,7 @@ function App() {
         onTextDelta: streamingEnabled
           ? (_delta, fullText) => {
               streamedText = fullText;
+              appendStreamingMessageText(assistantMessage.id, _delta, fullText);
               setMessages((current) =>
                 current.map((message) =>
                   message.id === assistantMessage.id
@@ -4400,6 +4705,10 @@ function App() {
         providerResponseId: result.providerResponseId,
         usage: result.usage,
       };
+      finalizeStreamingMessageText(
+        assistantMessage.id,
+        completedAssistantMessage.text,
+      );
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
@@ -4419,6 +4728,7 @@ function App() {
       }
 
       const completionTiming = createCompletionTiming(requestStartedAt);
+      clearStreamingMessageText(assistantMessage.id);
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
@@ -4461,6 +4771,7 @@ function App() {
     const idsToRemove = new Set(
       activeMessages.slice(messageIndex + 1).map((message) => message.id),
     );
+    idsToRemove.forEach(clearStreamingMessageText);
     const resolvedModel = activeResolvedModel;
 
     if (!resolvedModel) {
@@ -4477,6 +4788,7 @@ function App() {
         ...current.filter((message) => !idsToRemove.has(message.id)),
         errorMessage,
       ]);
+      startFollowingMessageBottom();
       return;
     }
 
@@ -4504,6 +4816,7 @@ function App() {
       assistantMessage,
     ]);
     setPendingMessageId(assistantMessage.id);
+    startFollowingMessageBottom();
     setConversations((current) =>
       current.map((conversation) =>
         conversation.id === activeConversation.id
@@ -4533,6 +4846,7 @@ function App() {
         onTextDelta: streamingEnabled
           ? (_delta, fullText) => {
               streamedText = fullText;
+              appendStreamingMessageText(assistantMessage.id, _delta, fullText);
               setMessages((current) =>
                 current.map((message) =>
                   message.id === assistantMessage.id
@@ -4561,6 +4875,10 @@ function App() {
         providerResponseId: result.providerResponseId,
         usage: result.usage,
       };
+      finalizeStreamingMessageText(
+        assistantMessage.id,
+        completedAssistantMessage.text,
+      );
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
@@ -4580,6 +4898,7 @@ function App() {
       }
 
       const completionTiming = createCompletionTiming(requestStartedAt);
+      clearStreamingMessageText(assistantMessage.id);
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
@@ -4633,6 +4952,7 @@ function App() {
       setDraftImages([]);
       setComposerNotice("");
       setMessages((current) => [...current, assistantMessage]);
+      startFollowingMessageBottom();
       return;
     }
 
@@ -4674,6 +4994,7 @@ function App() {
     setLastObservedUsage(undefined);
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setPendingMessageId(assistantMessage.id);
+    startFollowingMessageBottom();
     setConversations((current) =>
       current.map((conversation) =>
         conversation.id === activeConversation.id
@@ -4703,6 +5024,7 @@ function App() {
         onTextDelta: streamingEnabled
           ? (_delta, fullText) => {
               streamedText = fullText;
+              appendStreamingMessageText(assistantMessage.id, _delta, fullText);
               setMessages((current) =>
                 current.map((message) =>
                   message.id === assistantMessage.id
@@ -4731,6 +5053,10 @@ function App() {
         providerResponseId: result.providerResponseId,
         usage: result.usage,
       };
+      finalizeStreamingMessageText(
+        assistantMessage.id,
+        completedAssistantMessage.text,
+      );
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
@@ -4754,6 +5080,7 @@ function App() {
       }
 
       const completionTiming = createCompletionTiming(requestStartedAt);
+      clearStreamingMessageText(assistantMessage.id);
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
@@ -4801,6 +5128,47 @@ function App() {
     });
   };
 
+  const insertComposerTextBlock = (text: string) => {
+    const input = composerInputRef.current;
+    const selectionStart = input?.selectionStart ?? draft.length;
+    const selectionEnd = input?.selectionEnd ?? draft.length;
+    const before = draft.slice(0, selectionStart);
+    const after = draft.slice(selectionEnd);
+    const prefix = before === "" || before.endsWith("\n") ? "" : "\n";
+    const suffix = after === "" || after.startsWith("\n") ? "" : "\n";
+    const insertion = `${prefix}${text}${suffix}`;
+    const nextDraft = `${before}${insertion}${after}`;
+
+    setDraft(nextDraft);
+    window.requestAnimationFrame(() => {
+      const nextInput = composerInputRef.current;
+      if (!nextInput) {
+        return;
+      }
+
+      const cursor = before.length + insertion.length;
+      nextInput.focus();
+      nextInput.selectionStart = cursor;
+      nextInput.selectionEnd = cursor;
+      resizeComposerInput();
+    });
+  };
+
+  const insertSelectedMessageQuote = (messageId: string) => {
+    const selectedText =
+      selectedMessageText?.messageId === messageId
+        ? selectedMessageText.text
+        : "";
+    if (!selectedText) {
+      return;
+    }
+
+    insertComposerTextBlock(
+      formatMessageQuote(messageQuoteTemplate, selectedText),
+    );
+    setComposerNotice("已引用选中文本");
+  };
+
   const sendOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const nativeEvent = event.nativeEvent;
     if ("isComposing" in nativeEvent && nativeEvent.isComposing) {
@@ -4838,16 +5206,18 @@ function App() {
     void sendMessage();
   };
 
-  const scrollMessageThreadToEdge = () => {
+  const scrollMessageThreadToTop = () => {
     const thread = messageThreadRef.current;
-    if (scrollShortcutTarget === "top") {
-      thread?.scrollTo({ top: 0, behavior: "smooth" });
-      window.scrollTo({ top: 0, behavior: "smooth" });
-      return;
+    shouldFollowMessageBottomRef.current = false;
+    userThreadScrollIntentRef.current = true;
+    thread?.scrollTo?.({ top: 0, behavior: "smooth" });
+    if (document.body.scrollHeight > window.innerHeight) {
+      window.scrollTo?.({ top: 0, behavior: "smooth" });
     }
+  };
 
-    thread?.scrollTo({ top: thread.scrollHeight, behavior: "smooth" });
-    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  const scrollMessageThreadToBottomFromButton = () => {
+    startFollowingMessageBottom();
   };
 
   const jumpMessageSearchResult = (direction: -1 | 1) => {
@@ -5134,6 +5504,14 @@ function App() {
             <span>{activeConversation?.summary ?? "请新建或选择一个对话"}</span>
           </div>
           <button
+            className="icon-button mobile-only chat-top-button"
+            type="button"
+            aria-label="回到消息顶部"
+            onClick={scrollMessageThreadToTop}
+          >
+            <ArrowUpToLine size={20} />
+          </button>
+          <button
             className="icon-button mobile-only chat-settings-button"
             type="button"
             aria-label="打开设置"
@@ -5234,7 +5612,11 @@ function App() {
             className="message-thread"
             aria-label="消息列表"
             ref={messageThreadRef}
-            onScroll={updateScrollShortcutTarget}
+            onMouseUp={captureMessageTextSelection}
+            onScroll={updateMessageThreadScrollState}
+            onTouchEnd={captureMessageTextSelectionAfterTouch}
+            onTouchMove={markManualMessageThreadScrollIntent}
+            onWheel={markManualMessageThreadScrollIntent}
           >
             {activeMessages.length > 0 ? (
               activeMessages.map((message) => {
@@ -5258,7 +5640,17 @@ function App() {
                       {message.status === "stopped" ? " · 已停止" : ""}
                       {message.status === "error" ? " · 错误" : ""}
                     </div>
-                    <p>{message.text}</p>
+                    <p data-message-text>
+                      {streamingTextChunks[message.id]?.length
+                        ? streamingTextChunks[message.id].map(
+                            (chunk, index) => (
+                              <span key={`${message.id}-chunk-${index}`}>
+                                {chunk}
+                              </span>
+                            ),
+                          )
+                        : message.text}
+                    </p>
                     {getMessageImageParts(message).length > 0 ? (
                       <div className="message-images" aria-label="消息图片">
                         {getMessageImageParts(message).map((part, index) => {
@@ -5308,6 +5700,24 @@ function App() {
                       </div>
                     ) : null}
                     <div className="message-actions">
+                      <button
+                        type="button"
+                        aria-label="引用选中文本"
+                        disabled={
+                          activeConversationReadOnly ||
+                          selectedMessageText?.messageId !== message.id
+                        }
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => insertSelectedMessageQuote(message.id)}
+                        title={
+                          selectedMessageText?.messageId === message.id
+                            ? "将当前选中文本插入输入框"
+                            : "先选中这条消息中的文本片段"
+                        }
+                      >
+                        <TextQuote size={14} />
+                        引用
+                      </button>
                       {message.role === "assistant" ? (
                         <button
                           type="button"
@@ -5354,22 +5764,21 @@ function App() {
               <section className="empty-thread">
                 <h2>开始一个新对话</h2>
                 <p>
-                  当前已接入最小 Responses 请求循环；请先在设置页填写本地 API
-                  key。
+                  请先在设置页配置连接、API key、模型，并把模型绑定到聊天助手。
                 </p>
               </section>
             )}
           </div>
-          <button
-            className="message-scroll-action"
-            type="button"
-            aria-label={
-              scrollShortcutTarget === "top" ? "回到消息顶部" : "回到消息底部"
-            }
-            onClick={scrollMessageThreadToEdge}
-          >
-            {scrollShortcutTarget === "top" ? "↑ 顶部" : "↓ 底部"}
-          </button>
+          {isMessageThreadAwayFromBottom ? (
+            <button
+              className="message-scroll-action"
+              type="button"
+              aria-label="回到消息底部"
+              onClick={scrollMessageThreadToBottomFromButton}
+            >
+              ↓ 底部
+            </button>
+          ) : null}
         </div>
 
         {debugEnabled ? (
@@ -5378,6 +5787,9 @@ function App() {
               diagnosticsPanelExpanded ? "expanded" : "collapsed"
             }`}
             aria-label="调试诊断"
+            onTouchStart={handleDiagnosticsSwipeStart}
+            onTouchEnd={handleDiagnosticsSwipeEnd}
+            onTouchCancel={cancelDiagnosticsSwipe}
           >
             <header>
               {diagnosticsPanelCollapsible ? (
@@ -5854,6 +6266,21 @@ function App() {
                   />
                 </div>
               </div>
+              <label className="settings-row quote-template-setting wide-setting">
+                <span>引用格式</span>
+                <textarea
+                  aria-label="引用格式"
+                  placeholder={DEFAULT_MESSAGE_QUOTE_TEMPLATE}
+                  value={messageQuoteTemplate}
+                  onChange={(event) =>
+                    setMessageQuoteTemplate(event.target.value)
+                  }
+                />
+                <small>
+                  使用 {"{content}"}{" "}
+                  表示当前选中的消息片段；未选中文本时引用不可用。
+                </small>
+              </label>
               <div className="settings-row compact theme-select">
                 <span>布局模式</span>
                 <CustomSelect

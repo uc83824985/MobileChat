@@ -89,7 +89,16 @@ test("supports basic mobile interactions, title editing, and model switching", a
 
   await selectCustomOption(page, "选择助手", "默认助手");
   await expectCustomSelectValue(page, "选择助手", "默认助手");
-  await expectCustomSelectValue(page, "选择模型", "默认模型");
+
+  await openSettings(page);
+  await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
+  await page.getByText("新增模型").click();
+  await expect(page.getByLabel("模型名称")).toHaveValue("new-model-1");
+  await page.getByLabel("允许模型 默认连接 new-model-1").check({
+    force: true,
+  });
+  await page.getByLabel("关闭设置").click();
+  await expectCustomSelectValue(page, "选择模型", "new-model-1");
 
   await page.getByPlaceholder("输入消息").fill("测试移动端发送");
   await page.getByLabel("发送").click();
@@ -115,10 +124,10 @@ test("supports basic mobile interactions, title editing, and model switching", a
   );
 
   await expect(
-    page.getByRole("button", { name: "编辑模型 默认模型" }),
+    page.getByRole("button", { name: "编辑模型 new-model-1" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "编辑模型 默认模型" }).click();
-  await expect(page.getByLabel("模型名称")).toHaveValue("默认模型");
+  await page.getByRole("button", { name: "编辑模型 new-model-1" }).click();
+  await expect(page.getByLabel("模型名称")).toHaveValue("new-model-1");
   await page.getByLabel("模型名称").fill("手机主模型");
   await page.getByText("新增模型").click();
   await expect(page.getByLabel("模型名称")).toHaveValue("new-model-2");

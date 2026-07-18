@@ -50,11 +50,16 @@ describe("MobileChat persistence", () => {
     expect(snapshot.settings.editingContextProfileId).toBe(
       defaultContextProfile.id,
     );
-    expect(snapshot.settings.activeModelRef.modelId).toBe("default-model");
+    expect(snapshot.settings.activeModelRef.modelId).toBe("");
     expect(snapshot.apiProfiles).toHaveLength(1);
     expect(snapshot.apiProfiles[0]?.baseUrl).toBe("");
-    expect(snapshot.apiProfiles[0]?.models).toHaveLength(1);
+    expect(snapshot.apiProfiles[0]?.models).toEqual([]);
     expect(snapshot.assistants).toHaveLength(2);
+    expect(
+      snapshot.assistants.every(
+        (assistant) => assistant.modelBindings.length === 0,
+      ),
+    ).toBe(true);
     expect(snapshot.assistants.map((assistant) => assistant.id)).toContain(
       CONTEXT_SUMMARY_ASSISTANT_ID,
     );
@@ -276,7 +281,7 @@ describe("MobileChat persistence", () => {
         contextSummaryRawTailMessages: 3,
         activeModelRef: {
           apiProfileId: "default-profile",
-          modelId: "default-model",
+          modelId: "persisted-model",
         },
       },
       apiProfiles: snapshot.apiProfiles.map((profile) =>
@@ -284,20 +289,34 @@ describe("MobileChat persistence", () => {
           ? {
               ...profile,
               apiKey: "local-only-key",
-              models: profile.models.map((model) =>
-                model.id === "default-model"
-                  ? {
-                      ...model,
-                      name: "Persisted Model",
-                    }
-                  : model,
-              ),
+              models: [
+                {
+                  id: "persisted-model",
+                  name: "Persisted Model",
+                  description: "",
+                  enabled: true,
+                },
+              ],
             }
           : profile,
       ),
       assistants: snapshot.assistants.map((assistant) =>
         assistant.id === "architect"
-          ? { ...assistant, name: "持久化默认助手" }
+          ? {
+              ...assistant,
+              name: "持久化默认助手",
+              modelBindings: [
+                {
+                  apiProfileId: "default-profile",
+                  modelId: "persisted-model",
+                  enabled: true,
+                  isDefault: true,
+                  apiProfileNameSnapshot: "默认连接",
+                  modelNameSnapshot: "Persisted Model",
+                  modelDescriptionSnapshot: "",
+                },
+              ],
+            }
           : assistant,
       ),
     };
@@ -312,10 +331,10 @@ describe("MobileChat persistence", () => {
     expect(restored.settings.streamingEnabled).toBe(false);
     expect(restored.settings.composerSubmitMode).toBe("ctrl-enter-send");
     expect(restored.settings.contextSummaryRawTailMessages).toBe(3);
-    expect(restored.settings.activeModelRef.modelId).toBe("default-model");
+    expect(restored.settings.activeModelRef.modelId).toBe("persisted-model");
     expect(restored.apiProfiles[0]?.apiKey).toBe("local-only-key");
     const restoredModel = restored.apiProfiles[0]?.models.find(
-      (model) => model.id === "default-model",
+      (model) => model.id === "persisted-model",
     );
     expect(restoredModel?.name).toBe("Persisted Model");
     expect(
