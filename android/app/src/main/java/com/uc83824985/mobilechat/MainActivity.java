@@ -49,7 +49,16 @@ public class MainActivity extends Activity {
         setContentView(webView);
 
         configureWebView(webView);
-        webView.loadUrl(BuildConfig.MOBILECHAT_WEBVIEW_ENTRY_URL);
+        if (savedInstanceState == null || webView.restoreState(savedInstanceState) == null) {
+            webView.loadUrl(BuildConfig.MOBILECHAT_WEBVIEW_ENTRY_URL);
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        applyStatusBarVisibility();
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -215,6 +224,14 @@ public class MainActivity extends Activity {
         Uri[] results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
         pendingFileChooser.onReceiveValue(results);
         pendingFileChooser = null;
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        if (webView != null) {
+            webView.saveState(outState);
+        }
+        super.onSaveInstanceState(outState);
     }
 
     @Override
