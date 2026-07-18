@@ -4,8 +4,10 @@ param(
     [Alias("DeviceRoot")]
     [string]$DevicePath = "/sdcard/Download/MobileChat",
     [string]$OutputDir = "artifacts",
-    [ValidateSet("LocalFile", "Url")]
-    [string]$OpenTarget = "LocalFile",
+    [ValidateSet("WebViewApk", "LocalFile")]
+    [string]$DeployMode = "WebViewApk",
+    [ValidateSet("WebViewApp", "LocalFile", "Url")]
+    [string]$OpenTarget = "WebViewApp",
     [switch]$SkipBuild,
     [switch]$ForcePackage,
     [switch]$PackageOnly,
@@ -21,6 +23,20 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $MobileFileDistDir = Join-Path $RepoRoot ".tmp\mobile-file-dist"
 $ArtifactDir = Join-Path $RepoRoot $OutputDir
 $MobileLayoutDir = Join-Path $RepoRoot ".tmp\mobile-layout"
+$AndroidProjectDir = Join-Path $RepoRoot "android"
+$AndroidAssetsAppDir = Join-Path $AndroidProjectDir "app\src\main\assets"
+$LocalSigningDir = Join-Path $RepoRoot ".local\android-signing"
+$LocalKeystorePath = Join-Path $LocalSigningDir "mobilechat-dev.jks"
+
+# Persistence-critical constants. Do not change after installing on a phone unless
+# the user has exported data and accepts creating a new app/WebView storage bucket.
+$AndroidApplicationId = "com.uc83824985.mobilechat"
+$AndroidAssetOrigin = "https://appassets.androidplatform.net"
+$AndroidAssetPath = "/app/"
+$AndroidEntryUrl = "${AndroidAssetOrigin}${AndroidAssetPath}index.html"
+$IndexedDbName = "MobileChatDB"
+$SigningAlias = "mobilechat-local-dev"
+$SigningPassword = "mobilechat-local-dev"
 
 function Invoke-Adb {
     param([Parameter(Mandatory = $true)][string[]]$AdbArgs)
@@ -28,6 +44,19 @@ function Invoke-Adb {
     & adb @AdbArgs
     if ($LASTEXITCODE -ne 0) {
         throw "adb command failed: adb $($AdbArgs -join ' ')"
+    }
+}
+
+function Assert-AndroidDeviceReady {
+    if (-not (Get-Command adb -ErrorAction SilentlyContinue)) {
+        throw "adb was not found in PATH. Install Android platform-tools and enable USB debugging on the phone."
+    }
+
+    $State = (& adb get-state 2>$null)
+    if ($LASTEXITCODE -ne 0 -or ($State -join "").Trim() -ne "device") {
+        Write-Host "Connected adb devices:"
+        & adb devices
+        throw "No ready Android device was found. Connect the phone, authorize USB debugging, then retry."
     }
 }
 
@@ -50,16 +79,6 @@ function Resolve-AndroidAppPath {
     }
 
     return $Normalized
-}
-
-function Get-LatestPackageZip {
-    if (-not (Test-Path -LiteralPath $ArtifactDir)) {
-        return $null
-    }
-
-    return Get-ChildItem -LiteralPath $ArtifactDir -Filter "mobilechat-mobile-*.zip" -File |
-        Sort-Object LastWriteTimeUtc -Descending |
-        Select-Object -First 1
 }
 
 function Get-NewestWriteTimeUtc {
@@ -87,34 +106,72 @@ function Get-NewestWriteTimeUtc {
     return $Newest
 }
 
-function Get-PackageInputPaths {
-    $Paths = @(
+function Get-SharedInputPaths {
+    return @(
         (Join-Path $RepoRoot "src"),
         (Join-Path $RepoRoot "public"),
         (Join-Path $RepoRoot "index.html"),
         (Join-Path $RepoRoot "package.json"),
         (Join-Path $RepoRoot "package-lock.json"),
         (Join-Path $RepoRoot "vite.config.ts"),
+        (Join-Path $RepoRoot "vite.mobile-file.config.ts"),
         (Join-Path $RepoRoot "tsconfig.json"),
         (Join-Path $RepoRoot "tsconfig.app.json"),
         (Join-Path $RepoRoot "tsconfig.node.json"),
-        (Join-Path $RepoRoot "vite.mobile-file.config.ts"),
         (Join-Path $RepoRoot "scripts\deploy-android.ps1"),
         (Join-Path $RepoRoot ".env"),
         (Join-Path $RepoRoot ".env.local"),
         (Join-Path $RepoRoot ".env.production"),
         (Join-Path $RepoRoot ".env.production.local")
     )
+}
 
+function Get-LocalFilePackageInputPaths {
+    $Paths = @(Get-SharedInputPaths)
     if (Test-Path -LiteralPath $MobileFileDistDir) {
         $Paths += $MobileFileDistDir
     }
-
     if ($SkipBuild) {
         return @($MobileFileDistDir)
     }
-
     return $Paths
+}
+
+function Get-WebViewPackageInputPaths {
+    $Paths = @(Get-SharedInputPaths)
+    $AndroidFiles = Get-ChildItem -LiteralPath $AndroidProjectDir -Recurse -File -Force -ErrorAction SilentlyContinue |
+        Where-Object {
+            $FullName = $_.FullName
+            -not $FullName.Contains("\.gradle\") -and
+            -not $FullName.Contains("\build\") -and
+            -not $FullName.Contains("\app\src\main\assets\app\")
+        } |
+        ForEach-Object { $_.FullName }
+    $Paths += $AndroidFiles
+    if ($SkipBuild) {
+        return @($AndroidProjectDir, $MobileFileDistDir)
+    }
+    return $Paths
+}
+
+function Get-LatestPackageZip {
+    if (-not (Test-Path -LiteralPath $ArtifactDir)) {
+        return $null
+    }
+
+    return Get-ChildItem -LiteralPath $ArtifactDir -Filter "mobilechat-mobile-*.zip" -File |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+}
+
+function Get-LatestWebViewApk {
+    if (-not (Test-Path -LiteralPath $ArtifactDir)) {
+        return $null
+    }
+
+    return Get-ChildItem -LiteralPath $ArtifactDir -Filter "mobilechat-webview-*.apk" -File |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
 }
 
 function Test-PackageZipIsCurrent {
@@ -130,12 +187,27 @@ function Test-PackageZipIsCurrent {
         return $false
     }
 
-    $NewestInput = Get-NewestWriteTimeUtc (Get-PackageInputPaths)
+    $NewestInput = Get-NewestWriteTimeUtc (Get-LocalFilePackageInputPaths)
     if ($NewestInput -eq [datetime]::MinValue.ToUniversalTime()) {
         return $false
     }
 
     return $Zip.LastWriteTimeUtc -ge $NewestInput.AddSeconds(-2)
+}
+
+function Test-WebViewApkIsCurrent {
+    param([System.IO.FileInfo]$Apk)
+
+    if ($null -eq $Apk) {
+        return $false
+    }
+
+    $NewestInput = Get-NewestWriteTimeUtc (Get-WebViewPackageInputPaths)
+    if ($NewestInput -eq [datetime]::MinValue.ToUniversalTime()) {
+        return $false
+    }
+
+    return $Apk.LastWriteTimeUtc -ge $NewestInput.AddSeconds(-2)
 }
 
 function New-MobileFileLayout {
@@ -214,7 +286,7 @@ function New-MobileFileLayout {
               "'": "&#39;",
             })[character]) +
             "</p>" +
-            '<p style="color: #888;">Local file test boot diagnostics.</p>' +
+            '<p style="color: #888;">WebView/local bundle boot diagnostics.</p>' +
             "</main>";
         };
 
@@ -232,7 +304,7 @@ function New-MobileFileLayout {
         window.setTimeout(() => {
           const root = document.getElementById("root");
           if (root && root.childElementCount === 0) {
-            showBootError("The app script did not mount the UI. This browser may block local script execution, or the app crashed before rendering.");
+            showBootError("The app script did not mount the UI. This browser/WebView may block local script execution, or the app crashed before rendering.");
           }
         }, 2500);
       })();
@@ -242,7 +314,7 @@ function New-MobileFileLayout {
 __MOBILECHAT_INLINE_STYLE__
     </style>
   </head>
-  <body>
+  <body data-mobilechat-build="__MOBILECHAT_BUILD_STAMP__">
     <div id="root"></div>
     <script>
 __MOBILECHAT_INLINE_SCRIPT__
@@ -291,89 +363,280 @@ function New-PackageZip {
     }
 }
 
-$LatestZip = Get-LatestPackageZip
-if (-not $ForcePackage -and (Test-PackageZipIsCurrent $LatestZip)) {
-    $ZipPath = $LatestZip.FullName
-    Write-Host "Using existing latest package:"
-    Write-Host $ZipPath
-} else {
-    if ($ForcePackage) {
-        Write-Host "ForcePackage was set; creating a fresh package..."
-    } else {
-        Write-Host "No current package was found, or the existing package is stale; creating a fresh package..."
+function Ensure-JavaHome {
+    if ($env:JAVA_HOME -and (Test-Path -LiteralPath (Join-Path $env:JAVA_HOME "bin\java.exe"))) {
+        $JavaBin = Join-Path $env:JAVA_HOME "bin"
+        if (-not ($env:PATH.Split(";") -contains $JavaBin)) {
+            $env:PATH = "$JavaBin;$env:PATH"
+        }
+        return
     }
 
-    $ZipPath = New-PackageZip
-    if (-not $ZipPath -or -not (Test-Path -LiteralPath $ZipPath)) {
-        throw "Packaging did not produce a zip artifact."
+    $AndroidStudioJbr = "C:\Program Files\Android\Android Studio\jbr"
+    if (Test-Path -LiteralPath (Join-Path $AndroidStudioJbr "bin\java.exe")) {
+        $env:JAVA_HOME = $AndroidStudioJbr
+        $env:PATH = "$(Join-Path $AndroidStudioJbr 'bin');$env:PATH"
+        return
+    }
+
+    throw "Java was not found. Install Android Studio or set JAVA_HOME to a JDK 17+ directory."
+}
+
+function Ensure-AndroidSigningKeystore {
+    Ensure-JavaHome
+    if (Test-Path -LiteralPath $LocalKeystorePath) {
+        return
+    }
+
+    New-Item -ItemType Directory -Force -Path $LocalSigningDir | Out-Null
+    $Keytool = Join-Path $env:JAVA_HOME "bin\keytool.exe"
+    if (-not (Test-Path -LiteralPath $Keytool)) {
+        throw "keytool was not found under JAVA_HOME: $env:JAVA_HOME"
+    }
+
+    Write-Host "Creating stable local Android signing key:"
+    Write-Host $LocalKeystorePath
+    & $Keytool `
+        -genkeypair `
+        -v `
+        -keystore $LocalKeystorePath `
+        -storepass $SigningPassword `
+        -keypass $SigningPassword `
+        -alias $SigningAlias `
+        -keyalg RSA `
+        -keysize 2048 `
+        -validity 10000 `
+        -dname "CN=MobileChat Local Dev,O=MobileChat,C=CN" |
+        ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to create Android signing keystore."
     }
 }
 
-if ($PackageOnly) {
-    Write-Host ""
-    Write-Host "Package complete."
-    Write-Host $ZipPath
-    exit 0
+function Get-GradleExecutable {
+    $GlobalGradle = Get-Command gradle -ErrorAction SilentlyContinue
+    if ($GlobalGradle) {
+        return $GlobalGradle.Source
+    }
+
+    $CachedGradle = Get-ChildItem "$env:USERPROFILE\.gradle\wrapper\dists" -Recurse -Filter gradle.bat -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($CachedGradle) {
+        return $CachedGradle.FullName
+    }
+
+    throw "Gradle was not found. Install Gradle, or open/build once from Android Studio so a Gradle distribution is available."
 }
 
-if (-not (Get-Command adb -ErrorAction SilentlyContinue)) {
-    throw "adb was not found in PATH. Install Android platform-tools and enable USB debugging on the phone."
+function Invoke-Gradle {
+    param([Parameter(Mandatory = $true)][string[]]$GradleArgs)
+
+    Ensure-JavaHome
+    $Gradle = Get-GradleExecutable
+    Push-Location $AndroidProjectDir
+    try {
+        & $Gradle @GradleArgs | ForEach-Object { Write-Host $_ }
+        if ($LASTEXITCODE -ne 0) {
+            throw "Gradle command failed: $Gradle $($GradleArgs -join ' ')"
+        }
+    } finally {
+        Pop-Location
+    }
 }
 
-$State = (& adb get-state 2>$null)
-if ($LASTEXITCODE -ne 0 -or ($State -join "").Trim() -ne "device") {
-    Write-Host "Connected adb devices:"
-    & adb devices
-    throw "No ready Android device was found. Connect the phone, authorize USB debugging, then retry."
-}
-
-$DevicePath = Resolve-AndroidAppPath $DevicePath
-$DeviceSourcePath = "$DevicePath/source"
-
-Write-Host "Preparing device folder: $DevicePath"
-Invoke-Adb -AdbArgs @("shell", "mkdir -p '$DevicePath'")
-
-if ($PushZip) {
-    Write-Host "Pushing zip artifact to device..."
-    Invoke-Adb -AdbArgs @("push", $ZipPath, "$DevicePath/")
-}
-
-if (-not $NoPushDist) {
+function Copy-WebViewAssets {
     $LayoutDir = New-MobileFileLayout
-
-    if (-not $KeepPreviousDist) {
-        Write-Host "Cleaning previous local static files for upgrade overwrite..."
-        Invoke-Adb -AdbArgs @(
-            "shell",
-            "rm -rf '$DeviceSourcePath' '$DevicePath/index.html' && mkdir -p '$DevicePath'"
-        )
-    } else {
-        Write-Host "Keeping previous local static files and overwriting matching files..."
-        Invoke-Adb -AdbArgs @("shell", "mkdir -p '$DevicePath'")
+    $ResolvedAssetsDir = [System.IO.Path]::GetFullPath($AndroidAssetsAppDir)
+    $ResolvedAndroidDir = [System.IO.Path]::GetFullPath($AndroidProjectDir)
+    if (-not $ResolvedAssetsDir.StartsWith($ResolvedAndroidDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to write WebView assets outside android project: $ResolvedAssetsDir"
     }
 
-    Write-Host "Pushing local static layout to device..."
-    Invoke-Adb -AdbArgs @("push", (Join-Path $LayoutDir "."), "$DevicePath/")
-}
-
-if (-not $NoOpen) {
-    if ($OpenTarget -eq "Url") {
-        Write-Host "Opening PWA URL on device:"
-        Write-Host $Url
-        Invoke-Adb -AdbArgs @("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", $Url)
-    } else {
-        $OpenStamp = Get-Date -Format "yyyyMMddHHmmss"
-        $LocalFileUrl = "file://$DevicePath/index.html?v=$OpenStamp"
-        Write-Host "Opening local file entry on device:"
-        Write-Host $LocalFileUrl
-        Invoke-Adb -AdbArgs @("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", $LocalFileUrl, "-t", "text/html")
+    if (Test-Path -LiteralPath $AndroidAssetsAppDir) {
+        Remove-Item -LiteralPath $AndroidAssetsAppDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $AndroidAssetsAppDir | Out-Null
+    Get-ChildItem -LiteralPath $LayoutDir -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $AndroidAssetsAppDir -Recurse -Force
     }
 }
 
-Write-Host ""
-Write-Host "Android test deployment complete."
-Write-Host "Local package: $ZipPath"
-if (-not $NoPushDist) {
-    Write-Host "Device entry: $DevicePath/index.html"
-    Write-Host "Device source files: $DeviceSourcePath"
+function New-WebViewApk {
+    Push-Location $RepoRoot
+    try {
+        if (-not $SkipBuild) {
+            Write-Host "Building MobileChat WebView bundle..."
+            npm run build:mobile-file | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0) {
+                throw "npm run build:mobile-file failed."
+            }
+        }
+
+        Copy-WebViewAssets
+        Ensure-AndroidSigningKeystore
+
+        Write-Host "Building Android WebView APK..."
+        Invoke-Gradle -GradleArgs @(":app:assembleDebug")
+
+        $BuiltApk = Join-Path $AndroidProjectDir "app\build\outputs\apk\debug\app-debug.apk"
+        if (-not (Test-Path -LiteralPath $BuiltApk)) {
+            throw "Android build did not produce expected APK: $BuiltApk"
+        }
+
+        New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
+        $Stamp = Get-Date -Format "yyyyMMdd"
+        $ApkPath = Join-Path $ArtifactDir "mobilechat-webview-$Stamp.apk"
+        if (Test-Path -LiteralPath $ApkPath) {
+            Remove-Item -LiteralPath $ApkPath -Force
+        }
+        Copy-Item -LiteralPath $BuiltApk -Destination $ApkPath -Force
+
+        Write-Host "Packaged WebView APK:"
+        Write-Host $ApkPath
+        return $ApkPath
+    } finally {
+        Pop-Location
+    }
+}
+
+function Invoke-LocalFileDeployment {
+    $LatestZip = Get-LatestPackageZip
+    if (-not $ForcePackage -and (Test-PackageZipIsCurrent $LatestZip)) {
+        $ZipPath = $LatestZip.FullName
+        Write-Host "Using existing latest package:"
+        Write-Host $ZipPath
+    } else {
+        if ($ForcePackage) {
+            Write-Host "ForcePackage was set; creating a fresh local-file package..."
+        } else {
+            Write-Host "No current local-file package was found, or the existing package is stale; creating a fresh package..."
+        }
+
+        $ZipPath = New-PackageZip
+        if (-not $ZipPath -or -not (Test-Path -LiteralPath $ZipPath)) {
+            throw "Packaging did not produce a zip artifact."
+        }
+    }
+
+    if ($PackageOnly) {
+        Write-Host ""
+        Write-Host "Package complete."
+        Write-Host $ZipPath
+        return
+    }
+
+    Assert-AndroidDeviceReady
+
+    $ResolvedDevicePath = Resolve-AndroidAppPath $DevicePath
+    $DeviceSourcePath = "$ResolvedDevicePath/source"
+
+    Write-Host "Preparing device folder: $ResolvedDevicePath"
+    Invoke-Adb -AdbArgs @("shell", "mkdir -p '$ResolvedDevicePath'")
+
+    if ($PushZip) {
+        Write-Host "Pushing zip artifact to device..."
+        Invoke-Adb -AdbArgs @("push", $ZipPath, "$ResolvedDevicePath/")
+    }
+
+    if (-not $NoPushDist) {
+        $LayoutDir = New-MobileFileLayout
+
+        if (-not $KeepPreviousDist) {
+            Write-Host "Cleaning previous local static files for upgrade overwrite..."
+            Invoke-Adb -AdbArgs @(
+                "shell",
+                "rm -rf '$DeviceSourcePath' '$ResolvedDevicePath/index.html' && mkdir -p '$ResolvedDevicePath'"
+            )
+        } else {
+            Write-Host "Keeping previous local static files and overwriting matching files..."
+            Invoke-Adb -AdbArgs @("shell", "mkdir -p '$ResolvedDevicePath'")
+        }
+
+        Write-Host "Pushing local static layout to device..."
+        Invoke-Adb -AdbArgs @("push", (Join-Path $LayoutDir "."), "$ResolvedDevicePath/")
+    }
+
+    if (-not $NoOpen) {
+        if ($OpenTarget -eq "Url") {
+            Write-Host "Opening PWA URL on device:"
+            Write-Host $Url
+            Invoke-Adb -AdbArgs @("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", $Url)
+        } else {
+            $OpenStamp = Get-Date -Format "yyyyMMddHHmmss"
+            $LocalFileUrl = "file://$ResolvedDevicePath/index.html?v=$OpenStamp"
+            Write-Host "Opening local file entry on device:"
+            Write-Host $LocalFileUrl
+            Invoke-Adb -AdbArgs @("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", $LocalFileUrl, "-t", "text/html")
+        }
+    }
+
+    Write-Host ""
+    Write-Host "Android local-file test deployment complete."
+    Write-Host "Local package: $ZipPath"
+    if (-not $NoPushDist) {
+        Write-Host "Device entry: $ResolvedDevicePath/index.html"
+        Write-Host "Device source files: $DeviceSourcePath"
+    }
+}
+
+function Invoke-WebViewDeployment {
+    $LatestApk = Get-LatestWebViewApk
+    if (-not $ForcePackage -and (Test-WebViewApkIsCurrent $LatestApk)) {
+        $ApkPath = $LatestApk.FullName
+        Write-Host "Using existing latest WebView APK:"
+        Write-Host $ApkPath
+    } else {
+        if ($ForcePackage) {
+            Write-Host "ForcePackage was set; creating a fresh WebView APK..."
+        } else {
+            Write-Host "No current WebView APK was found, or the existing APK is stale; creating a fresh package..."
+        }
+
+        $ApkPath = New-WebViewApk
+        if (-not $ApkPath -or -not (Test-Path -LiteralPath $ApkPath)) {
+            throw "Packaging did not produce an APK artifact."
+        }
+    }
+
+    Write-Host ""
+    Write-Host "WebView persistence constants:"
+    Write-Host "  applicationId: $AndroidApplicationId"
+    Write-Host "  WebView origin: $AndroidAssetOrigin"
+    Write-Host "  entry URL: $AndroidEntryUrl"
+    Write-Host "  IndexedDB name: $IndexedDbName"
+    Write-Host "  signing key: $LocalKeystorePath"
+
+    if ($PackageOnly) {
+        Write-Host ""
+        Write-Host "Package complete."
+        Write-Host $ApkPath
+        return
+    }
+
+    Assert-AndroidDeviceReady
+
+    Write-Host "Installing APK with adb install -r -d. This preserves app data when package name and signing key match."
+    Invoke-Adb -AdbArgs @("install", "-r", "-d", $ApkPath)
+
+    if (-not $NoOpen) {
+        if ($OpenTarget -eq "Url") {
+            Write-Host "Opening PWA URL on device:"
+            Write-Host $Url
+            Invoke-Adb -AdbArgs @("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", $Url)
+        } else {
+            Write-Host "Opening MobileChat WebView app on device..."
+            Invoke-Adb -AdbArgs @("shell", "am", "start", "-n", "$AndroidApplicationId/.MainActivity")
+        }
+    }
+
+    Write-Host ""
+    Write-Host "Android WebView deployment complete."
+    Write-Host "APK: $ApkPath"
+}
+
+if ($DeployMode -eq "LocalFile") {
+    Invoke-LocalFileDeployment
+} else {
+    Invoke-WebViewDeployment
 }

@@ -21,6 +21,9 @@
           } else {
             document.documentElement.style.colorScheme = "light dark";
           }
+          if (preferences.hideMobileStatusBar === true) {
+            window.MobileChatAndroid?.setStatusBarHidden?.(true);
+          }
         } catch {
           document.documentElement.style.colorScheme = "light dark";
         }

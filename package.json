@@ -17,6 +17,8 @@
     "models:probe": "node ./scripts/probe-models.mjs",
     "mobile:package": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-android.ps1 -PackageOnly",
     "mobile:adb": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-android.ps1",
+    "mobile:file": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-android.ps1 -DeployMode LocalFile",
+    "mobile:file:package": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-android.ps1 -DeployMode LocalFile -PackageOnly",
     "preview": "vite preview"
   },
   "dependencies": {

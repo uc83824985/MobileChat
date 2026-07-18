@@ -7,6 +7,11 @@ playwright-report
 test-results
 .vite
 .tmp
+.local
+android/.gradle
+android/app/build
+android/build
+android/app/src/main/assets
 
 .env
 .env.*

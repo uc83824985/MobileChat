@@ -124,6 +124,14 @@ type ImagePreviewState = {
   size: number;
 } | null;
 
+declare global {
+  interface Window {
+    MobileChatAndroid?: {
+      setStatusBarHidden?: (enabled: boolean) => void;
+    };
+  }
+}
+
 const UI_PREFERENCES_STORAGE_KEY = "mobilechat:ui-preferences";
 const AUTOSAVE_DELAY_MS = 400;
 const SCROLL_EDGE_THRESHOLD_PX = 12;
@@ -294,7 +302,12 @@ const createMessageSearchRegex = (query: string, regexEnabled: boolean) => {
 };
 
 const readBootUiPreferences = ():
-  { themeMode?: ThemeMode; layoutMode?: LayoutMode } | undefined => {
+  | {
+      themeMode?: ThemeMode;
+      layoutMode?: LayoutMode;
+      hideMobileStatusBar?: boolean;
+    }
+  | undefined => {
   if (typeof window === "undefined") {
     return undefined;
   }
@@ -302,12 +315,20 @@ const readBootUiPreferences = ():
   try {
     const parsed = JSON.parse(
       window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) ?? "{}",
-    ) as { themeMode?: unknown; layoutMode?: unknown };
+    ) as {
+      themeMode?: unknown;
+      layoutMode?: unknown;
+      hideMobileStatusBar?: unknown;
+    };
     return {
       themeMode: isThemeMode(parsed.themeMode) ? parsed.themeMode : undefined,
       layoutMode: isLayoutMode(parsed.layoutMode)
         ? parsed.layoutMode
         : undefined,
+      hideMobileStatusBar:
+        typeof parsed.hideMobileStatusBar === "boolean"
+          ? parsed.hideMobileStatusBar
+          : undefined,
     };
   } catch {
     return undefined;
@@ -323,6 +344,9 @@ const createBootSnapshot = (): LocalDataSnapshot => {
       ...snapshot.settings,
       themeMode: uiPreferences?.themeMode ?? snapshot.settings.themeMode,
       layoutMode: uiPreferences?.layoutMode ?? snapshot.settings.layoutMode,
+      hideMobileStatusBar:
+        uiPreferences?.hideMobileStatusBar ??
+        snapshot.settings.hideMobileStatusBar,
     },
   };
 };
@@ -384,6 +408,11 @@ const CustomSelect = ({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const selectedOption =
     options.find((option) => option.value === value) ?? options[0];
+  const widestOption = options.reduce<CustomSelectOption | undefined>(
+    (current, option) =>
+      !current || option.label.length > current.label.length ? option : current,
+    undefined,
+  );
 
   useEffect(() => {
     if (!open) {
@@ -432,6 +461,10 @@ const CustomSelect = ({
       } ${className}`}
       ref={rootRef}
     >
+      <span className="custom-select-sizer" aria-hidden="true">
+        <span>{widestOption?.label ?? selectedOption?.label ?? "未选择"}</span>
+        <span className="custom-select-chevron" />
+      </span>
       <button
         className="custom-select-trigger"
         type="button"
@@ -546,8 +579,8 @@ const layoutLabels: Record<LayoutMode, string> = {
 };
 
 const composerSubmitModeLabels: Record<ComposerSubmitMode, string> = {
-  "enter-send": "Enter 发送，Shift+Enter 换行",
-  "ctrl-enter-send": "Enter 换行，Ctrl+Enter 发送",
+  "enter-send": "Enter 发送",
+  "ctrl-enter-send": "Enter 换行",
 };
 
 const normalizeContextSummaryRawTailMessages = (value: number) =>
@@ -1222,6 +1255,9 @@ function App() {
   );
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(
     bootSnapshot.settings.layoutMode,
+  );
+  const [hideMobileStatusBar, setHideMobileStatusBar] = useState(
+    bootSnapshot.settings.hideMobileStatusBar,
   );
   const [viewportProfile, setViewportProfile] = useState(getViewportProfile);
   const [streamingEnabled, setStreamingEnabled] = useState(
@@ -1958,6 +1994,7 @@ function App() {
       editingAssistantId,
       themeMode,
       layoutMode,
+      hideMobileStatusBar,
       streamingEnabled,
       composerSubmitMode,
       contextSummaryRawTailMessages,
@@ -1989,6 +2026,7 @@ function App() {
       debugEnabled,
       editingAssistantId,
       editingContextProfileId,
+      hideMobileStatusBar,
       layoutMode,
       lastSuccessfulExportAt,
       modelProbeSettings,
@@ -2030,6 +2068,7 @@ function App() {
     );
     setThemeMode(snapshot.settings.themeMode);
     setLayoutMode(snapshot.settings.layoutMode);
+    setHideMobileStatusBar(snapshot.settings.hideMobileStatusBar);
     setStreamingEnabled(snapshot.settings.streamingEnabled);
     setComposerSubmitMode(snapshot.settings.composerSubmitMode);
     setContextSummaryRawTailMessages(
@@ -2078,7 +2117,7 @@ function App() {
     try {
       window.localStorage.setItem(
         UI_PREFERENCES_STORAGE_KEY,
-        JSON.stringify({ themeMode, layoutMode }),
+        JSON.stringify({ themeMode, layoutMode, hideMobileStatusBar }),
       );
     } catch {
       // Ignore private-mode or quota errors; IndexedDB remains authoritative.
@@ -2092,7 +2131,15 @@ function App() {
 
     root.dataset.theme = themeMode;
     root.style.colorScheme = themeMode;
-  }, [layoutMode, themeMode]);
+  }, [hideMobileStatusBar, layoutMode, themeMode]);
+
+  useEffect(() => {
+    try {
+      window.MobileChatAndroid?.setStatusBarHidden?.(hideMobileStatusBar);
+    } catch {
+      // The Android bridge is optional; desktop browsers keep normal chrome.
+    }
+  }, [hideMobileStatusBar]);
 
   useEffect(() => {
     updateScrollShortcutTarget();
@@ -5751,6 +5798,7 @@ function App() {
                   主题模式
                 </span>
                 <CustomSelect
+                  className="content-fit"
                   label="主题模式"
                   value={themeMode}
                   options={Object.entries(themeLabels).map(
@@ -5787,11 +5835,12 @@ function App() {
                   <span />
                 </label>
               </div>
-              <div className="settings-row compact theme-select wide-setting">
-                <span>输入快捷键</span>
-                <div className="setting-control-stack">
+              <div className="settings-row compact theme-select">
+                <span>换行规则</span>
+                <div className="setting-control-stack content-fit">
                   <CustomSelect
-                    label="输入快捷键"
+                    className="content-fit"
+                    label="换行规则"
                     value={composerSubmitMode}
                     options={Object.entries(composerSubmitModeLabels).map(
                       ([optionValue, optionLabel]) => ({
@@ -5803,12 +5852,12 @@ function App() {
                       setComposerSubmitMode(nextValue as ComposerSubmitMode)
                     }
                   />
-                  <small>Ctrl+J 始终插入换行。</small>
                 </div>
               </div>
               <div className="settings-row compact theme-select">
                 <span>布局模式</span>
                 <CustomSelect
+                  className="content-fit"
                   label="布局模式"
                   value={layoutMode}
                   options={Object.entries(layoutLabels).map(
@@ -5821,6 +5870,23 @@ function App() {
                     setLayoutMode(nextValue as LayoutMode)
                   }
                 />
+              </div>
+              <div className="settings-row compact mobile-status-bar-setting">
+                <span>沉浸显示（Android）</span>
+                <label className="switch">
+                  <input
+                    aria-label="沉浸显示（Android）"
+                    checked={hideMobileStatusBar}
+                    onChange={(event) =>
+                      setHideMobileStatusBar(event.target.checked)
+                    }
+                    type="checkbox"
+                  />
+                  <span />
+                </label>
+                <small>
+                  隐藏系统栏并扩展到刘海/挖孔安全区；仅 Android 应用生效。
+                </small>
               </div>
               <div className="settings-row compact summary-policy-setting">
                 <span>上下文总结</span>

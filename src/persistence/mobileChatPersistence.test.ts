@@ -30,6 +30,7 @@ describe("MobileChat persistence", () => {
     expect(snapshot.settings.activeAssistantId).toBe("architect");
     expect(snapshot.settings.themeMode).toBe("system");
     expect(snapshot.settings.layoutMode).toBe("auto");
+    expect(snapshot.settings.hideMobileStatusBar).toBe(false);
     expect(snapshot.settings.streamingEnabled).toBe(true);
     expect(snapshot.settings.composerSubmitMode).toBe("enter-send");
     expect(snapshot.settings.contextSummaryRawTailMessages).toBe(8);
@@ -269,6 +270,7 @@ describe("MobileChat persistence", () => {
         editingAssistantId: "architect",
         themeMode: "light",
         layoutMode: "desktop",
+        hideMobileStatusBar: true,
         streamingEnabled: false,
         composerSubmitMode: "ctrl-enter-send",
         contextSummaryRawTailMessages: 3,
@@ -306,6 +308,7 @@ describe("MobileChat persistence", () => {
     expect(restored.settings.activeAssistantId).toBe("architect");
     expect(restored.settings.themeMode).toBe("light");
     expect(restored.settings.layoutMode).toBe("desktop");
+    expect(restored.settings.hideMobileStatusBar).toBe(true);
     expect(restored.settings.streamingEnabled).toBe(false);
     expect(restored.settings.composerSubmitMode).toBe("ctrl-enter-send");
     expect(restored.settings.contextSummaryRawTailMessages).toBe(3);

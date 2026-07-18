@@ -228,6 +228,7 @@ export type AppSettings = {
   editingAssistantId: string;
   themeMode: ThemeMode;
   layoutMode: LayoutMode;
+  hideMobileStatusBar: boolean;
   streamingEnabled: boolean;
   composerSubmitMode: ComposerSubmitMode;
   contextSummaryRawTailMessages: number;
@@ -597,6 +598,7 @@ export const createInitialSettings = (
   editingAssistantId: defaultAssistant.id,
   themeMode: "system",
   layoutMode: "auto",
+  hideMobileStatusBar: false,
   streamingEnabled: true,
   composerSubmitMode: "enter-send",
   contextSummaryRawTailMessages: DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,

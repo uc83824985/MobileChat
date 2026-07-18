@@ -1,0 +1,83 @@
+plugins {
+    id "com.android.application"
+}
+
+def immutableApplicationId = providers.gradleProperty("MOBILECHAT_ANDROID_APPLICATION_ID").get()
+def immutableNamespace = providers.gradleProperty("MOBILECHAT_ANDROID_NAMESPACE").get()
+def immutableAssetDomain = providers.gradleProperty("MOBILECHAT_WEBVIEW_ASSET_DOMAIN").get()
+def immutableAssetPath = providers.gradleProperty("MOBILECHAT_WEBVIEW_ASSET_PATH").get()
+def immutableEntryUrl = providers.gradleProperty("MOBILECHAT_WEBVIEW_ENTRY_URL").get()
+def immutableIndexedDbName = providers.gradleProperty("MOBILECHAT_JS_INDEXED_DB_NAME").get()
+def localKeystorePath = rootProject.file("../.local/android-signing/mobilechat-dev.jks")
+def iconSourcePath = rootProject.file("Icon.jpg")
+def generatedIconResDir = layout.buildDirectory.dir("generated/res/mobilechatIcon")
+
+android {
+    namespace immutableNamespace
+    compileSdk 34
+
+    defaultConfig {
+        applicationId immutableApplicationId
+        minSdk 23
+        targetSdk 34
+        versionCode 1
+        versionName "0.1.0"
+        buildConfigField "String", "MOBILECHAT_WEBVIEW_ASSET_DOMAIN", "\"${immutableAssetDomain}\""
+        buildConfigField "String", "MOBILECHAT_WEBVIEW_ASSET_PATH", "\"${immutableAssetPath}\""
+        buildConfigField "String", "MOBILECHAT_WEBVIEW_ENTRY_URL", "\"${immutableEntryUrl}\""
+        buildConfigField "String", "MOBILECHAT_JS_INDEXED_DB_NAME", "\"${immutableIndexedDbName}\""
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    signingConfigs {
+        localDev {
+            storeFile localKeystorePath
+            storePassword "mobilechat-local-dev"
+            keyAlias "mobilechat-local-dev"
+            keyPassword "mobilechat-local-dev"
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.localDev
+        }
+        release {
+            signingConfig signingConfigs.localDev
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main {
+            res.srcDir(generatedIconResDir)
+        }
+    }
+}
+
+tasks.register("syncMobileChatLauncherIcon", Copy) {
+    if (!iconSourcePath.exists()) {
+        throw new GradleException("Launcher icon source not found: ${iconSourcePath}")
+    }
+
+    from iconSourcePath
+    into generatedIconResDir.map { it.dir("drawable-nodpi") }
+    rename { "mobilechat_icon.jpg" }
+}
+
+tasks.named("preBuild") {
+    dependsOn "syncMobileChatLauncherIcon"
+}
+
+dependencies {
+    implementation "androidx.webkit:webkit:1.12.1"
+}

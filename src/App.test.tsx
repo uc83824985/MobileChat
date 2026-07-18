@@ -16,6 +16,7 @@ describe("App", () => {
     cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    delete window.MobileChatAndroid;
     vi.stubGlobal("indexedDB", new IDBFactory());
     window.localStorage.clear();
     await deleteMobileChatDb();
@@ -122,7 +123,7 @@ describe("App", () => {
     expect(composer).toHaveValue("alpha\nomega");
 
     fireEvent.click(screen.getByText("设置"));
-    chooseCustomSelectOption("输入快捷键", "Enter 换行，Ctrl+Enter 发送");
+    chooseCustomSelectOption("换行规则", "Enter 换行");
     fireEvent.click(screen.getByLabelText("关闭设置"));
 
     fireEvent.change(composer, { target: { value: "键盘发送" } });
@@ -489,6 +490,10 @@ describe("App", () => {
   });
 
   it("opens settings and toggles theme, layout, and streaming mode", () => {
+    const androidBridge = {
+      setStatusBarHidden: vi.fn(),
+    };
+    window.MobileChatAndroid = androidBridge;
     render(<App />);
 
     fireEvent.click(screen.getByText("设置"));
@@ -510,9 +515,13 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("流式输出"));
     expect(screen.getByLabelText("流式输出")).not.toBeChecked();
 
-    expectCustomSelectValue("输入快捷键", "Enter 发送，Shift+Enter 换行");
-    chooseCustomSelectOption("输入快捷键", "Enter 换行，Ctrl+Enter 发送");
-    expectCustomSelectValue("输入快捷键", "Enter 换行，Ctrl+Enter 发送");
+    expect(androidBridge.setStatusBarHidden).toHaveBeenLastCalledWith(false);
+    fireEvent.click(screen.getByLabelText("沉浸显示（Android）"));
+    expect(androidBridge.setStatusBarHidden).toHaveBeenLastCalledWith(true);
+
+    expectCustomSelectValue("换行规则", "Enter 发送");
+    chooseCustomSelectOption("换行规则", "Enter 换行");
+    expectCustomSelectValue("换行规则", "Enter 换行");
     expect(screen.getByLabelText("总结保留原文条数")).toHaveValue(8);
     fireEvent.change(screen.getByLabelText("总结保留原文条数"), {
       target: { value: "3" },

@@ -22,6 +22,8 @@ import {
 } from "../domain";
 import { normalizeModelProbeSettings } from "../modelProbe";
 
+// Persistence-critical constant. Changing this creates a new IndexedDB database
+// inside the same browser/WebView origin and will look like data loss.
 export const MOBILE_CHAT_DB_NAME = "MobileChatDB";
 export const MOBILE_CHAT_DB_VERSION = 1;
 
@@ -446,6 +448,9 @@ export const normalizeSnapshot = (
         initialSnapshot.settings.editingAssistantId,
       themeMode: settings.themeMode ?? "system",
       layoutMode: settings.layoutMode ?? initialSnapshot.settings.layoutMode,
+      hideMobileStatusBar:
+        settings.hideMobileStatusBar ??
+        initialSnapshot.settings.hideMobileStatusBar,
       streamingEnabled:
         settings.streamingEnabled ?? initialSnapshot.settings.streamingEnabled,
       composerSubmitMode:
