@@ -7,6 +7,28 @@ The system SHALL provide a responsive static web application that can be install
 - **WHEN** a user installs the application from a supported mobile browser and later launches its home-screen icon
 - **THEN** the application opens into the last available local application state without requiring a PC-hosted service
 
+### Requirement: Stable Android WebView wrapper
+The system SHALL provide an Android WebView packaging route for repeated personal phone testing that keeps the package identity and WebView storage origin stable across upgrades.
+
+#### Scenario: Upgrade the WebView APK
+- **WHEN** the user deploys a newer WebView APK over an existing install
+- **THEN** the deployment uses the same `applicationId`, signing key, WebView asset origin, entry URL, and IndexedDB database name
+- **AND** the install path uses an upgrade operation rather than uninstalling or clearing application data
+
+#### Scenario: Load local assets through a stable HTTPS origin
+- **WHEN** the WebView app starts
+- **THEN** it loads bundled frontend assets through a fixed `https://appassets.androidplatform.net/app/index.html` entry rather than `file://` or `content://`
+- **AND** browser storage APIs required by MobileChat, including IndexedDB, remain enabled inside that WebView
+
+#### Scenario: Select images in the WebView wrapper
+- **WHEN** the user activates an image file input inside the WebView app
+- **THEN** the wrapper exposes Android's file chooser result back to the web page so the existing image attachment flow can run
+
+#### Scenario: Enable Android immersive display from settings
+- **WHEN** the user enables **沉浸显示（Android）** while running inside the Android WebView app
+- **THEN** the native wrapper hides Android system bars and allows the WebView to extend into short-edge display cutout areas through its local JavaScript bridge
+- **AND** desktop browsers, ordinary mobile browsers, and the local-file smoke route keep their normal browser or window chrome
+
 ### Requirement: Mobile-first navigation
 The system SHALL provide mobile-accessible navigation between the conversation list, active conversation, assistant selection, archived conversations, and settings.
 
@@ -34,8 +56,8 @@ The system SHALL reserve a settings surface for API profiles, chat and utility a
 
 #### Scenario: Configure composer shortcuts
 - **WHEN** a user changes the composer input shortcut setting
-- **THEN** the setting persists locally and controls whether `Enter` sends with `Shift+Enter` newline or `Enter` inserts newline with `Ctrl+Enter` send
-- **AND** desktop `Ctrl+J` inserts a newline without sending, matching CLI-style line break behavior
+- **THEN** the setting persists locally and controls whether `Enter` sends or inserts a newline using concise **Enter 发送** / **Enter 换行** choices
+- **AND** the non-selected action remains available through the control-key path, while desktop `Ctrl+J` inserts a newline without sending
 
 #### Scenario: Keep settings compact and actionable
 - **WHEN** the settings surface renders on a phone or a short desktop viewport

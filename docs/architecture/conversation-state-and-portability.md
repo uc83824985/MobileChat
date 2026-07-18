@@ -90,7 +90,7 @@ MobileChatDB
 其中：
 
 - `meta`：数据库 schema 版本、应用版本和当前记录格式信息。
-- `settings`：当前助手、当前模型引用、当前对话、主题模式、流式输出开关、调试模式、上下文配置、顶层配置显示顺序、存储持久化状态、最后成功导出时间等应用设置。
+- `settings`：当前助手、当前模型引用、当前对话、主题模式、布局模式、Android 沉浸显示、流式输出开关、调试模式、上下文配置、顶层配置显示顺序、存储持久化状态、最后成功导出时间等应用设置。
 - `apiProfiles`：用户界面称为“连接”；保存 API base URL、协议、凭据和模型列表。模型是独立记录，不应只作为助手字段存在；上下文预算策略由上下文配置持有。
 - `assistants`：聊天助手和功能助手配置，包括 prompt、初始消息、模型绑定、功能助手模型策略和聊天助手引用的上下文配置。助手引用已有连接 + model，并保存关键显示字段快照，避免模型或助手删除后消息来源完全丢失。
 - `conversations`：标题、显示摘要、归档状态、活动助手/模型引用、活动上下文总结引用。归档不是移动到另一张表，而是通过 `archived=true` 在同一数据集中切换到只读浏览/搜索/恢复视图。
@@ -114,6 +114,12 @@ IndexedDB object store 的 `getAll()` 按主键返回，不保留用户拖动后
 IndexedDB 是异步 API，正常的小记录写入不应阻塞主线程。手机端卡顿主要来自错误实现：每次输入都序列化大对象、同步写 `localStorage`、在 React render 中等待写库、或跨 store 做过大事务。首版禁止这些模式。若实机发现低端设备在 prompt 大文本编辑时卡顿，可把文本字段改为“失焦保存 + 手动保存”或增加 debounce；默认仍采用无感自动保存。
 
 首次完成配置后，应用应调用 `navigator.storage.persist()` 请求 persistent storage，并用 `navigator.storage.estimate()` 在设置/调试区显示用量、quota 和持久化状态。即使请求成功，用户清理站点数据、卸载浏览器或更换 origin 仍会导致本地数据不可用，所以 `.mobilechat` 导出仍是必要兜底。
+
+手机端重复迭代的默认入口改为固定包名的 Android WebView 壳，而不是裸 `file://` / `content://` 文件快捷方式。WebView 壳必须从第一版起固定这些持久化关键常量：`applicationId = com.uc83824985.mobilechat`、签名 key、`https://appassets.androidplatform.net` origin、`/app/index.html` 入口路径和 `MobileChatDB` 数据库名。脚本只允许用 `adb install -r` 覆盖升级，不主动卸载、不清 app data。若更换签名 key 或包名，Android 会拒绝覆盖安装；若更换 WebView origin 或 IndexedDB 名称，旧数据仍在设备上但新代码看不到，表现为“数据丢失”。
+
+Android 壳可以提供窄范围的可选 JavaScript bridge，用于仅在原生壳中有意义的显示行为。例如 **沉浸显示（Android）** 会调用 `MobileChatAndroid.setStatusBarHidden(...)`，隐藏系统栏并允许 WebView 扩展到横屏短边 cutout 区域；普通桌面浏览器、GitHub Pages PWA 和本地文件 smoke test 没有该 bridge，设置只会被持久化，不改变窗口或浏览器 chrome。
+
+PC 端开发和网页访问继续使用普通浏览器 IndexedDB，不迁移到 Android 壳的私有 WebView 数据目录。PC origin、GitHub Pages origin、Android WebView origin 和历史裸文件入口都是相互独立的存储桶，跨桶迁移仍通过 `.mobilechat` 导出/导入完成。
 
 ## 缓存命中率与预算表盘
 

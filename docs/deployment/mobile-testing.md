@@ -1,33 +1,51 @@
 # Mobile testing deployment
 
-MobileChat is a static PWA. There are two mobile testing routes:
+MobileChat now has three mobile testing routes:
 
-1. local-file smoke testing through files pushed to the phone;
-2. stable PWA testing through the same HTTPS origin.
+1. **Android WebView APK**: default route for repeated phone iteration and local data stability.
+2. HTTPS PWA origin: useful for testing GitHub Pages/service-worker behavior.
+3. Local-file smoke test: compatibility fallback only; not recommended for persistent data.
 
-For this repository, the default PWA URL used by the helper script is:
+For this repository, the default HTTPS PWA URL used by the helper script remains:
 
 ```text
 https://uc83824985.github.io/MobileChat/
 ```
 
-## Data preservation rule
+## Stable WebView storage contract
 
-MobileChat stores user data in browser IndexedDB under the current origin. Repeated deployments do not clear existing conversations/settings as long as all of these remain true:
+The default Android route packages the static frontend into a small native WebView app. The shell loads local assets through AndroidX `WebViewAssetLoader` at a fixed HTTPS origin:
 
-- the phone uses the same browser profile;
-- the app is opened from the same origin and path scope, for example `https://uc83824985.github.io/MobileChat/`;
-- browser/site data is not manually cleared;
-- the installed PWA is not uninstalled in a way that removes site data;
-- future database migrations are additive or explicitly preserve existing records.
+```text
+applicationId: com.uc83824985.mobilechat
+launcher label: 对话助手
+WebView origin: https://appassets.androidplatform.net
+entry URL: https://appassets.androidplatform.net/app/index.html
+IndexedDB name: MobileChatDB
+local signing key: .local/android-signing/mobilechat-dev.jks
+launcher icon source: android/Icon.jpg
+```
 
-Changing from GitHub Pages to `file://`, a different host, a different path, or an APK/WebView origin creates a different storage bucket. That will look like a new empty app even if the UI code is identical.
+These values are persistence-critical. Changing `applicationId`, signing key, WebView origin/domain, or `MobileChatDB` creates a different Android app or a different WebView storage bucket. That will look like data loss even if the UI code is unchanged.
 
-The default ADB helper opens the local file entry for fast smoke testing. Use `-OpenTarget Url` when testing the persisted PWA origin.
+The launcher label and `android/Icon.jpg` can be changed later. They affect the installed app's visible name/icon, not the WebView storage bucket, as long as the package/signing/origin/database constants above remain unchanged.
 
-Before testing risky schema changes, export a `.mobilechat` backup from Settings.
+The settings item **沉浸显示（Android）** is implemented by the Android wrapper through the local `MobileChatAndroid.setStatusBarHidden(...)` bridge. It hides Android system bars and allows the WebView to draw into short-edge cutout areas so landscape layouts can use the space normally reserved for the status/cutout letterbox. It does not affect desktop windows, ordinary browsers, the HTTPS PWA route, or the local-file smoke route.
 
-## Single-command ADB deploy
+Normal APK upgrades preserve local data when all of these remain true:
+
+- the APK is installed over the previous app with the same `applicationId`;
+- the signing key is the same;
+- the WebView origin stays `https://appassets.androidplatform.net`;
+- the frontend IndexedDB name stays `MobileChatDB`;
+- the user does not clear app data, uninstall the app, or clear WebView/app storage;
+- schema changes remain compatible with the current rapid-iteration rules.
+
+The deployment script uses `adb install -r -d` and never uninstalls the app. If installation fails because the signature differs, export a `.mobilechat` backup before taking any manual uninstall/reinstall path.
+
+Some vendor ROMs require a separate phone-side permission for ADB installation. If `adb install` returns `INSTALL_FAILED_USER_RESTRICTED`, enable options such as **USB 安装**, **通过 USB 安装应用**, or the vendor-specific security setting, then rerun the script.
+
+## Single-command WebView deploy
 
 The usual mobile iteration command is:
 
@@ -41,95 +59,104 @@ Equivalent npm shortcut:
 npm run mobile:adb
 ```
 
-The deploy script is the single entry point for normal testing. It:
+The default deploy flow:
 
-1. checks whether the newest `artifacts/mobilechat-mobile-*.zip` already matches the current source/build files;
-2. reuses that zip when it is current;
-3. otherwise runs the local-file build and creates a new date-named zip;
-4. generates a phone-friendly local layout whose `index.html` inlines the local CSS and JS bundle instead of depending on ES modules, service workers, or sibling script permissions;
-5. pushes `index.html` and `source/` to the phone;
-6. opens `/sdcard/Download/MobileChat/index.html` on the phone by default.
+1. checks whether the newest `artifacts/mobilechat-webview-*.apk` already matches the current source, Android shell, and build files;
+2. reuses that APK when it is current;
+3. otherwise runs the local WebView bundle build;
+4. copies the generated frontend into `android/app/src/main/assets`;
+5. creates a stable local signing key if `.local/android-signing/mobilechat-dev.jks` does not exist;
+6. builds the Android APK;
+7. installs it with `adb install -r -d`;
+8. opens `com.uc83824985.mobilechat/.MainActivity`.
 
-Use `-ForcePackage` when you intentionally want to rebuild and repackage even if a current zip already exists.
+Use `-ForcePackage` when you intentionally want to rebuild and repackage even if the current APK appears fresh.
 
-Use `-OpenTarget Url` to open the HTTPS PWA URL instead of the local file entry.
+Use `-PackageOnly` to build the APK without requiring a connected phone:
 
-The device layout is:
+```powershell
+.\scripts\deploy-android.ps1 -PackageOnly
+npm run mobile:package
+```
+
+Output is written under `artifacts/`, for example:
+
+```text
+artifacts/mobilechat-webview-YYYYMMDD.apk
+```
+
+## Signing key handling
+
+The local signing key is generated once at:
+
+```text
+.local/android-signing/mobilechat-dev.jks
+```
+
+This file is intentionally ignored by Git. Keep a backup of it if you care about preserving app data across machine rebuilds. Losing the key means Android will reject future upgrades signed by a new key; the safe recovery path is:
+
+1. open the existing app;
+2. export a `.mobilechat` backup;
+3. uninstall/reinstall only after the backup exists;
+4. import the backup into the newly signed app.
+
+## Legacy local-file mode
+
+The previous local-file route is still available for smoke testing:
+
+```powershell
+.\scripts\deploy-android.ps1 -DeployMode LocalFile
+npm run mobile:file
+```
+
+Package-only local-file zip:
+
+```powershell
+.\scripts\deploy-android.ps1 -DeployMode LocalFile -PackageOnly
+npm run mobile:file:package
+```
+
+This mode writes:
 
 ```text
 /sdcard/Download/MobileChat/
-  index.html      # self-contained local entry
+  index.html
   source/
     app.css
     app.js
     favicon.svg
 ```
 
-The local-file layout is for fast smoke testing. It deliberately does not register the PWA service worker because `file://` / `content://` have different browser storage, module loading, script permission, and service worker rules from HTTPS. The `source/` folder is still copied for manual inspection, but the local entry does not depend on loading `source/app.js`.
+Local-file mode is not a stable persistence route. `file://` and `content://` entries can differ by browser, file manager, permission grant, and shortcut provider. They also use a different storage bucket from both the HTTPS PWA and the WebView app.
 
-## Package a zip only
-
-Build and create a static zip:
-
-```powershell
-.\scripts\deploy-android.ps1 -PackageOnly
-```
-
-Equivalent npm shortcut:
-
-```powershell
-npm run mobile:package
-```
-
-This uses the same deploy script and exits before checking `adb`.
-
-The output is written under `artifacts/`, for example:
-
-```text
-artifacts/mobilechat-mobile-YYYYMMDD.zip
-```
-
-This zip contains the same `index.html` + `source/` layout and is useful for manually transferring files to the phone. It is not the preferred long-term runtime because local `file://` pages have a separate browser storage bucket from the HTTPS PWA origin.
-
-## ADB prerequisites and upgrade behavior
-
-Prerequisites:
-
-- Android platform-tools installed and `adb` available in `PATH`;
-- USB debugging enabled on the phone;
-- the phone has authorized the computer.
-
-Upgrade behavior:
-
-- the phone app directory defaults to `/sdcard/Download/MobileChat`;
-- `-DevicePath` is the final app directory, not a parent directory;
-- an absolute `-DevicePath "/sdcard/Documents/MyChat"` is used as-is;
-- a relative `-DevicePath "MyChat"` is resolved beside Android's normal `Download` folder, as `/sdcard/MyChat`;
-- a nested relative `-DevicePath "Documents/MyChat"` resolves to `/sdcard/Documents/MyChat`;
-- before pushing local static files, the script clears only the paths it currently manages: `<DevicePath>/source` and `<DevicePath>/index.html`;
-- copied zip packages are not pushed by default; existing zip packages on the phone are left untouched;
-- use `-PushZip` only when you intentionally want to also copy the local zip artifact to the phone;
-- use `-KeepPreviousDist` only when you intentionally want to merge over the existing local file layout.
-
-Useful options:
+## Useful options
 
 ```powershell
 .\scripts\deploy-android.ps1 -ForcePackage
 .\scripts\deploy-android.ps1 -PackageOnly
 .\scripts\deploy-android.ps1 -SkipBuild
 .\scripts\deploy-android.ps1 -NoOpen
-.\scripts\deploy-android.ps1 -NoPushDist
-.\scripts\deploy-android.ps1 -KeepPreviousDist
-.\scripts\deploy-android.ps1 -PushZip
 .\scripts\deploy-android.ps1 -OpenTarget Url
-.\scripts\deploy-android.ps1 -DevicePath "MyChat"
-.\scripts\deploy-android.ps1 -DevicePath "Documents/MobileChatDev"
-.\scripts\deploy-android.ps1 -DevicePath "/sdcard/Documents/MobileChatDev"
+.\scripts\deploy-android.ps1 -DeployMode LocalFile
+.\scripts\deploy-android.ps1 -DeployMode LocalFile -PushZip
+.\scripts\deploy-android.ps1 -DeployMode LocalFile -NoPushDist
+.\scripts\deploy-android.ps1 -DeployMode LocalFile -KeepPreviousDist
+.\scripts\deploy-android.ps1 -DeployMode LocalFile -DevicePath "MyChat"
+.\scripts\deploy-android.ps1 -DeployMode LocalFile -DevicePath "Documents/MobileChatDev"
+.\scripts\deploy-android.ps1 -DeployMode LocalFile -DevicePath "/sdcard/Documents/MobileChatDev"
 .\scripts\deploy-android.ps1 -Url "https://uc83824985.github.io/MobileChat/"
 ```
 
-The ADB script does not install an APK. It places static artifacts on the phone for manual file management and can open either the local file entry or the PWA URL.
+`-DevicePath`, `-PushZip`, `-NoPushDist`, and `-KeepPreviousDist` only affect legacy local-file mode.
 
-## When an APK is needed
+## Data preservation rule
 
-If later testing requires a real Android package, use a fixed package name and signing key from the first build onward. Android app data survives APK upgrades only when package name and signing identity remain stable. A WebView/Capacitor/TWA wrapper should therefore be introduced deliberately, not as a quick deployment shortcut.
+Before testing risky schema changes, export a `.mobilechat` backup from Settings.
+
+Storage buckets are separate between:
+
+- WebView APK: `https://appassets.androidplatform.net`;
+- GitHub Pages PWA: `https://uc83824985.github.io/MobileChat/`;
+- browser local-file/content entries.
+
+Moving between those routes will not automatically carry IndexedDB data. Use `.mobilechat` export/import for transfer.

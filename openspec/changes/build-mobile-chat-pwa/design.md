@@ -6,7 +6,7 @@ The initial endpoint already known to work exposes an OpenAI-compatible Response
 
 The default layout is responsive and mobile-first at narrow viewport widths: the conversation list becomes a drawer and settings/detail grids collapse without changing application logic. A persisted `layoutMode` display setting supports `auto`, `mobile`, and `desktop`: `auto` follows viewport width, `mobile` forces drawer/single-column layout, and `desktop` forces the desktop layout structure. This flag is visual only; it must not affect local data shape, active conversation selection, context construction, or provider request payloads. Phone layouts may provide floating controls for opening the drawer and returning to the message top so long conversations do not require manual scrolling back to the header for navigation.
 
-Composer input behavior is local UI state. The composer is multi-line and may use either Enter-to-send with Shift+Enter newline or Enter-newline with Ctrl+Enter send. Desktop Ctrl+J is reserved as a CLI-style newline shortcut.
+Composer input behavior is local UI state. The composer is multi-line and exposes a concise **换行规则** setting with **Enter 发送** and **Enter 换行** choices. The non-selected action remains available through the control-key path, and desktop Ctrl+J is reserved as a CLI-style newline shortcut.
 
 ## Goals / Non-Goals
 
@@ -275,9 +275,20 @@ Persistence and import/export use the same current record DTOs during rapid iter
 
 Cross-device access is a manual export-transfer-import workflow through the phone or desktop file system, cloud drive, or another user-chosen transport. It does not imply account synchronization or a MobileChat server. A plain JSON diagnostic export may be offered separately, but `.mobilechat` is the normative complete-backup format.
 
-### 13. Static deployment and verification
+### 13. Static and Android WebView deployment
 
-Use GitHub Actions to build and publish the static artifact to GitHub Pages. Verification includes unit tests for adapters, current-schema persistence, context projection, budget reports, usage normalization, summary triggers, summary validity, archive round trips, and search scope; component tests for conversation, diagnostics, and settings flows; and browser tests at representative phone viewport sizes.
+Use GitHub Actions to build and publish the static artifact to GitHub Pages. For repeated personal phone testing, package the same frontend into a minimal Android WebView shell rather than relying on `file://` or `content://` shortcuts. The shell must keep the Android package name, signing identity, WebView asset origin, asset entry URL, and `MobileChatDB` name stable from its first install onward:
+
+```text
+applicationId: com.uc83824985.mobilechat
+WebView origin: https://appassets.androidplatform.net
+entry URL: https://appassets.androidplatform.net/app/index.html
+IndexedDB name: MobileChatDB
+```
+
+The WebView shell loads bundled assets through AndroidX `WebViewAssetLoader`, enables JavaScript, DOM Storage, IndexedDB, and file chooser support for image input, and is deployed through `adb install -r` so app data survives compatible APK upgrades. It may expose narrow Android-only JavaScript bridges for wrapper behavior that has no desktop meaning, such as **沉浸显示（Android）**; these bridge calls must be optional on the web side and must not change the desktop/browser runtime model. The deployment script must not uninstall the package or clear app data. Losing the local signing key or changing the package name requires export/import recovery because Android will reject an in-place upgrade signed by a different key.
+
+Verification includes unit tests for adapters, current-schema persistence, context projection, budget reports, usage normalization, summary triggers, summary validity, archive round trips, and search scope; component tests for conversation, diagnostics, and settings flows; browser tests at representative phone viewport sizes; and package-only Android WebView build verification where the local SDK is available.
 
 ### 14. Settings, probing, and cache UX refinements
 
