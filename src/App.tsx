@@ -24,6 +24,7 @@ import {
   TextQuote,
   Trash2,
   Upload,
+  Volume2,
   X,
 } from "lucide-react";
 import {
@@ -160,6 +161,8 @@ const MODEL_PROBE_CONCURRENCY = 8;
 const MAX_DRAFT_IMAGES = 4;
 const MAX_DRAFT_IMAGE_BYTES = 8 * 1024 * 1024;
 const IMAGE_INPUT_ACCEPT = "image/*";
+const TTS_SPEAK_ENDPOINT = "http://127.0.0.1:8765/tts_speak";
+const TTS_SPEAK_MODE = "replace";
 const PANEL_SWIPE_IGNORE_SELECTOR = [
   "a",
   "button",
@@ -1667,6 +1670,7 @@ function App() {
     bootSnapshot.settings.modelProbeSettings.editingGroupId,
   );
   const abortControllerRef = useRef<AbortController | null>(null);
+  const ttsAbortControllerRef = useRef<AbortController | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const latestSnapshotRef = useRef<LocalDataSnapshot>(bootSnapshot);
   const contextSummaryJobRunningRef = useRef(false);
@@ -2790,6 +2794,7 @@ function App() {
   useEffect(() => {
     return () => {
       abortControllerRef.current?.abort();
+      ttsAbortControllerRef.current?.abort();
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current);
       }
@@ -5533,6 +5538,63 @@ function App() {
     setComposerNotice("已引用选中文本");
   };
 
+  const getMessageTextForTts = (message: Message) => {
+    const streamingText =
+      streamingFullTextRef.current[message.id] ||
+      (streamingTextChunks[message.id] ?? []).join("");
+    return normalizeQuotedText(streamingText || message.text);
+  };
+
+  const speakMessageWithTts = async (message: Message) => {
+    const text = getMessageTextForTts(message);
+    if (!text) {
+      setComposerNotice("这条消息没有可朗读文本");
+      return;
+    }
+
+    ttsAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    ttsAbortControllerRef.current = controller;
+
+    try {
+      const response = await fetch(TTS_SPEAK_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text,
+          mode: TTS_SPEAK_MODE,
+          meta: {
+            source: "mobile-chat",
+            messageId: message.id,
+            conversationId: message.conversationId,
+            role: message.role,
+          },
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`TTS 朗读请求失败：HTTP ${response.status}`);
+      }
+
+      setComposerNotice("已发送朗读请求");
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      setComposerNotice(
+        error instanceof Error ? error.message : "TTS 朗读请求失败",
+      );
+    } finally {
+      if (ttsAbortControllerRef.current === controller) {
+        ttsAbortControllerRef.current = null;
+      }
+    }
+  };
+
   const sendOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const nativeEvent = event.nativeEvent;
     if ("isComposing" in nativeEvent && nativeEvent.isComposing) {
@@ -5988,6 +6050,7 @@ function App() {
                 const completedTime = formatMessageTime(message.completedAt);
                 const elapsedText = formatElapsedMs(message.elapsedMs);
                 const isSearchHit = messageSearch.ids.includes(message.id);
+                const ttsText = getMessageTextForTts(message);
 
                 return (
                   <article
@@ -6082,6 +6145,22 @@ function App() {
                         <TextQuote size={14} />
                         引用
                       </button>
+                      {debugEnabled ? (
+                        <button
+                          type="button"
+                          aria-label="朗读消息"
+                          disabled={!ttsText}
+                          onClick={() => void speakMessageWithTts(message)}
+                          title={
+                            ttsText
+                              ? "调用本地 TTS 接口朗读这条消息"
+                              : "这条消息没有可朗读文本"
+                          }
+                        >
+                          <Volume2 size={14} />
+                          朗读
+                        </button>
+                      ) : null}
                       {message.role === "assistant" ? (
                         <button
                           type="button"

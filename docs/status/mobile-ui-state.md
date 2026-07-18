@@ -18,6 +18,7 @@ Date: 2026-07-17
 - Real-device API success still depends on the gateway allowing browser CORS. If CORS is blocked, a static-only deployment cannot complete the request without a proxy.
 - Web access is wired as a composer-level temporary request option rather than a static model toggle. First-stage image input is wired through the composer: the image button opens one file-pick request without acting as a highlighted toggle; desktop paste reads image files from `Ctrl+V`; selected images are previewed locally, stored in the `blobs` store as image cache records, attached to the user message as lightweight references, and serialized into OpenAI-compatible Responses / Chat Completions image content parts when sent. Non-image file input is still not implemented.
 - The composer is a multi-line textarea that grows with content up to a bounded height. A persisted **换行规则** setting uses concise UI choices, **Enter 发送** or **Enter 换行**; the alternate action remains available through the control-key path, and desktop `Ctrl+J` still inserts a newline.
+- Debug mode exposes a per-message **朗读** action. The first pass calls a fixed local TTS playback endpoint using the documented `tts_speak` shape with `mode: "replace"`, so a later read request interrupts current playback and replaces pending speech. This is intentionally not persisted yet; endpoint and voice options remain future settings work.
 
 ## Implemented response to mobile feedback
 

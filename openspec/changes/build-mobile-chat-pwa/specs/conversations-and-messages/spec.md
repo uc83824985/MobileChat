@@ -151,6 +151,10 @@ The system SHALL support copying message text, retrying a failed or interrupted 
 - **WHEN** a user requests deletion of an individual message record inside a conversation
 - **THEN** the system asks for confirmation using message-level wording distinct from conversation deletion
 
+#### Scenario: Debug-read a message aloud
+- **WHEN** debug mode is enabled and a user chooses the "朗读" action on a visible message
+- **THEN** the system sends the message's current text to the configured local TTS playback contract using replace scheduling so a later read request interrupts the previous one
+
 #### Scenario: Edit and resubmit a user message
 - **WHEN** a user edits an earlier user message and confirms resubmission
 - **THEN** the system preserves a valid ordered conversation path and generates a new response using the active assistant and model

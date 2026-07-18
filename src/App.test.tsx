@@ -227,6 +227,47 @@ describe("App", () => {
     expect(screen.getByPlaceholderText("输入消息")).toHaveValue("> critical");
   });
 
+  it("sends a debug TTS replace request for a message", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    configureApiProfile();
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "朗读测试" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    const userText = await screen.findByText("朗读测试", {
+      selector: ".message.user [data-message-text]",
+    });
+    const userMessage = userText.closest("article") as HTMLElement;
+    fireEvent.click(
+      within(userMessage).getByRole("button", { name: "朗读消息" }),
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://127.0.0.1:8765/tts_speak",
+    );
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)),
+    ).toMatchObject({
+      text: "朗读测试",
+      mode: "replace",
+      meta: {
+        source: "mobile-chat",
+        role: "user",
+      },
+    });
+  });
+
   it("shows only cache usage after a buffered streaming response", async () => {
     vi.stubGlobal(
       "fetch",
