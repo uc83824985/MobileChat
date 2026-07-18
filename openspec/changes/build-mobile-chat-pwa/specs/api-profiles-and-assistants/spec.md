@@ -3,6 +3,11 @@
 ### Requirement: Reusable API profiles
 The system SHALL allow a user to create, edit, disable, and delete API profiles containing a display name, API key, endpoint URL, protocol identifier, and zero or more model definitions.
 
+#### Scenario: Connections start without seeded models
+- **WHEN** the app creates the default API profile or the user creates a new API profile
+- **THEN** the profile SHALL start with zero model definitions
+- **AND** usable model definitions SHALL be created from successful probe results or explicit user model creation
+
 #### Scenario: Configure one credential for multiple models
 - **WHEN** a user adds multiple model definitions to one API profile
 - **THEN** every model definition reuses that profile's endpoint, credential, and protocol without duplicating the credential

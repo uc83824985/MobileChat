@@ -66,6 +66,7 @@ Date: 2026-07-17
   - display name;
   - description;
   - enabled flag.
+- Default and newly created connections start with an empty model list. The app does not seed a built-in "default model"; users create usable model records from successful probe results or by explicitly adding a model.
 - The connection editor shows the full model list as selectable model cards, so every model visible in assistant model access can be traced back to a model-side configuration record.
 - Assistants own model bindings that reference existing connection + model records, with snapshots of key display fields for provenance. Chat assistants always use their own allowed-model/default-model selection. Utility assistants default to following the active chat model and only use their own model bindings when their model strategy is set to fixed. Chat assistants also reference a reusable context configuration; utility summary assistants remain global and read the active chat assistant's configuration at execution time.
 - Model probing is a separate settings workbench. Probe configurations generate candidate model IDs from structured version ranges and suffix segments, reuse the currently selected connection for execution, hide failed candidates from the result list, and offer one-click creation of successful model IDs under that connection. Creating a model from a probe does not bind it to an assistant or change the current conversation model.
