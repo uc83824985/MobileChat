@@ -253,9 +253,7 @@ describe("App", () => {
     );
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "http://127.0.0.1:8765/tts_speak",
-    );
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:8765/speak");
     expect(
       JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)),
     ).toMatchObject({

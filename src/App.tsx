@@ -162,7 +162,7 @@ const MODEL_PROBE_CONCURRENCY = 8;
 const MAX_DRAFT_IMAGES = 4;
 const MAX_DRAFT_IMAGE_BYTES = 8 * 1024 * 1024;
 const IMAGE_INPUT_ACCEPT = "image/*";
-const TTS_SPEAK_ENDPOINT = "http://127.0.0.1:8765/tts_speak";
+const TTS_SPEAK_ENDPOINT = "http://127.0.0.1:8765/speak";
 const TTS_SPEAK_MODE = "replace";
 const PANEL_SWIPE_IGNORE_SELECTOR = [
   "a",
