@@ -487,6 +487,11 @@ function Ensure-AndroidSigningKeystore {
 }
 
 function Get-GradleExecutable {
+    $ProjectGradleWrapper = Join-Path $AndroidProjectDir "gradlew.bat"
+    if (Test-Path -LiteralPath $ProjectGradleWrapper) {
+        return $ProjectGradleWrapper
+    }
+
     $GlobalGradle = Get-Command gradle -ErrorAction SilentlyContinue
     if ($GlobalGradle) {
         return $GlobalGradle.Source
@@ -499,7 +504,7 @@ function Get-GradleExecutable {
         return $CachedGradle.FullName
     }
 
-    throw "Gradle was not found. Install Gradle, or open/build once from Android Studio so a Gradle distribution is available."
+    throw "Gradle was not found. Commit android/gradlew.bat, install Gradle, or open/build once from Android Studio so a Gradle distribution is available."
 }
 
 function Invoke-Gradle {
