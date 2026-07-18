@@ -57,6 +57,78 @@ function Resolve-BrowserPath {
   throw 'Chrome or Edge executable not found. Set MOBILECHAT_BROWSER to a browser executable path.'
 }
 
+function Test-NodeToolInstalled {
+  param([Parameter(Mandatory = $true)][string]$ToolName)
+
+  $BinDir = Join-Path $Root 'node_modules\.bin'
+  $ToolCandidates = @(
+    (Join-Path $BinDir $ToolName),
+    (Join-Path $BinDir "$ToolName.cmd"),
+    (Join-Path $BinDir "$ToolName.ps1")
+  )
+
+  foreach ($Candidate in $ToolCandidates) {
+    if (Test-Path -LiteralPath $Candidate) {
+      return $true
+    }
+  }
+
+  return $false
+}
+
+function Invoke-Npm {
+  param([Parameter(Mandatory = $true)][string[]]$NpmArgs)
+
+  $Npm = Resolve-CommandPath 'npm.cmd'
+  if (-not $Npm) {
+    throw 'npm.cmd not found. Install Node.js and ensure npm is on PATH.'
+  }
+
+  & $Npm @NpmArgs
+  if ($LASTEXITCODE -ne 0) {
+    throw "npm command failed: npm $($NpmArgs -join ' ')"
+  }
+}
+
+function Ensure-NodeDependencies {
+  if ((Test-NodeToolInstalled -ToolName 'vite') -and (Test-NodeToolInstalled -ToolName 'tsc')) {
+    return
+  }
+
+  $PackageLockPath = Join-Path $Root 'package-lock.json'
+  if (Test-Path -LiteralPath $PackageLockPath) {
+    Write-Host 'Node dependencies are missing or incomplete. Running npm ci...'
+    Invoke-Npm -NpmArgs @('ci')
+  }
+  else {
+    Write-Host 'Node dependencies are missing or incomplete. Running npm install...'
+    Invoke-Npm -NpmArgs @('install')
+  }
+
+  if (-not (Test-NodeToolInstalled -ToolName 'vite')) {
+    throw 'Vite was not found after installing dependencies. Check npm install output.'
+  }
+  if (-not (Test-NodeToolInstalled -ToolName 'tsc')) {
+    throw 'TypeScript compiler was not found after installing dependencies. Check npm install output.'
+  }
+}
+
+function Write-RecentLog {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [int]$Tail = 80
+  )
+
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return
+  }
+
+  Write-Host $Path
+  Get-Content -LiteralPath $Path -Tail $Tail -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host $_
+  }
+}
+
 function Test-DevServer {
   param([string]$TargetUrl)
 
@@ -136,13 +208,7 @@ try {
     throw 'npm.cmd not found. Install Node.js and ensure npm is on PATH.'
   }
 
-  if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules'))) {
-    Write-Host 'node_modules not found. Running npm install...'
-    & $Npm install
-    if ($LASTEXITCODE -ne 0) {
-      exit $LASTEXITCODE
-    }
-  }
+  Ensure-NodeDependencies
 
   if (-not (Test-DevServer $Url)) {
     $Arguments = @(
@@ -178,8 +244,10 @@ try {
     }
 
     if (-not $Ready) {
-      Write-Host "Vite stdout log: $OutLog"
-      Write-Host "Vite stderr log: $ErrLog"
+      Write-Host 'Vite did not become ready. Recent stdout log:'
+      Write-RecentLog -Path $OutLog
+      Write-Host 'Vite did not become ready. Recent stderr log:'
+      Write-RecentLog -Path $ErrLog
       throw "Dev server did not become ready: $Url"
     }
   }

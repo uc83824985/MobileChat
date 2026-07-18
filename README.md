@@ -51,7 +51,7 @@ PC 独立窗口开发：
 run.bat
 ```
 
-该脚本会启动 Vite 开发服务器，并用独立 Chrome/Edge app 窗口打开 `http://127.0.0.1:5173/MobileChat/`。停止脚本管理的窗口和开发服务器：
+该脚本会检查并安装缺失的 Node 依赖，启动 Vite 开发服务器，并用独立 Chrome/Edge app 窗口打开 `http://127.0.0.1:5173/MobileChat/`。这个桌面窗口不是离线打包程序；如果只点击浏览器历史窗口或固定的 app 快捷方式，而没有先运行 `run.ps1` / `run.bat`，会因为本地服务未启动而显示 `127.0.0.1 拒绝连接`。停止脚本管理的窗口和开发服务器：
 
 ```powershell
 .\run.ps1 -Stop
