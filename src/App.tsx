@@ -135,6 +135,14 @@ type MessageTextSelection = {
   text: string;
 } | null;
 type StreamingTextChunks = Record<string, string[]>;
+type TtsPlaybackState = {
+  messageId: string;
+  conversationId: string;
+  status: "requesting" | "speaking" | "stopping";
+  taskId?: string;
+  lastQueuedTextLength: number;
+  serviceState?: string;
+};
 
 declare global {
   interface Window {
@@ -163,7 +171,17 @@ const MAX_DRAFT_IMAGES = 4;
 const MAX_DRAFT_IMAGE_BYTES = 8 * 1024 * 1024;
 const IMAGE_INPUT_ACCEPT = "image/*";
 const TTS_SPEAK_ENDPOINT = "http://127.0.0.1:8765/speak";
+const TTS_STOP_ENDPOINT = "http://127.0.0.1:8765/stop";
+const TTS_STATUS_ENDPOINT = "http://127.0.0.1:8765/status";
 const TTS_SPEAK_MODE = "replace";
+const TTS_APPEND_MODE = "append";
+const TTS_STATUS_POLL_INTERVAL_MS = 1000;
+const TTS_STREAM_APPEND_DEBOUNCE_MS = 900;
+const TTS_STREAM_APPEND_MIN_CHARS = 80;
+const STREAMING_PLACEHOLDER_TEXTS = new Set([
+  "正在请求模型…",
+  "正在等待流式输出…",
+]);
 const PANEL_SWIPE_IGNORE_SELECTOR = [
   "a",
   "button",
@@ -316,6 +334,63 @@ const createMessageSearchRegex = (query: string, regexEnabled: boolean) => {
       error: error instanceof Error ? error.message : "正则表达式无效",
     };
   }
+};
+
+type SearchHighlightPart = {
+  text: string;
+  highlighted: boolean;
+};
+
+const createGlobalSearchRegex = (regex: RegExp) => {
+  const flags = regex.flags.includes("g") ? regex.flags : `${regex.flags}g`;
+  return new RegExp(regex.source, flags);
+};
+
+const splitSearchHighlightParts = (
+  text: string,
+  regex?: RegExp,
+): SearchHighlightPart[] => {
+  if (!text || !regex) {
+    return [{ text, highlighted: false }];
+  }
+
+  let globalRegex: RegExp;
+  try {
+    globalRegex = createGlobalSearchRegex(regex);
+  } catch {
+    return [{ text, highlighted: false }];
+  }
+
+  const parts: SearchHighlightPart[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = globalRegex.exec(text))) {
+    const matchedText = match[0];
+    if (!matchedText) {
+      if (globalRegex.lastIndex >= text.length) {
+        break;
+      }
+      globalRegex.lastIndex += 1;
+      continue;
+    }
+
+    if (match.index > cursor) {
+      parts.push({
+        text: text.slice(cursor, match.index),
+        highlighted: false,
+      });
+    }
+
+    parts.push({ text: matchedText, highlighted: true });
+    cursor = match.index + matchedText.length;
+  }
+
+  if (cursor < text.length) {
+    parts.push({ text: text.slice(cursor), highlighted: false });
+  }
+
+  return parts.length > 0 ? parts : [{ text, highlighted: false }];
 };
 
 const readBootUiPreferences = ():
@@ -621,6 +696,52 @@ const copyTextToClipboard = async (text: string) => {
   } finally {
     document.body.removeChild(textarea);
   }
+};
+
+const getTtsStatusText = (status: Record<string, unknown>) =>
+  `${String(status.state ?? "")} ${String(
+    status.speaker_status ?? "",
+  )}`.toLowerCase();
+
+const getTtsPendingCount = (status: Record<string, unknown>) => {
+  const rawValue = status.pending_count;
+  return typeof rawValue === "number" && Number.isFinite(rawValue)
+    ? rawValue
+    : 0;
+};
+
+const isTtsServiceIdle = (status: Record<string, unknown>) => {
+  if (status.started === false) {
+    return true;
+  }
+
+  if (getTtsPendingCount(status) > 0) {
+    return false;
+  }
+
+  if (status.current_task_id || status.current_stream_task_id) {
+    return false;
+  }
+
+  const statusText = getTtsStatusText(status);
+  if (!statusText) {
+    return false;
+  }
+
+  if (
+    /speaking|playing|synth|running|busy|paused|loading|queued/u.test(
+      statusText,
+    )
+  ) {
+    return false;
+  }
+
+  return /idle|stop|ready/u.test(statusText);
+};
+
+const parseTtsTaskId = (payload: Record<string, unknown>) => {
+  const taskId = payload.task_id;
+  return typeof taskId === "string" && taskId ? taskId : undefined;
 };
 
 const themeLabels: Record<ThemeMode, string> = {
@@ -1621,6 +1742,9 @@ function App() {
     useState<MessageTextSelection>(null);
   const [streamingTextChunks, setStreamingTextChunks] =
     useState<StreamingTextChunks>({});
+  const [ttsPlayback, setTtsPlaybackState] = useState<TtsPlaybackState | null>(
+    null,
+  );
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [isMessageThreadAwayFromBottom, setIsMessageThreadAwayFromBottom] =
     useState(false);
@@ -1672,6 +1796,11 @@ function App() {
   );
   const abortControllerRef = useRef<AbortController | null>(null);
   const ttsAbortControllerRef = useRef<AbortController | null>(null);
+  const ttsPlaybackRef = useRef<TtsPlaybackState | null>(null);
+  const ttsStatusPollTimerRef = useRef<number | null>(null);
+  const ttsStreamingAppendTimerRef = useRef<number | null>(null);
+  const ttsStreamingAppendBufferRef = useRef<Record<string, string>>({});
+  const messagesRef = useRef<Message[]>(bootSnapshot.messages);
   const saveTimerRef = useRef<number | null>(null);
   const latestSnapshotRef = useRef<LocalDataSnapshot>(bootSnapshot);
   const contextSummaryJobRunningRef = useRef(false);
@@ -1710,6 +1839,10 @@ function App() {
   useEffect(() => {
     resizeComposerInput();
   }, [draft, draftImages.length, resizeComposerInput, viewportProfile]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1920,6 +2053,7 @@ function App() {
 
     return {
       error,
+      regex,
       matches,
       ids: matches.map((message) => message.id),
     };
@@ -2796,6 +2930,13 @@ function App() {
     return () => {
       abortControllerRef.current?.abort();
       ttsAbortControllerRef.current?.abort();
+      if (ttsStatusPollTimerRef.current !== null) {
+        window.clearInterval(ttsStatusPollTimerRef.current);
+      }
+      if (ttsStreamingAppendTimerRef.current !== null) {
+        window.clearTimeout(ttsStreamingAppendTimerRef.current);
+      }
+      ttsStreamingAppendBufferRef.current = {};
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current);
       }
@@ -2836,6 +2977,248 @@ function App() {
     [pendingMessageId],
   );
 
+  const setTtsPlayback = useCallback(
+    (
+      next:
+        | TtsPlaybackState
+        | null
+        | ((current: TtsPlaybackState | null) => TtsPlaybackState | null),
+    ) => {
+      setTtsPlaybackState((current) => {
+        const resolved = typeof next === "function" ? next(current) : next;
+        ttsPlaybackRef.current = resolved;
+        return resolved;
+      });
+    },
+    [],
+  );
+
+  const requestTtsJson = useCallback(
+    async (
+      endpoint: string,
+      body?: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => {
+      const response = await fetch(endpoint, {
+        method: body ? "POST" : "GET",
+        headers: body
+          ? {
+              "Content-Type": "application/json",
+            }
+          : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+        signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`TTS 请求失败：HTTP ${response.status}`);
+      }
+
+      try {
+        return (await response.json()) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    },
+    [],
+  );
+
+  const pollTtsStatus = useCallback(async () => {
+    const playback = ttsPlaybackRef.current;
+    if (!playback) {
+      return;
+    }
+
+    try {
+      const status = await requestTtsJson(TTS_STATUS_ENDPOINT);
+      const serviceState = getTtsStatusText(status) || undefined;
+
+      if (isTtsServiceIdle(status)) {
+        const targetMessage = messagesRef.current.find(
+          (message) => message.id === playback.messageId,
+        );
+        if (targetMessage?.status === "streaming") {
+          setTtsPlayback((current) =>
+            current
+              ? {
+                  ...current,
+                  status:
+                    current.status === "stopping" ? "stopping" : "speaking",
+                  serviceState: "waiting stream",
+                }
+              : current,
+          );
+          return;
+        }
+
+        ttsStreamingAppendBufferRef.current = {};
+        setTtsPlayback(null);
+        setComposerNotice(
+          playback.status === "stopping" ? "已停止朗读" : "朗读已结束",
+        );
+        return;
+      }
+
+      setTtsPlayback((current) =>
+        current
+          ? {
+              ...current,
+              status: current.status === "stopping" ? "stopping" : "speaking",
+              serviceState,
+            }
+          : current,
+      );
+    } catch {
+      setTtsPlayback((current) =>
+        current ? { ...current, serviceState: "status unavailable" } : current,
+      );
+    }
+  }, [requestTtsJson, setTtsPlayback]);
+
+  useEffect(() => {
+    if (ttsStatusPollTimerRef.current !== null) {
+      window.clearInterval(ttsStatusPollTimerRef.current);
+      ttsStatusPollTimerRef.current = null;
+    }
+
+    if (!ttsPlayback) {
+      return undefined;
+    }
+
+    void pollTtsStatus();
+    ttsStatusPollTimerRef.current = window.setInterval(
+      () => void pollTtsStatus(),
+      TTS_STATUS_POLL_INTERVAL_MS,
+    );
+
+    return () => {
+      if (ttsStatusPollTimerRef.current !== null) {
+        window.clearInterval(ttsStatusPollTimerRef.current);
+        ttsStatusPollTimerRef.current = null;
+      }
+    };
+  }, [pollTtsStatus, ttsPlayback]);
+
+  const stopTtsPlayback = useCallback(async () => {
+    const playback = ttsPlaybackRef.current;
+    if (!playback) {
+      return;
+    }
+
+    ttsAbortControllerRef.current?.abort();
+    ttsStreamingAppendBufferRef.current = {};
+    setTtsPlayback((current) =>
+      current ? { ...current, status: "stopping" } : current,
+    );
+
+    try {
+      await requestTtsJson(TTS_STOP_ENDPOINT, {});
+      setComposerNotice("正在停止朗读");
+      void pollTtsStatus();
+    } catch (error) {
+      setComposerNotice(
+        error instanceof Error ? error.message : "TTS 停止请求失败",
+      );
+    }
+  }, [pollTtsStatus, requestTtsJson, setTtsPlayback]);
+
+  const flushStreamingTextToTts = useCallback(
+    async (messageId: string, force = false) => {
+      const playback = ttsPlaybackRef.current;
+      const bufferedText = normalizeQuotedText(
+        ttsStreamingAppendBufferRef.current[messageId] ?? "",
+      );
+
+      if (
+        !playback ||
+        playback.messageId !== messageId ||
+        playback.status === "stopping" ||
+        !bufferedText
+      ) {
+        return;
+      }
+
+      if (
+        !force &&
+        bufferedText.length < TTS_STREAM_APPEND_MIN_CHARS &&
+        !/[。！？.!?]\s*$/u.test(bufferedText)
+      ) {
+        return;
+      }
+
+      delete ttsStreamingAppendBufferRef.current[messageId];
+
+      try {
+        await requestTtsJson(TTS_SPEAK_ENDPOINT, {
+          text: bufferedText,
+          mode: TTS_APPEND_MODE,
+          meta: {
+            source: "mobile-chat",
+            messageId,
+            conversationId: playback.conversationId,
+            role: "assistant",
+            streamingAppend: true,
+          },
+        });
+      } catch (error) {
+        setComposerNotice(
+          error instanceof Error ? error.message : "TTS 追加朗读失败",
+        );
+      }
+    },
+    [requestTtsJson],
+  );
+
+  const queueStreamingTextForTts = useCallback(
+    (messageId: string, fullText: string, forceFlush = false) => {
+      const playback = ttsPlaybackRef.current;
+      const normalizedFullText = normalizeQuotedText(fullText);
+      if (
+        !playback ||
+        playback.messageId !== messageId ||
+        playback.status === "stopping" ||
+        !normalizedFullText ||
+        normalizedFullText.length <= playback.lastQueuedTextLength
+      ) {
+        return;
+      }
+
+      const appendedText = normalizeQuotedText(
+        normalizedFullText.slice(playback.lastQueuedTextLength),
+      );
+      if (!appendedText) {
+        return;
+      }
+
+      ttsStreamingAppendBufferRef.current[messageId] =
+        `${ttsStreamingAppendBufferRef.current[messageId] ?? ""}${appendedText}`;
+      setTtsPlayback((current) =>
+        current?.messageId === messageId
+          ? { ...current, lastQueuedTextLength: normalizedFullText.length }
+          : current,
+      );
+
+      if (
+        forceFlush ||
+        ttsStreamingAppendBufferRef.current[messageId].length >=
+          TTS_STREAM_APPEND_MIN_CHARS ||
+        /[。！？.!?]\s*$/u.test(ttsStreamingAppendBufferRef.current[messageId])
+      ) {
+        void flushStreamingTextToTts(messageId, true);
+        return;
+      }
+
+      if (ttsStreamingAppendTimerRef.current !== null) {
+        window.clearTimeout(ttsStreamingAppendTimerRef.current);
+      }
+      ttsStreamingAppendTimerRef.current = window.setTimeout(() => {
+        ttsStreamingAppendTimerRef.current = null;
+        void flushStreamingTextToTts(messageId, true);
+      }, TTS_STREAM_APPEND_DEBOUNCE_MS);
+    },
+    [flushStreamingTextToTts, setTtsPlayback],
+  );
+
   const appendStreamingMessageText = useCallback(
     (messageId: string, delta: string, fullText: string) => {
       const previousText = streamingFullTextRef.current[messageId] ?? "";
@@ -2847,6 +3230,7 @@ function App() {
 
       if (previousText && fullText && !fullText.startsWith(previousText)) {
         streamingFullTextRef.current[messageId] = fullText;
+        queueStreamingTextForTts(messageId, fullText);
         setStreamingTextChunks((current) => ({
           ...current,
           [messageId]: [fullText],
@@ -2860,12 +3244,16 @@ function App() {
 
       streamingFullTextRef.current[messageId] =
         fullText || `${previousText}${nextDelta}`;
+      queueStreamingTextForTts(
+        messageId,
+        streamingFullTextRef.current[messageId],
+      );
       setStreamingTextChunks((current) => ({
         ...current,
         [messageId]: [...(current[messageId] ?? []), nextDelta],
       }));
     },
-    [],
+    [queueStreamingTextForTts],
   );
 
   const finalizeStreamingMessageText = useCallback(
@@ -2876,6 +3264,7 @@ function App() {
       }
 
       if (finalText === previousText) {
+        void flushStreamingTextToTts(messageId, true);
         return;
       }
 
@@ -2886,8 +3275,9 @@ function App() {
           : finalText,
         finalText,
       );
+      void flushStreamingTextToTts(messageId, true);
     },
-    [appendStreamingMessageText],
+    [appendStreamingMessageText, flushStreamingTextToTts],
   );
 
   const clearStreamingMessageText = useCallback((messageId: string) => {
@@ -2953,7 +3343,27 @@ function App() {
   }, []);
 
   const captureMessageTextSelectionAfterTouch = useCallback(() => {
-    window.setTimeout(captureMessageTextSelection, 0);
+    [0, 120, 360].forEach((delayMs) => {
+      window.setTimeout(captureMessageTextSelection, delayMs);
+    });
+  }, [captureMessageTextSelection]);
+
+  useEffect(() => {
+    const scheduleSelectionCapture = () => {
+      window.setTimeout(captureMessageTextSelection, 80);
+    };
+
+    document.addEventListener("selectionchange", scheduleSelectionCapture);
+    document.addEventListener("mouseup", scheduleSelectionCapture);
+    document.addEventListener("touchend", scheduleSelectionCapture, {
+      passive: true,
+    });
+
+    return () => {
+      document.removeEventListener("selectionchange", scheduleSelectionCapture);
+      document.removeEventListener("mouseup", scheduleSelectionCapture);
+      document.removeEventListener("touchend", scheduleSelectionCapture);
+    };
   }, [captureMessageTextSelection]);
 
   const activateAssistant = (assistantId: string) => {
@@ -5588,14 +5998,74 @@ function App() {
     setComposerNotice("已引用选中文本");
   };
 
+  const selectMessageText = (messageId: string, fallbackText: string) => {
+    const messageElement = Array.from(
+      messageThreadRef.current?.querySelectorAll<HTMLElement>(
+        "[data-message-id]",
+      ) ?? [],
+    ).find((element) => element.dataset.messageId === messageId);
+    const textElement = messageElement?.querySelector<HTMLElement>(
+      "[data-message-text]",
+    );
+    const selectedText = normalizeQuotedText(
+      textElement?.innerText ?? textElement?.textContent ?? fallbackText,
+    );
+
+    if (!textElement || !selectedText) {
+      setComposerNotice("这条消息没有可选正文");
+      return;
+    }
+
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(textElement);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    setSelectedMessageText({ messageId, text: selectedText });
+    setComposerNotice("已选中正文，可在输入框引用");
+  };
+
+  const renderMessageTextContent = (
+    text: string,
+    searchRegex: RegExp | undefined,
+    active: boolean,
+  ) => {
+    if (!searchRegex) {
+      return text;
+    }
+
+    return splitSearchHighlightParts(text, searchRegex).map((part, index) =>
+      part.highlighted ? (
+        <mark
+          className={`message-search-mark ${active ? "active" : ""}`}
+          key={`search-${index}`}
+        >
+          {part.text}
+        </mark>
+      ) : (
+        <span key={`text-${index}`}>{part.text}</span>
+      ),
+    );
+  };
+
   const getMessageTextForTts = (message: Message) => {
     const streamingText =
       streamingFullTextRef.current[message.id] ||
       (streamingTextChunks[message.id] ?? []).join("");
-    return normalizeQuotedText(streamingText || message.text);
+    const text = normalizeQuotedText(streamingText || message.text);
+    return STREAMING_PLACEHOLDER_TEXTS.has(text) ? "" : text;
   };
 
   const speakMessageWithTts = async (message: Message) => {
+    const activePlayback = ttsPlaybackRef.current;
+    if (
+      activePlayback?.messageId === message.id &&
+      activePlayback.status !== "stopping"
+    ) {
+      await stopTtsPlayback();
+      return;
+    }
+
     const text = getMessageTextForTts(message);
     if (!text) {
       setComposerNotice("这条消息没有可朗读文本");
@@ -5603,16 +6073,25 @@ function App() {
     }
 
     ttsAbortControllerRef.current?.abort();
+    if (ttsStreamingAppendTimerRef.current !== null) {
+      window.clearTimeout(ttsStreamingAppendTimerRef.current);
+      ttsStreamingAppendTimerRef.current = null;
+    }
+    ttsStreamingAppendBufferRef.current = {};
+
     const controller = new AbortController();
     ttsAbortControllerRef.current = controller;
+    setTtsPlayback({
+      messageId: message.id,
+      conversationId: message.conversationId,
+      status: "requesting",
+      lastQueuedTextLength: text.length,
+    });
 
     try {
-      const response = await fetch(TTS_SPEAK_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      const payload = await requestTtsJson(
+        TTS_SPEAK_ENDPOINT,
+        {
           text,
           mode: TTS_SPEAK_MODE,
           meta: {
@@ -5621,15 +6100,22 @@ function App() {
             conversationId: message.conversationId,
             role: message.role,
           },
-        }),
-        signal: controller.signal,
-      });
+        },
+        controller.signal,
+      );
 
-      if (!response.ok) {
-        throw new Error(`TTS 朗读请求失败：HTTP ${response.status}`);
-      }
-
+      const taskId = parseTtsTaskId(payload);
+      setTtsPlayback((current) =>
+        current?.messageId === message.id
+          ? {
+              ...current,
+              status: "speaking",
+              taskId,
+            }
+          : current,
+      );
       setComposerNotice("已发送朗读请求");
+      void pollTtsStatus();
     } catch (error) {
       if (controller.signal.aborted) {
         return;
@@ -5637,6 +6123,9 @@ function App() {
 
       setComposerNotice(
         error instanceof Error ? error.message : "TTS 朗读请求失败",
+      );
+      setTtsPlayback((current) =>
+        current?.messageId === message.id ? null : current,
       );
     } finally {
       if (ttsAbortControllerRef.current === controller) {
@@ -6100,7 +6589,15 @@ function App() {
                 const completedTime = formatMessageTime(message.completedAt);
                 const elapsedText = formatElapsedMs(message.elapsedMs);
                 const isSearchHit = messageSearch.ids.includes(message.id);
+                const messageTextChunks = streamingTextChunks[message.id];
+                const messageDisplayText = messageTextChunks?.length
+                  ? messageTextChunks.join("")
+                  : message.text;
                 const ttsText = getMessageTextForTts(message);
+                const ttsStateForMessage =
+                  ttsPlayback?.messageId === message.id ? ttsPlayback : null;
+                const ttsStatusLabel =
+                  ttsStateForMessage?.status === "speaking" ? " · 朗读中" : "";
 
                 return (
                   <article
@@ -6116,17 +6613,24 @@ function App() {
                       {message.status === "streaming" ? " · 生成中" : ""}
                       {message.status === "stopped" ? " · 已停止" : ""}
                       {message.status === "error" ? " · 错误" : ""}
+                      {ttsStatusLabel}
                     </div>
                     <p data-message-text>
-                      {streamingTextChunks[message.id]?.length
-                        ? streamingTextChunks[message.id].map(
-                            (chunk, index) => (
-                              <span key={`${message.id}-chunk-${index}`}>
-                                {chunk}
-                              </span>
-                            ),
-                          )
-                        : message.text}
+                      {messageTextChunks?.length
+                        ? messageTextChunks.map((chunk, index) => (
+                            <span key={`${message.id}-chunk-${index}`}>
+                              {renderMessageTextContent(
+                                chunk,
+                                isSearchHit ? messageSearch.regex : undefined,
+                                message.id === activeMessageSearchId,
+                              )}
+                            </span>
+                          ))
+                        : renderMessageTextContent(
+                            message.text,
+                            isSearchHit ? messageSearch.regex : undefined,
+                            message.id === activeMessageSearchId,
+                          )}
                     </p>
                     {getMessageImageParts(message).length > 0 ? (
                       <div className="message-images" aria-label="消息图片">
@@ -6179,36 +6683,42 @@ function App() {
                     <div className="message-actions">
                       <button
                         type="button"
-                        aria-label="引用选中文本"
-                        disabled={
-                          activeConversationReadOnly ||
-                          selectedMessageText?.messageId !== message.id
+                        aria-label="全选消息正文"
+                        disabled={!normalizeQuotedText(messageDisplayText)}
+                        onClick={() =>
+                          selectMessageText(message.id, messageDisplayText)
                         }
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => insertSelectedMessageQuote(message.id)}
-                        title={
-                          selectedMessageText?.messageId === message.id
-                            ? "将当前选中文本插入输入框"
-                            : "先选中这条消息中的文本片段"
-                        }
+                        title="选中这条消息的全部正文，便于复制或引用"
                       >
-                        <TextQuote size={14} />
-                        引用
+                        <Check size={14} />
+                        全选
                       </button>
                       {debugEnabled ? (
                         <button
                           type="button"
-                          aria-label="朗读消息"
-                          disabled={!ttsText}
-                          onClick={() => void speakMessageWithTts(message)}
+                          aria-label={
+                            ttsStateForMessage ? "停止朗读消息" : "朗读消息"
+                          }
+                          disabled={!ttsText && !ttsStateForMessage}
+                          onClick={() =>
+                            ttsStateForMessage
+                              ? void stopTtsPlayback()
+                              : void speakMessageWithTts(message)
+                          }
                           title={
-                            ttsText
-                              ? "调用本地 TTS 接口朗读这条消息"
-                              : "这条消息没有可朗读文本"
+                            ttsStateForMessage
+                              ? "停止当前 TTS 朗读"
+                              : ttsText
+                                ? "调用本地 TTS 接口朗读这条消息"
+                                : "这条消息没有可朗读文本"
                           }
                         >
-                          <Volume2 size={14} />
-                          朗读
+                          {ttsStateForMessage ? (
+                            <StopCircle size={14} />
+                          ) : (
+                            <Volume2 size={14} />
+                          )}
+                          {ttsStateForMessage ? "停止" : "朗读"}
                         </button>
                       ) : null}
                       {message.role === "assistant" ? (

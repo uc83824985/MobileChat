@@ -199,14 +199,9 @@ describe("App", () => {
     const userText = await screen.findByText("alpha critical beta", {
       selector: ".message.user [data-message-text]",
     });
-    const userMessage = userText.closest("article") as HTMLElement;
-    const userQuoteButton = within(userMessage).getByRole("button", {
-      name: "引用选中文本",
-    });
     const composerQuoteButton = screen.getByRole("button", {
       name: "引用选中文本到输入框",
     });
-    expect(userQuoteButton).toBeDisabled();
     expect(composerQuoteButton).toBeDisabled();
 
     const textNode = userText.firstChild;
@@ -219,7 +214,6 @@ describe("App", () => {
     selection?.addRange(range);
     fireEvent.mouseUp(screen.getByLabelText("消息列表"));
 
-    expect(userQuoteButton).toBeEnabled();
     expect(composerQuoteButton).toBeEnabled();
     fireEvent.mouseDown(composerQuoteButton);
     fireEvent.click(composerQuoteButton);
@@ -227,13 +221,42 @@ describe("App", () => {
     expect(screen.getByPlaceholderText("输入消息")).toHaveValue("> critical");
   });
 
-  it("sends a debug TTS replace request for a message", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+  it("selects a whole message body from the message action", async () => {
+    render(<App />);
+    configureApiProfile();
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "select all body" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    const userText = await screen.findByText("select all body", {
+      selector: ".message.user [data-message-text]",
+    });
+    const userMessage = userText.closest("article") as HTMLElement;
+    fireEvent.click(
+      within(userMessage).getByRole("button", { name: "全选消息正文" }),
     );
+
+    expect(window.getSelection()?.toString()).toBe("select all body");
+    expect(
+      screen.getByRole("button", { name: "引用选中文本到输入框" }),
+    ).toBeEnabled();
+  });
+
+  it("sends a debug TTS replace request for a message", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      const payload = url.endsWith("/status")
+        ? { started: true, state: "playing", pending_count: 0 }
+        : { ok: true, queued: true, task_id: "task-1" };
+      return Promise.resolve(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<App />);
@@ -252,11 +275,17 @@ describe("App", () => {
       within(userMessage).getByRole("button", { name: "朗读消息" }),
     );
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:8765/speak");
-    expect(
-      JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)),
-    ).toMatchObject({
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => url === "http://127.0.0.1:8765/speak",
+        ),
+      ).toBe(true),
+    );
+    const speakCall = fetchMock.mock.calls.find(
+      ([url]) => url === "http://127.0.0.1:8765/speak",
+    );
+    expect(JSON.parse(String(speakCall?.[1]?.body))).toMatchObject({
       text: "朗读测试",
       mode: "replace",
       meta: {
@@ -264,6 +293,51 @@ describe("App", () => {
         role: "user",
       },
     });
+  });
+
+  it("stops an active debug TTS request from the message action", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      const payload = url.endsWith("/status")
+        ? { started: true, state: "playing", pending_count: 0 }
+        : { ok: true, queued: true, task_id: "task-1" };
+      return Promise.resolve(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    configureApiProfile();
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "朗读测试" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    const userText = await screen.findByText("朗读测试", {
+      selector: ".message.user [data-message-text]",
+    });
+    const userMessage = userText.closest("article") as HTMLElement;
+    fireEvent.click(
+      within(userMessage).getByRole("button", { name: "朗读消息" }),
+    );
+
+    const stopButton = await within(userMessage).findByRole("button", {
+      name: "停止朗读消息",
+    });
+    fireEvent.click(stopButton);
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => url === "http://127.0.0.1:8765/stop",
+        ),
+      ).toBe(true),
+    );
   });
 
   it("exports mobilechat archives through the Android WebView bridge", async () => {
@@ -1110,28 +1184,29 @@ describe("App", () => {
       target: { value: "alpha middle beta" },
     });
     fireEvent.click(screen.getByLabelText("发送"));
-    await screen.findByText("alpha middle beta");
+    const alphaText = await screen.findByText("alpha middle beta");
+    const alphaArticle = alphaText.closest("article") as HTMLElement;
 
     fireEvent.change(screen.getByPlaceholderText("输入消息"), {
       target: { value: "second regex topic" },
     });
     fireEvent.click(screen.getByLabelText("发送"));
+    const secondText = await screen.findByText("second regex topic");
+    const secondArticle = secondText.closest("article") as HTMLElement;
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
     const searchInput = screen.getByLabelText("搜索当前对话消息");
     fireEvent.change(searchInput, { target: { value: "alpha beta" } });
-    await waitFor(() =>
-      expect(
-        screen.getByText("alpha middle beta").closest("article"),
-      ).toHaveClass("search-active"),
+    await waitFor(() => expect(alphaArticle).toHaveClass("search-active"));
+    expect(within(alphaArticle).getByText("alpha middle beta")).toHaveClass(
+      "message-search-mark",
     );
 
     fireEvent.change(searchInput, { target: { value: "second.*topic" } });
     fireEvent.click(screen.getByRole("button", { name: "正则搜索" }));
-    await waitFor(() =>
-      expect(
-        screen.getByText("second regex topic").closest("article"),
-      ).toHaveClass("search-active"),
+    await waitFor(() => expect(secondArticle).toHaveClass("search-active"));
+    expect(within(secondArticle).getByText("second regex topic")).toHaveClass(
+      "message-search-mark",
     );
 
     fireEvent.change(searchInput, { target: { value: "p" } });
