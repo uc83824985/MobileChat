@@ -135,6 +135,28 @@ const createStreamResponse = (chunks: string[]) => {
   );
 };
 
+const createBrokenStreamResponse = (chunksBeforeError: string[]) => {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new Response(
+    new ReadableStream({
+      pull(controller) {
+        const chunk = chunksBeforeError[index++];
+        if (chunk) {
+          controller.enqueue(encoder.encode(chunk));
+          return;
+        }
+
+        controller.error(new Error("simulated connection drop"));
+      },
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    },
+  );
+};
+
 describe("responsesClient", () => {
   it("parses Responses SSE text deltas and completed usage", async () => {
     const fetchMock = vi
@@ -181,6 +203,98 @@ describe("responsesClient", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
       Accept: "text/event-stream, application/json",
     });
+  });
+
+  it("retries transient network failures before the request is established", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("network down"))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ output_text: "retry ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const request = requestResponsesChat({
+        apiProfile,
+        assistant,
+        conversation,
+        model,
+        messages,
+        signal: new AbortController().signal,
+        stream: false,
+      });
+
+      await vi.advanceTimersByTimeAsync(600);
+      await expect(request).resolves.toMatchObject({ text: "retry ok" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to non-streaming when a stream disconnects before text arrives", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(createBrokenStreamResponse([]))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ output_text: "fallback ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await requestResponsesChat({
+      apiProfile,
+      assistant,
+      conversation,
+      model,
+      messages,
+      signal: new AbortController().signal,
+      stream: true,
+    });
+
+    expect(result.text).toBe("fallback ok");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).stream).toBe(
+      true,
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)).stream).toBe(
+      false,
+    );
+  });
+
+  it("returns partial text when an established stream disconnects", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        createBrokenStreamResponse([
+          'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"partial"}\n\n',
+        ]),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const deltas: string[] = [];
+
+    const result = await requestResponsesChat({
+      apiProfile,
+      assistant,
+      conversation,
+      model,
+      messages,
+      signal: new AbortController().signal,
+      stream: true,
+      onTextDelta: (_delta, fullText) => deltas.push(fullText),
+    });
+
+    expect(result.interrupted).toBe(true);
+    expect(result.text).toContain("partial");
+    expect(result.text).toContain("网络连接中断");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(deltas).toEqual(["partial"]);
   });
 
   it("adds the web_search tool only when the request enables web access", async () => {

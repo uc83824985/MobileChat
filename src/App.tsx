@@ -288,6 +288,23 @@ const formatMessageImageMarker = (part: MessageImagePart) =>
     part.mimeType || "image/*"
   }，${formatBytes(part.size)}]`;
 
+const NETWORK_INTERRUPTED_SUFFIX =
+  "[网络连接中断，后续内容未收到。可点击重试重新生成。]";
+
+const formatInterruptedGenerationText = (
+  streamedText: string,
+  error: unknown,
+) => {
+  const partialText = normalizeQuotedText(streamedText);
+  if (partialText) {
+    return `${partialText}\n\n${NETWORK_INTERRUPTED_SUFFIX}`;
+  }
+
+  return error instanceof Error
+    ? error.message
+    : "请求模型失败，请检查连接、模型和网络。";
+};
+
 const readImageReferenceNumber = (label?: string) => {
   const match = label?.match(/^图片(\d+)$/);
   return match ? Number(match[1]) : 0;
@@ -1380,6 +1397,7 @@ const buildContextSummaryPrompt = ({
 - 总结预算来自当前聊天助手绑定的上下文配置：输出必须不超过 ${maxChars} 个字符。超限会被本地拒绝。
 - 若信息过多，请优先保留“严格记忆、精确事实、当前状态”，合并“探索记录”，压缩或删除低价值“模糊记忆”和过期过程。
 - 必须使用下面的总结框架作为 Markdown 二级标题；没有内容的可写“无”。
+- 不要在总结正文重复维度说明、上下文配置说明或“本维度用于……”这类解释；只保留该维度下的事实、状态、规则和已验证结果。
 - 输出中文 Markdown，尽量紧凑，优先结构化。
 
 总结框架：${framework.name}
@@ -1422,6 +1440,7 @@ const buildContextSummaryRewritePrompt = ({
 - 不要新增事实。
 - 保持总结框架和当前上下文配置的分类意图。
 - 优先保留严格记忆、精确事实、当前状态；合并探索记录；压缩或删除低价值模糊记忆和过期过程。
+- 不要在总结正文重复维度说明、上下文配置说明或“本维度用于……”这类解释；只保留该维度下的事实、状态、规则和已验证结果。
 - 输出必须不超过 ${maxChars} 个字符，超限会被本地拒绝。
 
 总结框架：
@@ -5528,7 +5547,7 @@ function App() {
       const completionTiming = createCompletionTiming(requestStartedAt);
       const completedAssistantMessage: Message = {
         ...assistantMessage,
-        status: "complete",
+        status: result.interrupted ? "error" : "complete",
         ...completionTiming,
         text: result.text || streamedText || "模型未返回文本内容。",
         providerResponseId: result.providerResponseId,
@@ -5545,12 +5564,14 @@ function App() {
             : message,
         ),
       );
-      maybeStartAutoContextSummary({
-        conversation: activeConversation,
-        messageSnapshot: [...requestMessages, completedAssistantMessage],
-        chatResolvedModel: resolvedModel,
-        contextProfile: activeContextProfile,
-      });
+      if (!result.interrupted) {
+        maybeStartAutoContextSummary({
+          conversation: activeConversation,
+          messageSnapshot: [...requestMessages, completedAssistantMessage],
+          chatResolvedModel: resolvedModel,
+          contextProfile: activeContextProfile,
+        });
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         return;
@@ -5558,6 +5579,10 @@ function App() {
 
       const completionTiming = createCompletionTiming(requestStartedAt);
       clearStreamingMessageText(assistantMessage.id);
+      const interruptedText = formatInterruptedGenerationText(
+        streamedText,
+        error,
+      );
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
@@ -5565,10 +5590,7 @@ function App() {
                 ...message,
                 status: "error",
                 ...completionTiming,
-                text:
-                  error instanceof Error
-                    ? error.message
-                    : "请求模型失败，请检查连接、模型和网络。",
+                text: interruptedText,
               }
             : message,
         ),
@@ -5698,7 +5720,7 @@ function App() {
       const completionTiming = createCompletionTiming(requestStartedAt);
       const completedAssistantMessage: Message = {
         ...assistantMessage,
-        status: "complete",
+        status: result.interrupted ? "error" : "complete",
         ...completionTiming,
         text: result.text || streamedText || "模型未返回文本内容。",
         providerResponseId: result.providerResponseId,
@@ -5715,12 +5737,14 @@ function App() {
             : message,
         ),
       );
-      maybeStartAutoContextSummary({
-        conversation: activeConversation,
-        messageSnapshot: [...requestMessages, completedAssistantMessage],
-        chatResolvedModel: resolvedModel,
-        contextProfile: activeContextProfile,
-      });
+      if (!result.interrupted) {
+        maybeStartAutoContextSummary({
+          conversation: activeConversation,
+          messageSnapshot: [...requestMessages, completedAssistantMessage],
+          chatResolvedModel: resolvedModel,
+          contextProfile: activeContextProfile,
+        });
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         return;
@@ -5728,6 +5752,10 @@ function App() {
 
       const completionTiming = createCompletionTiming(requestStartedAt);
       clearStreamingMessageText(assistantMessage.id);
+      const interruptedText = formatInterruptedGenerationText(
+        streamedText,
+        error,
+      );
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
@@ -5735,10 +5763,7 @@ function App() {
                 ...message,
                 status: "error",
                 ...completionTiming,
-                text:
-                  error instanceof Error
-                    ? error.message
-                    : "请求模型失败，请检查连接、模型和网络。",
+                text: interruptedText,
               }
             : message,
         ),
@@ -5876,7 +5901,7 @@ function App() {
       const completionTiming = createCompletionTiming(requestStartedAt);
       const completedAssistantMessage: Message = {
         ...assistantMessage,
-        status: "complete",
+        status: result.interrupted ? "error" : "complete",
         ...completionTiming,
         text: result.text || streamedText || "模型未返回文本内容。",
         providerResponseId: result.providerResponseId,
@@ -5893,16 +5918,18 @@ function App() {
             : message,
         ),
       );
-      maybeStartAutoContextSummary({
-        conversation: activeConversation,
-        messageSnapshot: [
-          ...activeMessages,
-          userMessage,
-          completedAssistantMessage,
-        ],
-        chatResolvedModel: resolvedModel,
-        contextProfile: activeContextProfile,
-      });
+      if (!result.interrupted) {
+        maybeStartAutoContextSummary({
+          conversation: activeConversation,
+          messageSnapshot: [
+            ...activeMessages,
+            userMessage,
+            completedAssistantMessage,
+          ],
+          chatResolvedModel: resolvedModel,
+          contextProfile: activeContextProfile,
+        });
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         return;
@@ -5910,6 +5937,10 @@ function App() {
 
       const completionTiming = createCompletionTiming(requestStartedAt);
       clearStreamingMessageText(assistantMessage.id);
+      const interruptedText = formatInterruptedGenerationText(
+        streamedText,
+        error,
+      );
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantMessage.id
@@ -5917,10 +5948,7 @@ function App() {
                 ...message,
                 status: "error",
                 ...completionTiming,
-                text:
-                  error instanceof Error
-                    ? error.message
-                    : "请求模型失败，请检查连接、模型和网络。",
+                text: interruptedText,
               }
             : message,
         ),

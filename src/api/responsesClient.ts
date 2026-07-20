@@ -27,6 +27,7 @@ export type ResponsesChatResult = {
   text: string;
   providerResponseId?: string;
   usage?: ResponseUsage;
+  interrupted?: boolean;
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -34,6 +35,25 @@ type SseEvent = {
   event?: string;
   data: string;
 };
+
+class StreamConnectionError extends Error {
+  constructor(message = "流式连接中断且尚未收到内容。") {
+    super(message);
+    this.name = "StreamConnectionError";
+  }
+}
+
+class StreamInterruptedError extends Error {
+  partialText: string;
+  providerResponseId?: string;
+
+  constructor(partialText: string, providerResponseId?: string) {
+    super("流式连接中断，后续内容未收到。");
+    this.name = "StreamInterruptedError";
+    this.partialText = partialText;
+    this.providerResponseId = providerResponseId;
+  }
+}
 
 const isRecord = (value: unknown): value is UnknownRecord =>
   typeof value === "object" && value !== null;
@@ -46,6 +66,35 @@ const readString = (value: unknown): string | undefined =>
 
 const readNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+const REQUEST_RETRY_DELAYS_MS = [600, 1600];
+
+const isAbortError = (error: unknown) =>
+  error instanceof DOMException && error.name === "AbortError";
+
+const isRetryableStatus = (status: number) =>
+  status === 408 || status === 429 || (status >= 500 && status <= 599);
+
+const isPageHidden = () =>
+  typeof document !== "undefined" && document.visibilityState === "hidden";
+
+const sleepWithAbort = (delayMs: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+    const abort = () => {
+      window.clearTimeout(timeoutId);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
 
 const collectTextFragments = (value: unknown, fragments: string[]) => {
   if (!value) {
@@ -422,7 +471,7 @@ const buildErrorMessage = async (
   )}。${contextText}${routeHint}`;
 };
 
-const fetchProtocolEndpoint = async ({
+const fetchProtocolEndpointOnce = async ({
   apiProfile,
   apiKey,
   body,
@@ -445,14 +494,73 @@ const fetchProtocolEndpoint = async ({
       },
       body,
     },
-  ).catch((error: unknown) => {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw error;
+  );
+
+const fetchProtocolEndpoint = async ({
+  apiProfile,
+  apiKey,
+  body,
+  signal,
+  stopRetryWhenHidden = false,
+}: {
+  apiProfile: ApiProfile;
+  apiKey: string;
+  body: string;
+  signal: AbortSignal;
+  stopRetryWhenHidden?: boolean;
+}) => {
+  let lastNetworkError: unknown;
+
+  for (
+    let attempt = 0;
+    attempt <= REQUEST_RETRY_DELAYS_MS.length;
+    attempt += 1
+  ) {
+    try {
+      const response = await fetchProtocolEndpointOnce({
+        apiProfile,
+        apiKey,
+        body,
+        signal,
+      });
+
+      if (
+        attempt < REQUEST_RETRY_DELAYS_MS.length &&
+        isRetryableStatus(response.status)
+      ) {
+        if (stopRetryWhenHidden && isPageHidden()) {
+          return response;
+        }
+        await sleepWithAbort(REQUEST_RETRY_DELAYS_MS[attempt] ?? 0, signal);
+        continue;
+      }
+
+      return response;
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+
+      lastNetworkError = error;
+      if (stopRetryWhenHidden && isPageHidden()) {
+        break;
+      }
+      if (attempt >= REQUEST_RETRY_DELAYS_MS.length) {
+        break;
+      }
+
+      await sleepWithAbort(REQUEST_RETRY_DELAYS_MS[attempt] ?? 0, signal);
     }
-    throw new Error(
-      "网络请求失败。若 API 地址正确且 key 有效，常见原因是中转站没有开放浏览器 CORS；静态页直连会被浏览器拦截。",
-    );
-  });
+  }
+
+  throw new Error(
+    `网络请求失败，已自动重试 ${REQUEST_RETRY_DELAYS_MS.length} 次。若 API 地址正确且 key 有效，常见原因是网络波动、后台 WebView 连接被系统中断，或中转站没有开放浏览器 CORS。${
+      lastNetworkError instanceof Error
+        ? ` 原始错误：${lastNetworkError.message}`
+        : ""
+    }`,
+  );
+};
 
 const parseSseBlock = (block: string): SseEvent | undefined => {
   const lines = block.split(/\r?\n/);
@@ -617,11 +725,26 @@ const readResponsesStream = async (
   };
 
   while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
+    let readResult: ReadableStreamReadResult<Uint8Array>;
+    try {
+      readResult = await reader.read();
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+
+      const partialText = text.trim();
+      if (partialText) {
+        throw new StreamInterruptedError(partialText, providerResponseId);
+      }
+
+      throw new StreamConnectionError();
+    }
+
+    if (readResult.done) {
       break;
     }
-    buffer += decoder.decode(value, { stream: true });
+    buffer += decoder.decode(readResult.value, { stream: true });
     processBuffer();
   }
   buffer += decoder.decode();
@@ -663,7 +786,7 @@ export const requestResponsesChat = async ({
     throw new Error(`请先在设置页为「${apiProfile.name}」填写 API key。`);
   }
 
-  const requestBody =
+  const buildBody = (requestStream: boolean) =>
     apiProfile.protocol === "openai-chat-completions"
       ? buildChatCompletionsRequestBody({
           assistant,
@@ -671,7 +794,7 @@ export const requestResponsesChat = async ({
           model,
           messages,
           blobs,
-          stream,
+          stream: requestStream,
           webSearchEnabled,
         })
       : buildResponsesRequestBody({
@@ -680,16 +803,60 @@ export const requestResponsesChat = async ({
           model,
           messages,
           blobs,
-          stream,
+          stream: requestStream,
           webSearchEnabled,
         });
+  const parseNonStreamingResponse = async (response: Response) => {
+    const payload = (await response.json()) as unknown;
+    return {
+      text: extractResponseText(payload),
+      providerResponseId: isRecord(payload)
+        ? readString(payload.id)
+        : undefined,
+      usage: extractUsage(payload),
+    };
+  };
+  const fetchRequest = async (requestStream: boolean) =>
+    fetchProtocolEndpoint({
+      apiProfile,
+      apiKey,
+      signal,
+      body: buildBody(requestStream),
+      stopRetryWhenHidden: stream && requestStream,
+    });
+  const fetchNonStreamingFallback = async () => {
+    const fallbackResponse = await fetchRequest(false);
+    if (!fallbackResponse.ok) {
+      throw new Error(
+        await buildErrorMessage(fallbackResponse, {
+          apiProfile,
+          model,
+          webSearchEnabled,
+        }),
+      );
+    }
+    return parseNonStreamingResponse(fallbackResponse);
+  };
 
-  const response = await fetchProtocolEndpoint({
-    apiProfile,
-    apiKey,
-    signal,
-    body: requestBody,
-  });
+  const requestStream = stream && !isPageHidden();
+  let response: Response;
+  try {
+    response = await fetchRequest(requestStream);
+  } catch (error) {
+    if (stream && !isAbortError(error) && isPageHidden()) {
+      return fetchNonStreamingFallback();
+    }
+    throw error;
+  }
+
+  if (
+    !response.ok &&
+    stream &&
+    isPageHidden() &&
+    isRetryableStatus(response.status)
+  ) {
+    return fetchNonStreamingFallback();
+  }
 
   if (!response.ok) {
     throw new Error(
@@ -701,26 +868,28 @@ export const requestResponsesChat = async ({
     );
   }
 
-  if (stream) {
+  if (requestStream) {
     const contentType = response.headers.get("content-type")?.toLowerCase();
     if (contentType?.includes("application/json")) {
-      const payload = (await response.json()) as unknown;
-      return {
-        text: extractResponseText(payload),
-        providerResponseId: isRecord(payload)
-          ? readString(payload.id)
-          : undefined,
-        usage: extractUsage(payload),
-      };
+      return parseNonStreamingResponse(response);
     }
 
-    return readResponsesStream(response, onTextDelta);
+    try {
+      return await readResponsesStream(response, onTextDelta);
+    } catch (error) {
+      if (error instanceof StreamConnectionError && !signal.aborted) {
+        return fetchNonStreamingFallback();
+      }
+      if (error instanceof StreamInterruptedError) {
+        return {
+          text: `${error.partialText}\n\n[网络连接中断，后续内容未收到。可点击重试重新生成。]`,
+          providerResponseId: error.providerResponseId,
+          interrupted: true,
+        };
+      }
+      throw error;
+    }
   }
 
-  const payload = (await response.json()) as unknown;
-  return {
-    text: extractResponseText(payload),
-    providerResponseId: isRecord(payload) ? readString(payload.id) : undefined,
-    usage: extractUsage(payload),
-  };
+  return parseNonStreamingResponse(response);
 };
