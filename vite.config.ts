@@ -5,6 +5,11 @@ import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
   base: "/MobileChat/",
+  server: {
+    watch: {
+      ignored: ["**/.tmp/desktop-profile/**"],
+    },
+  },
   plugins: [
     react(),
     VitePWA({
