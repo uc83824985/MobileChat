@@ -25,15 +25,20 @@ model-probe-rules/mainstream.json
 
 ```json
 {
-  "template": "gpt-{version}{arg1}",
-  "dimensions": {
-    "version": { "type": "minorTenths", "majors": ["5"], "from": 4, "to": 6 },
-    "arg1": ["", "mini"]
-  }
+  "id": "gpt",
+  "rules": [
+    {
+      "template": "{modelName}-{version}{arg1}",
+      "dimensions": {
+        "version": { "type": "minorTenths", "majors": ["5"], "from": 4, "to": 6 },
+        "arg1": ["", "mini"]
+      }
+    }
+  ]
 }
 ```
 
-上面会展开为：
+`{modelName}` 会引用当前探测分组的 `id`。例如分组 `id` 是 `gpt` 时，上面会展开为：
 
 ```text
 gpt-5.4
@@ -42,6 +47,21 @@ gpt-5.5
 gpt-5.5-mini
 gpt-5.6
 gpt-5.6-mini
+```
+
+设置页里这个 `id` 显示为“模型名”。它不是某个完整模型 ID，而是候选模型 ID 的主名，会与版本区间、后缀段拼接。
+
+兼容旧规则时，`gpt-{version}{arg1}` 仍会被归一化为 `{modelName}-{version}{arg1}`；新规则应优先使用 `{modelName}`，避免模型名和模板前缀脱节。
+
+维度示例：
+
+```json
+{
+  "dimensions": {
+    "version": { "type": "minorTenths", "majors": ["5"], "from": 4, "to": 6 },
+    "arg1": ["", "mini"]
+  }
+}
 ```
 
 `from` / `to` 限制小版本区间，合法范围固定为 0~9。小版本为 0 时只输出大版本本身，例如 `grok-4`、`gemini-3`，不会输出 `grok-4.0`、`gemini-3.0`。留空时默认是 0~9，但不建议大范围默认全量探测。
@@ -73,8 +93,7 @@ npm run models:probe -- --base-url https://api.mnapi.com/v1 --route-mode as-is -
 
 ## 当前探测配置
 
-- `gpt`：GPT 5.x、GPT 5.x mini/pro、Sol/Terra/Luna。
-- `gpt-codex`：GPT 5.x Codex high/medium/low。
+- `gpt`：GPT 5.x、GPT 5.x mini/pro、Sol/Terra/Luna，以及 Codex high/medium/low。
 - `anthropic`：Claude 当前主流固定规则。
 - `gemini`：Gemini 3.x 的 pro / flash / flash-lite，后接 preview 和 thinking 主流后缀段。
 - `grok`：Grok 4~4.3 与 fast / reasoning / fast-reasoning / thinking 后缀组合；不默认探测 `:origin` 等特殊别名。
@@ -88,7 +107,7 @@ npm run models:probe -- --base-url https://api.mnapi.com/v1 --route-mode as-is -
 设置页内置“模型探测”工作台：
 
 1. 用户维护探测配置，而不是维护预生成候选模型 txt。
-2. 规则只负责生成可能有效的模型 ID，不绑定助手、模型配置或 API Key。
+2. “模型名”直接参与候选模型 ID 生成；规则只负责追加版本区间和后缀段，不绑定助手、模型配置或 API Key。
 3. 每条规则可同时启用；规则内部通过表单维护版本区间和后缀段列表，不直接暴露原始 JSON、模板或规则说明。
 4. 探测配置本身没有启用状态；当前选择哪个探测配置，就探测哪个配置展开出的候选。
 5. 实际探测直接复用“连接与模型”区域当前选中的连接，使用该连接的 Base URL、API Key 和协议发起最小文本请求。

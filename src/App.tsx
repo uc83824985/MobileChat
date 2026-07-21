@@ -94,6 +94,7 @@ import {
   type ModelProbeResult,
   normalizeModelProbeSettings,
   runModelProbePool,
+  syncModelProbeTemplateModelName,
 } from "./modelProbe";
 import {
   createArchiveDownloadName,
@@ -1810,7 +1811,7 @@ function App() {
   const [modelProbeResults, setModelProbeResults] = useState<
     ModelProbeResult[]
   >([]);
-  const [modelProbeGroupIdDraft, setModelProbeGroupIdDraft] = useState(
+  const [modelProbeModelNameDraft, setModelProbeModelNameDraft] = useState(
     bootSnapshot.settings.modelProbeSettings.editingGroupId,
   );
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -2797,7 +2798,7 @@ function App() {
   }, [activeConversation?.id]);
 
   useEffect(() => {
-    setModelProbeGroupIdDraft(editingModelProbeGroup?.id ?? "");
+    setModelProbeModelNameDraft(editingModelProbeGroup?.id ?? "");
   }, [editingModelProbeGroup?.id]);
 
   useEffect(() => {
@@ -4410,22 +4411,22 @@ function App() {
     }));
   };
 
-  const commitModelProbeGroupIdDraft = () => {
+  const commitModelProbeModelNameDraft = () => {
     if (!editingModelProbeGroup) {
       return;
     }
 
-    const nextId = modelProbeGroupIdDraft.trim();
+    const nextId = modelProbeModelNameDraft.trim();
     const currentId = editingModelProbeGroup.id;
 
     if (nextId === currentId) {
-      setModelProbeGroupIdDraft(currentId);
+      setModelProbeModelNameDraft(currentId);
       return;
     }
 
     if (!nextId) {
-      setModelProbeGroupIdDraft(currentId);
-      setModelProbeStatus("模型 ID 不能为空，已恢复原值。");
+      setModelProbeModelNameDraft(currentId);
+      setModelProbeStatus("模型名不能为空，已恢复原值。");
       return;
     }
 
@@ -4434,8 +4435,8 @@ function App() {
         (group) => group.id === nextId && group.id !== currentId,
       )
     ) {
-      setModelProbeGroupIdDraft(currentId);
-      setModelProbeStatus(`模型 ID「${nextId}」已存在，已恢复原值。`);
+      setModelProbeModelNameDraft(currentId);
+      setModelProbeStatus(`模型名「${nextId}」已存在，已恢复原值。`);
       return;
     }
 
@@ -4443,7 +4444,19 @@ function App() {
       ...current,
       editingGroupId: nextId,
       groups: current.groups.map((group) =>
-        group.id === currentId ? { ...group, id: nextId } : group,
+        group.id === currentId
+          ? {
+              ...group,
+              id: nextId,
+              rules: group.rules.map((rule) => ({
+                ...rule,
+                template: syncModelProbeTemplateModelName(
+                  rule.template,
+                  currentId,
+                ),
+              })),
+            }
+          : group,
       ),
     }));
     setModelProbeStatus("");
@@ -7950,20 +7963,21 @@ function App() {
                     </header>
                     <div className="reflected-fields">
                       <label className="detail-field">
-                        <span>模型 ID</span>
+                        <span>模型名</span>
                         <input
-                          aria-label="探测模型 ID"
-                          value={modelProbeGroupIdDraft}
+                          aria-label="探测模型名"
+                          placeholder="例如 grok、gemini、gpt"
+                          value={modelProbeModelNameDraft}
                           onChange={(event) =>
-                            setModelProbeGroupIdDraft(event.target.value)
+                            setModelProbeModelNameDraft(event.target.value)
                           }
-                          onBlur={commitModelProbeGroupIdDraft}
+                          onBlur={commitModelProbeModelNameDraft}
                           onKeyDown={(event) => {
                             if (event.key === "Enter") {
                               event.currentTarget.blur();
                             }
                             if (event.key === "Escape") {
-                              setModelProbeGroupIdDraft(
+                              setModelProbeModelNameDraft(
                                 editingModelProbeGroup.id,
                               );
                               event.currentTarget.blur();

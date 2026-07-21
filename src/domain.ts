@@ -309,11 +309,12 @@ export const defaultModelProbeSettings: ModelProbeSettings = {
     {
       id: "gpt",
       name: "GPT 5.x",
-      description: "GPT 5 大版本探测；包含裸模型、mini/pro、Sol/Terra/Luna。",
+      description:
+        "GPT 5 大版本探测；包含裸模型、mini/pro、Sol/Terra/Luna 与 Codex 强度后缀。",
       rules: [
         {
           id: "gpt-family",
-          template: "gpt-{version}{arg1}",
+          template: "{modelName}-{version}{arg1}",
           dimensions: {
             version: { type: "minorTenths", majors: ["5"], from: 4, to: 6 },
             arg1: ["", "pro", "mini", "sol", "terra", "luna"],
@@ -321,17 +322,9 @@ export const defaultModelProbeSettings: ModelProbeSettings = {
           enabled: true,
           description: "",
         },
-      ],
-    },
-    {
-      id: "gpt-codex",
-      name: "GPT Codex 5.x",
-      description:
-        "GPT 5 Codex 大版本探测；按 codex 后缀和 high/medium/low 强度展开。",
-      rules: [
         {
           id: "gpt-codex",
-          template: "gpt-{version}{arg1}{arg2}",
+          template: "{modelName}-{version}{arg1}{arg2}",
           dimensions: {
             version: { type: "minorTenths", majors: ["5"], from: 4, to: 6 },
             arg1: ["codex"],
@@ -350,7 +343,7 @@ export const defaultModelProbeSettings: ModelProbeSettings = {
       rules: [
         {
           id: "grok-4x-mainstream",
-          template: "grok-{version}{arg1}",
+          template: "{modelName}-{version}{arg1}",
           dimensions: {
             version: { type: "minorTenths", majors: ["4"], from: 0, to: 3 },
             arg1: ["", "fast", "reasoning", "fast-reasoning", "thinking"],
@@ -368,7 +361,7 @@ export const defaultModelProbeSettings: ModelProbeSettings = {
       rules: [
         {
           id: "gemini-mainstream",
-          template: "gemini-{version}{arg1}{arg2}{arg3}",
+          template: "{modelName}-{version}{arg1}{arg2}{arg3}",
           dimensions: {
             version: { type: "minorTenths", majors: ["3"], from: 0, to: 5 },
             arg1: ["pro", "flash", "flash-lite"],
@@ -387,7 +380,7 @@ export const defaultModelProbeSettings: ModelProbeSettings = {
       rules: [
         {
           id: "qwen-3x",
-          template: "qwen{version}{arg1}",
+          template: "{modelName}{version}{arg1}",
           dimensions: {
             version: { type: "minorTenths", majors: ["3"], from: 6, to: 7 },
             arg1: ["max", "plus", "flash"],
@@ -404,7 +397,7 @@ export const defaultModelProbeSettings: ModelProbeSettings = {
       rules: [
         {
           id: "glm-mainstream",
-          template: "glm-{version}{arg1}",
+          template: "{modelName}-{version}{arg1}",
           dimensions: {
             version: {
               type: "minorTenths",

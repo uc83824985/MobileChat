@@ -14,6 +14,7 @@
     "minorTenths value 0 emits the major version without .0, for example grok-4 or gemini-3.",
     "minorTenths supports optional \"separator\":\"-\" for aliases such as claude-opus-4-8.",
     "Use arg1/arg2/... as ordered suffix segments; empty string means no suffix at that segment, non-empty values are automatically prefixed with '-' after trimming legacy leading dashes.",
+    "Use {modelName} for the selected group id / model name instead of repeating the model prefix in every template.",
     "Default rules avoid fixed model aliases; use dimensions even when a range only contains one version."
   ],
   "groups": [
@@ -22,7 +23,7 @@
       "provider": "OpenAI / OpenAI-compatible gateways",
       "rules": [
         {
-          "template": "gpt-{version}{arg1}",
+          "template": "{modelName}-{version}{arg1}",
           "dimensions": {
             "version": {
               "type": "minorTenths",
@@ -32,15 +33,9 @@
             },
             "arg1": ["", "pro", "mini", "sol", "terra", "luna"]
           }
-        }
-      ]
-    },
-    {
-      "id": "gpt-codex",
-      "provider": "OpenAI / OpenAI-compatible gateways",
-      "rules": [
+        },
         {
-          "template": "gpt-{version}{arg1}{arg2}",
+          "template": "{modelName}-{version}{arg1}{arg2}",
           "dimensions": {
             "version": {
               "type": "minorTenths",
@@ -101,7 +96,7 @@
       "provider": "Google Gemini / Gemini-compatible gateways",
       "rules": [
         {
-          "template": "gemini-{version}{arg1}{arg2}{arg3}",
+          "template": "{modelName}-{version}{arg1}{arg2}{arg3}",
           "dimensions": {
             "version": {
               "type": "minorTenths",
@@ -121,7 +116,7 @@
       "provider": "xAI Grok / Grok-compatible gateways",
       "rules": [
         {
-          "template": "grok-{version}{arg1}",
+          "template": "{modelName}-{version}{arg1}",
           "dimensions": {
             "version": {
               "type": "minorTenths",
@@ -139,7 +134,7 @@
       "provider": "DeepSeek / DeepSeek-compatible gateways",
       "rules": [
         {
-          "template": "deepseek-v{version}{arg1}",
+          "template": "{modelName}-v{version}{arg1}",
           "dimensions": {
             "version": {
               "type": "minorTenths",
@@ -157,7 +152,7 @@
       "provider": "Qwen / Alibaba Cloud Model Studio-compatible gateways",
       "rules": [
         {
-          "template": "qwen{version}{arg1}",
+          "template": "{modelName}{version}{arg1}",
           "dimensions": {
             "version": {
               "type": "minorTenths",
@@ -169,7 +164,7 @@
           }
         },
         {
-          "template": "qwen{version}{arg1}",
+          "template": "{modelName}{version}{arg1}",
           "dimensions": {
             "version": {
               "type": "minorTenths",
@@ -187,7 +182,7 @@
       "provider": "Moonshot Kimi",
       "rules": [
         {
-          "template": "kimi-k{version}",
+          "template": "{modelName}-k{version}",
           "dimensions": {
             "version": {
               "type": "minorTenths",
@@ -198,7 +193,7 @@
           }
         },
         {
-          "template": "kimi-k{version}{arg1}",
+          "template": "{modelName}-k{version}{arg1}",
           "dimensions": {
             "version": {
               "type": "minorTenths",
@@ -216,7 +211,7 @@
       "provider": "Z.ai / Zhipu GLM-compatible gateways",
       "rules": [
         {
-          "template": "glm-{version}{arg1}",
+          "template": "{modelName}-{version}{arg1}",
           "dimensions": {
             "version": {
               "type": "minorTenths",

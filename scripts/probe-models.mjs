@@ -157,6 +157,9 @@ const normalizeBaseUrl = (baseUrl) => {
 
 const unique = (values) => [...new Set(values.filter(Boolean))];
 
+const MODEL_NAME_TEMPLATE_KEY = "modelName";
+const MODEL_NAME_TEMPLATE_TOKEN = "{modelName}";
+
 const createRouteBases = (baseUrl, routeMode) => {
   const normalized = normalizeBaseUrl(baseUrl);
   const withoutTrailingV1 = normalized.replace(/\/v1$/i, "");
@@ -319,8 +322,33 @@ const formatTemplateValue = (key, value) => {
   return normalized ? `-${normalized}` : "";
 };
 
-const expandTemplate = (template, dimensions = {}) =>
-  cartesian(normalizeDimensions(dimensions)).map((values) =>
+const syncTemplateModelName = (template, modelName) => {
+  const normalizedTemplate = String(template ?? "").trim();
+  if (!normalizedTemplate) {
+    return `${MODEL_NAME_TEMPLATE_TOKEN}-{version}{arg1}`;
+  }
+  if (normalizedTemplate.includes(MODEL_NAME_TEMPLATE_TOKEN)) {
+    return normalizedTemplate;
+  }
+
+  const normalizedModelName = String(modelName ?? "").trim();
+  if (!normalizedModelName) {
+    return normalizedTemplate;
+  }
+
+  return normalizedTemplate.replace(
+    new RegExp(
+      `^${normalizedModelName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[-{])`,
+    ),
+    MODEL_NAME_TEMPLATE_TOKEN,
+  );
+};
+
+const expandTemplate = (template, dimensions = {}, modelName = "") =>
+  cartesian([
+    [MODEL_NAME_TEMPLATE_KEY, [String(modelName ?? "").trim()]],
+    ...normalizeDimensions(dimensions),
+  ]).map((values) =>
     Object.entries(values).reduce(
       (text, [key, value]) =>
         text.replaceAll(`{${key}}`, formatTemplateValue(key, value)),
@@ -332,7 +360,11 @@ const expandRuleGroup = (group) => {
   const explicit = Array.isArray(group.models) ? group.models : [];
   const rules = Array.isArray(group.rules) ? group.rules : [];
   const generated = rules.flatMap((rule) =>
-    expandTemplate(rule.template, rule.dimensions),
+    expandTemplate(
+      syncTemplateModelName(rule.template, group.id),
+      rule.dimensions,
+      group.id,
+    ),
   );
   return unique(
     [...explicit, ...generated].map((model) => String(model ?? "").trim()),

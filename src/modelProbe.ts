@@ -25,7 +25,37 @@ export type ModelProbeResult = {
   createdAt: string;
 };
 
+const MODEL_NAME_TEMPLATE_KEY = "modelName";
+const MODEL_NAME_TEMPLATE_TOKEN = "{modelName}";
+
 const unique = (values: string[]) => [...new Set(values.filter(Boolean))];
+
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export const syncModelProbeTemplateModelName = (
+  template: string,
+  modelName: string,
+) => {
+  const normalizedTemplate = String(template ?? "").trim();
+  if (!normalizedTemplate) {
+    return `${MODEL_NAME_TEMPLATE_TOKEN}-{version}{arg1}`;
+  }
+
+  if (normalizedTemplate.includes(MODEL_NAME_TEMPLATE_TOKEN)) {
+    return normalizedTemplate;
+  }
+
+  const normalizedModelName = String(modelName ?? "").trim();
+  if (!normalizedModelName) {
+    return normalizedTemplate;
+  }
+
+  return normalizedTemplate.replace(
+    new RegExp(`^${escapeRegExp(normalizedModelName)}(?=$|[-{])`),
+    MODEL_NAME_TEMPLATE_TOKEN,
+  );
+};
 
 const toInteger = (value: unknown, fallback: number) => {
   const number = Number(value ?? fallback);
@@ -96,13 +126,15 @@ const formatTemplateValue = (key: string, value: string) => {
 const expandTemplate = (
   template: string,
   dimensions: Record<string, ModelProbeDimensionValue>,
+  modelName: string,
 ) =>
-  cartesian(
-    Object.entries(dimensions).map(([key, value]) => [
-      key,
-      expandDimensionValues(value),
-    ]),
-  ).map((values) =>
+  cartesian([
+    [MODEL_NAME_TEMPLATE_KEY, [modelName.trim()]] as [string, string[]],
+    ...Object.entries(dimensions).map(
+      ([key, value]) =>
+        [key, expandDimensionValues(value)] as [string, string[]],
+    ),
+  ]).map((values) =>
     Object.entries(values).reduce(
       (text, [key, value]) =>
         text.replaceAll(`{${key}}`, formatTemplateValue(key, value)),
@@ -115,7 +147,13 @@ export const expandModelProbeGroup = (
 ): ModelProbeCandidate[] => {
   const generated = group.rules
     .filter((rule) => rule.enabled)
-    .flatMap((rule) => expandTemplate(rule.template, rule.dimensions));
+    .flatMap((rule) =>
+      expandTemplate(
+        syncModelProbeTemplateModelName(rule.template, group.id),
+        rule.dimensions,
+        group.id,
+      ),
+    );
 
   return unique(generated.map((modelId) => modelId.trim())).map((modelId) => ({
     groupId: group.id,
@@ -132,13 +170,13 @@ export const expandModelProbeSettings = (
 };
 
 export const createEmptyModelProbeGroup = (index: number): ModelProbeGroup => ({
-  id: createId("probe-group"),
+  id: `model-${index}`,
   name: `探测 ${index}`,
   description: "",
   rules: [
     {
       id: createId("probe-rule"),
-      template: "model-{version}{arg1}",
+      template: "{modelName}-{version}{arg1}",
       dimensions: {
         version: { type: "minorTenths", majors: ["1"] },
         arg1: [""],
@@ -161,7 +199,10 @@ export const normalizeModelProbeSettings = (
           rules: Array.isArray(group.rules)
             ? group.rules.map((rule, ruleIndex) => ({
                 id: String(rule.id || `probe-rule-${ruleIndex + 1}`),
-                template: String(rule.template || ""),
+                template: syncModelProbeTemplateModelName(
+                  String(rule.template || ""),
+                  String(group.id || `probe-group-${index + 1}`),
+                ),
                 dimensions:
                   rule.dimensions && typeof rule.dimensions === "object"
                     ? rule.dimensions
