@@ -354,7 +354,7 @@ describe("App", () => {
     render(<App />);
 
     fireEvent.click(screen.getByText("设置"));
-    fireEvent.click(screen.getByText("导出 .mobilechat"));
+    fireEvent.click(screen.getByText("导出数据库"));
 
     await waitFor(() => expect(saveArchive).toHaveBeenCalledTimes(1));
     const [fileName, base64Data] = saveArchive.mock.calls[0] ?? ["", ""];
@@ -917,7 +917,7 @@ describe("App", () => {
 
     fireEvent.click(screen.getByText("设置"));
 
-    fireEvent.click(screen.getByText("复制起始说明"));
+    fireEvent.click(screen.getByText("复制起始"));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const startPrompt = String(writeText.mock.calls[0]?.[0]);
     expect(startPrompt).toContain("MobileChat 上下文配置讨论起始说明");
@@ -927,15 +927,15 @@ describe("App", () => {
     expect(startPrompt).toContain("每轮最多追问 3 个关键问题");
     expect(startPrompt).toContain("如果必须给备选，最多 3 个");
     expect(startPrompt).toContain("严格记忆");
-    expect(screen.getByText("已复制起始说明。")).toBeInTheDocument();
+    expect(screen.getByText("已复制起始。")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText("复制导出说明"));
+    fireEvent.click(screen.getByText("复制导出"));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
     const exportPrompt = String(writeText.mock.calls[1]?.[0]);
     expect(exportPrompt).toContain("MobileChat 上下文配置导出说明");
     expect(exportPrompt).toContain("JSON 只允许");
     expect(exportPrompt).toContain('"strict_memory"');
-    expect(screen.getByText("已复制导出说明。")).toBeInTheDocument();
+    expect(screen.getByText("已复制导出。")).toBeInTheDocument();
 
     const parseArea = screen.getByLabelText("上下文配置解析区");
     fireEvent.change(parseArea, {
@@ -958,7 +958,7 @@ describe("App", () => {
 \`\`\``,
       },
     });
-    fireEvent.click(screen.getByText("解析并新建配置"));
+    fireEvent.click(screen.getByText("解析并新建"));
 
     expect(
       screen.getByText("已解析并新建上下文配置「跑团上下文」。"),
@@ -988,7 +988,7 @@ describe("App", () => {
       target: { value: "这不是 JSON 配置" },
     });
 
-    fireEvent.click(screen.getByText("解析并新建配置"));
+    fireEvent.click(screen.getByText("解析并新建"));
 
     expect(
       screen.getByText("未找到可解析的 JSON 配置块。"),
@@ -1093,7 +1093,7 @@ describe("App", () => {
 
     fireEvent.click(screen.getByText("新增模型"));
     expect(screen.getByLabelText("模型名称")).toHaveValue("new-model-2");
-    expect(screen.getByLabelText("模型描述")).toHaveValue("");
+    expect(screen.queryByLabelText("模型描述")).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("上移 模型 new-model-2"));
     expect(screen.getByLabelText("上移 模型 new-model-2")).toBeDisabled();
     fireEvent.click(screen.getByLabelText("下移 模型 new-model-2"));
@@ -1113,13 +1113,13 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("助手名称"), {
       target: { value: "移动助手" },
     });
-    fireEvent.change(screen.getByLabelText("初始 Prompt"), {
+    fireEvent.change(screen.getByLabelText("系统提示词"), {
       target: { value: "移动端编辑后的 prompt" },
     });
 
     expectCustomSelectValue("选择助手", "移动助手");
     expectCustomSelectValue("选择助手", "移动助手");
-    expect(screen.getByLabelText("初始 Prompt")).toHaveValue(
+    expect(screen.getByLabelText("系统提示词")).toHaveValue(
       "移动端编辑后的 prompt",
     );
 

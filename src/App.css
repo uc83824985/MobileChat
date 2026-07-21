@@ -1855,6 +1855,15 @@ button:disabled {
   justify-content: space-between;
 }
 
+.context-workflow-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.context-workflow-actions button {
+  white-space: nowrap;
+}
+
 .context-profile-workflow-panel h3 {
   font-size: 17px;
 }
@@ -1875,7 +1884,9 @@ button:disabled {
 }
 
 .context-profile-workflow-output textarea {
-  min-height: 180px;
+  max-height: 96px;
+  min-height: 44px;
+  resize: vertical;
 }
 
 .summary-framework-note {
@@ -2675,8 +2686,21 @@ button:disabled {
 }
 
 .mobile-layout .context-profile-workflow-panel header {
-  align-items: stretch;
-  flex-direction: column;
+  align-items: center;
+  flex-direction: row;
+}
+
+.mobile-layout .context-workflow-actions {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-width: 0;
+}
+
+.mobile-layout .context-workflow-actions button {
+  font-size: 12px;
+  padding: 8px 6px;
 }
 
 .mobile-layout .summary-policy-setting {

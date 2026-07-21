@@ -573,15 +573,15 @@ export const assistantFields: AssistantField[] = [
   },
   {
     key: "prompt",
-    label: "初始 Prompt",
+    label: "系统提示词",
     control: "textarea",
-    helper: "仅作用于该助手；对话上下文仍由本地共享构建。",
+    helper: "定义该助手的回复方式和行为边界；上下文仍由本地机制构建。",
   },
   {
     key: "initialMessage",
-    label: "初始消息",
+    label: "新对话开场白",
     control: "textarea",
-    helper: "后续新建对话时可用于助手开场白。",
+    helper: "仅用于新建对话时展示，不作为长期记忆。",
   },
   {
     key: "enabled",

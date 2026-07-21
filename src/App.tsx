@@ -478,7 +478,7 @@ const createEmptyAssistant = (
 ): Assistant => ({
   id: createId("assistant"),
   name: `新助手 ${index}`,
-  description: "可在右侧细节面板编辑。",
+  description: "",
   kind: "chat",
   modelBindings: baseModel
     ? [createBinding(baseModel.apiProfile, baseModel.model, true)]
@@ -1105,8 +1105,8 @@ const buildContextProfileWorkflowPrompt = ({
     `- 名称：${assistant.name}`,
     `- 类型：${assistant.kind}`,
     `- 描述：${formatBlankable(assistant.description)}`,
-    `- Prompt：${formatBlankable(assistant.prompt)}`,
-    `- 初始消息：${formatBlankable(assistant.initialMessage)}`,
+    `- 系统提示词：${formatBlankable(assistant.prompt)}`,
+    `- 新对话开场白：${formatBlankable(assistant.initialMessage)}`,
   ].join("\n");
 
   if (mode === "start") {
@@ -3672,11 +3672,11 @@ function App() {
     link.download = fileName;
     link.click();
     URL.revokeObjectURL(url);
-    return "已生成 credential-free .mobilechat 导出文件";
+    return "已生成数据库导出文件";
   };
 
   const exportBackup = async () => {
-    setBackupMessage("正在导出 .mobilechat");
+    setBackupMessage("正在导出数据库");
     await saveCurrentSnapshot();
 
     try {
@@ -3693,7 +3693,7 @@ function App() {
       setBackupMessage(exportMessage);
     } catch (error) {
       setBackupMessage(
-        error instanceof Error ? error.message : "导出 .mobilechat 失败",
+        error instanceof Error ? error.message : "导出数据库失败",
       );
     }
   };
@@ -4919,7 +4919,7 @@ function App() {
     try {
       await copyTextToClipboard(prompt);
       setContextProfileWorkflowStatus(
-        mode === "start" ? "已复制起始说明。" : "已复制导出说明。",
+        mode === "start" ? "已复制起始。" : "已复制导出。",
       );
     } catch (error) {
       setContextProfileWorkflowStatus(
@@ -7524,16 +7524,16 @@ function App() {
                 <header>
                   <div>
                     <p className="eyebrow">Workflow</p>
-                    <h3>配置建议工作流</h3>
+                    <h3>配置工作流</h3>
                   </div>
-                  <div className="header-actions">
+                  <div className="header-actions context-workflow-actions">
                     <button
                       type="button"
                       onClick={() =>
                         void copyContextProfileWorkflowPrompt("start")
                       }
                     >
-                      复制起始说明
+                      复制起始
                     </button>
                     <button
                       type="button"
@@ -7541,7 +7541,7 @@ function App() {
                         void copyContextProfileWorkflowPrompt("export")
                       }
                     >
-                      复制导出说明
+                      复制导出
                     </button>
                     <button
                       type="button"
@@ -7550,22 +7550,16 @@ function App() {
                       }
                       onClick={createContextProfileFromWorkflowOutput}
                     >
-                      解析并新建配置
+                      解析并新建
                     </button>
                   </div>
                 </header>
-                <p className="summary-framework-note">
-                  分两步使用：先复制起始说明到任意 agent
-                  中自然语言讨论用途、规范、应用场景和助手职责；确认后再复制导出说明，让
-                  agent 输出可解析
-                  JSON。最后把结果粘贴到这里解析成新的上下文配置。解析只会新建配置，不会覆盖当前配置。
-                </p>
                 <label className="detail-field context-profile-workflow-output">
                   <span>配置解析区</span>
                   <textarea
                     aria-label="上下文配置解析区"
-                    rows={8}
-                    placeholder="粘贴包含配置 JSON 的 agent 输出；支持 Markdown json 代码块。"
+                    rows={1}
+                    placeholder="粘贴配置输出后解析"
                     value={contextProfileWorkflowDraft.standardOutput}
                     onChange={(event) =>
                       updateContextProfileWorkflowField(
@@ -7826,7 +7820,7 @@ function App() {
               <div className="backup-actions">
                 <button type="button" onClick={exportBackup}>
                   <Download size={16} />
-                  导出 .mobilechat
+                  导出数据库
                 </button>
                 <button
                   type="button"
@@ -7873,12 +7867,6 @@ function App() {
                   </button>
                 </div>
               </header>
-              <p className="summary-framework-note">
-                模型探测配置独立于助手与已创建模型；规则只生成可能有效的模型
-                ID。实际探测直接复用下方“连接与模型”当前连接、API Key
-                和协议。若本地仍显示旧规则，点击“还原默认”刷新为当前预设。
-              </p>
-
               <div className="profile-layout model-probe-layout">
                 <aside className="profile-directory">
                   <div className="assistant-config-select">
@@ -8712,22 +8700,6 @@ function App() {
                               }
                             />
                           </label>
-                          <label className="detail-field">
-                            <span>模型描述</span>
-                            <textarea
-                              aria-label="模型描述"
-                              rows={3}
-                              value={editingModel.description}
-                              onChange={(event) =>
-                                updateModelField(
-                                  editingApiProfile.id,
-                                  editingModel.id,
-                                  "description",
-                                  event.target.value,
-                                )
-                              }
-                            />
-                          </label>
                         </div>
                       </>
                     ) : null}
@@ -9127,7 +9099,6 @@ function App() {
                               <strong>
                                 {option.apiProfile.name} / {option.model.name}
                               </strong>
-                              <small>{option.model.description}</small>
                             </span>
                           </label>
                         );
