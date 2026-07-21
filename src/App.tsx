@@ -7336,15 +7336,17 @@ function App() {
               </div>
               <label className="settings-row quote-template-setting">
                 <span>引用格式</span>
-                <textarea
-                  aria-label="引用格式"
-                  placeholder={DEFAULT_MESSAGE_QUOTE_TEMPLATE}
-                  value={messageQuoteTemplate}
-                  onChange={(event) =>
-                    setMessageQuoteTemplate(event.target.value)
-                  }
-                />
-                <small>{"{content}"} 引用消息片段</small>
+                <div className="quote-template-control">
+                  <input
+                    aria-label="引用格式"
+                    placeholder={DEFAULT_MESSAGE_QUOTE_TEMPLATE}
+                    value={messageQuoteTemplate}
+                    onChange={(event) =>
+                      setMessageQuoteTemplate(event.target.value)
+                    }
+                  />
+                  <small>{"{content}"} 引用消息片段</small>
+                </div>
               </label>
               <div className="settings-row compact theme-select">
                 <span>布局模式</span>

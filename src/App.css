@@ -1315,26 +1315,36 @@ button:disabled {
 }
 
 .quote-template-setting {
-  align-items: stretch;
+  align-items: center;
   display: grid;
+  gap: 8px;
   grid-template-columns: minmax(0, 1fr);
 }
 
-.quote-template-setting textarea {
+.quote-template-control {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+}
+
+.quote-template-control input {
   background: var(--field);
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text-strong);
   font: inherit;
-  min-height: 72px;
+  min-height: 38px;
+  min-width: 0;
   padding: 8px 9px;
-  resize: vertical;
 }
 
-.quote-template-setting small {
+.quote-template-control small {
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.35;
+  white-space: nowrap;
 }
 
 .theme-select {
@@ -2681,8 +2691,8 @@ button:disabled {
   grid-template-columns: 1fr;
 }
 
-.mobile-layout .quote-template-setting small {
-  grid-column: auto;
+.mobile-layout .quote-template-control {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .mobile-layout .context-profile-workflow-panel header {
