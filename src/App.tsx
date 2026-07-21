@@ -1673,6 +1673,19 @@ const getNextProbeArgKey = (rule: ModelProbeRule) => {
   return `arg${index}`;
 };
 
+const SETTINGS_NAV_SECTIONS = [
+  { id: "overview", label: "概览" },
+  { id: "summary-framework", label: "总结框架" },
+  { id: "context-profiles", label: "上下文配置" },
+  { id: "storage", label: "备份" },
+  { id: "model-probe", label: "模型探测" },
+  { id: "api-profiles", label: "连接模型" },
+  { id: "assistants", label: "助手" },
+] as const;
+
+type SettingsNavSectionId = (typeof SETTINGS_NAV_SECTIONS)[number]["id"];
+const SETTINGS_NAV_SCROLL_IDLE_MS = 120;
+
 function App() {
   const bootSnapshot = useMemo(() => createBootSnapshot(), []);
   const [apiProfiles, setApiProfiles] = useState<ApiProfile[]>(
@@ -1750,6 +1763,8 @@ function App() {
     useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activeSettingsSectionId, setActiveSettingsSectionId] =
+    useState<SettingsNavSectionId>("overview");
   const [dataInspectorOpen, setDataInspectorOpen] = useState(false);
   const [debugEnabled, setDebugEnabled] = useState(
     bootSnapshot.settings.debugEnabled,
@@ -1826,6 +1841,14 @@ function App() {
   const contextSummaryJobRunningRef = useRef(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const settingsScrollBodyRef = useRef<HTMLDivElement | null>(null);
+  const settingsScrollTopRef = useRef(0);
+  const settingsScrollRestoreFrameRef = useRef<number | null>(null);
+  const settingsNavTransportIdleTimerRef = useRef<number | null>(null);
+  const settingsNavTransportTargetRef = useRef<SettingsNavSectionId | null>(
+    null,
+  );
+  const settingsNavTransportTopRef = useRef<number | null>(null);
   const messageThreadRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const shouldFollowMessageBottomRef = useRef(true);
@@ -1844,6 +1867,72 @@ function App() {
     bodyScrollTop: number;
   } | null>(null);
 
+  const updateActiveSettingsSection = useCallback(() => {
+    const body = settingsScrollBodyRef.current;
+    if (!body) {
+      return;
+    }
+
+    const currentTop = body.scrollTop + 24;
+    const activeSection = SETTINGS_NAV_SECTIONS.reduce<SettingsNavSectionId>(
+      (current, section) => {
+        const element = body.querySelector<HTMLElement>(
+          `[data-settings-section="${section.id}"]`,
+        );
+        if (!element) {
+          return current;
+        }
+        return element.offsetTop <= currentTop ? section.id : current;
+      },
+      SETTINGS_NAV_SECTIONS[0].id,
+    );
+
+    setActiveSettingsSectionId((current) =>
+      current === activeSection ? current : activeSection,
+    );
+  }, []);
+
+  const rememberSettingsScrollPosition = useCallback(() => {
+    const body = settingsScrollBodyRef.current;
+    if (!body) {
+      return;
+    }
+    settingsScrollTopRef.current = body.scrollTop;
+  }, []);
+
+  const releaseSettingsNavTransport = useCallback(() => {
+    if (settingsNavTransportIdleTimerRef.current !== null) {
+      window.clearTimeout(settingsNavTransportIdleTimerRef.current);
+      settingsNavTransportIdleTimerRef.current = null;
+    }
+    settingsNavTransportTargetRef.current = null;
+    settingsNavTransportTopRef.current = null;
+    updateActiveSettingsSection();
+  }, [updateActiveSettingsSection]);
+
+  const scheduleSettingsNavTransportRelease = useCallback(() => {
+    if (settingsNavTransportIdleTimerRef.current !== null) {
+      window.clearTimeout(settingsNavTransportIdleTimerRef.current);
+    }
+    settingsNavTransportIdleTimerRef.current = window.setTimeout(
+      releaseSettingsNavTransport,
+      SETTINGS_NAV_SCROLL_IDLE_MS,
+    );
+  }, [releaseSettingsNavTransport]);
+
+  const handleSettingsPanelScroll = useCallback(() => {
+    rememberSettingsScrollPosition();
+    if (settingsNavTransportTargetRef.current) {
+      scheduleSettingsNavTransportRelease();
+      return;
+    }
+    updateActiveSettingsSection();
+  }, [
+    rememberSettingsScrollPosition,
+    scheduleSettingsNavTransportRelease,
+    updateActiveSettingsSection,
+  ]);
+
   const resizeComposerInput = useCallback(() => {
     const input = composerInputRef.current;
     if (!input) {
@@ -1859,6 +1948,72 @@ function App() {
   useEffect(() => {
     resizeComposerInput();
   }, [draft, draftImages.length, resizeComposerInput, viewportProfile]);
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      return;
+    }
+
+    if (settingsScrollRestoreFrameRef.current !== null) {
+      window.cancelAnimationFrame(settingsScrollRestoreFrameRef.current);
+    }
+
+    const restoreSettingsScrollPosition = () => {
+      const body = settingsScrollBodyRef.current;
+      if (!body) {
+        return;
+      }
+
+      const maxScrollTop = Math.max(0, body.scrollHeight - body.clientHeight);
+      body.scrollTop = Math.min(settingsScrollTopRef.current, maxScrollTop);
+      updateActiveSettingsSection();
+    };
+
+    settingsScrollRestoreFrameRef.current = window.requestAnimationFrame(() => {
+      restoreSettingsScrollPosition();
+      settingsScrollRestoreFrameRef.current = window.requestAnimationFrame(
+        () => {
+          settingsScrollRestoreFrameRef.current = null;
+          restoreSettingsScrollPosition();
+        },
+      );
+    });
+
+    return () => {
+      if (settingsScrollRestoreFrameRef.current !== null) {
+        window.cancelAnimationFrame(settingsScrollRestoreFrameRef.current);
+        settingsScrollRestoreFrameRef.current = null;
+      }
+      if (settingsNavTransportIdleTimerRef.current !== null) {
+        window.clearTimeout(settingsNavTransportIdleTimerRef.current);
+        settingsNavTransportIdleTimerRef.current = null;
+      }
+      settingsNavTransportTargetRef.current = null;
+      settingsNavTransportTopRef.current = null;
+    };
+  }, [settingsOpen, updateActiveSettingsSection]);
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      return;
+    }
+
+    const body = settingsScrollBodyRef.current;
+    if (!body) {
+      return;
+    }
+
+    const handleScrollEnd = () => {
+      if (settingsNavTransportTargetRef.current) {
+        releaseSettingsNavTransport();
+      }
+    };
+
+    body.addEventListener("scrollend", handleScrollEnd);
+    return () => {
+      body.removeEventListener("scrollend", handleScrollEnd);
+    };
+  }, [releaseSettingsNavTransport, settingsOpen]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -2522,10 +2677,11 @@ function App() {
         setDrawerOpen(false);
       }
       if (swipe.mode === "close-settings" && deltaX >= PANEL_SWIPE_TRIGGER_PX) {
+        rememberSettingsScrollPosition();
         setSettingsOpen(false);
       }
     },
-    [activeAssistant.id],
+    [activeAssistant.id, rememberSettingsScrollPosition],
   );
   const cancelDrawerSwipe = useCallback(() => {
     drawerSwipeRef.current = null;
@@ -3613,7 +3769,34 @@ function App() {
     setSettingsOpen(true);
   };
 
+  const scrollSettingsToSection = (sectionId: SettingsNavSectionId) => {
+    const body = settingsScrollBodyRef.current;
+    const target = body?.querySelector<HTMLElement>(
+      `[data-settings-section="${sectionId}"]`,
+    );
+    if (!body || !target) {
+      return;
+    }
+
+    const nextTop = Math.max(0, target.offsetTop);
+    settingsScrollTopRef.current = nextTop;
+    if (Math.abs(body.scrollTop - nextTop) <= 2) {
+      settingsNavTransportTargetRef.current = null;
+      settingsNavTransportTopRef.current = null;
+      setActiveSettingsSectionId(sectionId);
+      updateActiveSettingsSection();
+      return;
+    }
+
+    settingsNavTransportTargetRef.current = sectionId;
+    settingsNavTransportTopRef.current = nextTop;
+    setActiveSettingsSectionId(sectionId);
+    body.scrollTo({ top: nextTop, behavior: "smooth" });
+    scheduleSettingsNavTransportRelease();
+  };
+
   const closeSettings = () => {
+    rememberSettingsScrollPosition();
     setSettingsOpen(false);
     void saveCurrentSnapshot();
   };
@@ -7271,460 +7454,1482 @@ function App() {
               </button>
             </header>
 
-            <section className="settings-summary" aria-label="设置概览">
-              <div className="settings-row compact theme-select">
-                <span>
-                  <Palette size={16} />
-                  主题模式
-                </span>
-                <CustomSelect
-                  className="content-fit"
-                  label="主题模式"
-                  value={themeMode}
-                  options={Object.entries(themeLabels).map(
-                    ([optionValue, optionLabel]) => ({
-                      value: optionValue,
-                      label: optionLabel,
-                    }),
-                  )}
-                  onChange={(nextValue) => setThemeMode(nextValue as ThemeMode)}
-                />
-              </div>
-              <div className="settings-row compact">
-                <span>调试模式</span>
-                <label className="switch">
-                  <input
-                    checked={debugEnabled}
-                    onChange={(event) => setDebugEnabled(event.target.checked)}
-                    type="checkbox"
-                  />
-                  <span />
-                </label>
-              </div>
-              <div className="settings-row compact">
-                <span>流式输出</span>
-                <label className="switch">
-                  <input
-                    aria-label="流式输出"
-                    checked={streamingEnabled}
-                    onChange={(event) =>
-                      setStreamingEnabled(event.target.checked)
-                    }
-                    type="checkbox"
-                  />
-                  <span />
-                </label>
-              </div>
-              <div className="settings-row compact theme-select">
-                <span>换行规则</span>
-                <div className="setting-control-stack content-fit">
+            <nav className="settings-section-nav" aria-label="设置分区导航">
+              {SETTINGS_NAV_SECTIONS.map((section) => (
+                <button
+                  className={
+                    section.id === activeSettingsSectionId ? "active" : ""
+                  }
+                  key={section.id}
+                  type="button"
+                  onClick={() => scrollSettingsToSection(section.id)}
+                >
+                  {section.label}
+                </button>
+              ))}
+            </nav>
+
+            <div
+              ref={settingsScrollBodyRef}
+              className="settings-scroll-body"
+              onScroll={handleSettingsPanelScroll}
+            >
+              <section
+                className="settings-summary"
+                aria-label="设置概览"
+                data-settings-section="overview"
+              >
+                <div className="settings-row compact theme-select">
+                  <span>
+                    <Palette size={16} />
+                    主题模式
+                  </span>
                   <CustomSelect
                     className="content-fit"
-                    label="换行规则"
-                    value={composerSubmitMode}
-                    options={Object.entries(composerSubmitModeLabels).map(
+                    label="主题模式"
+                    value={themeMode}
+                    options={Object.entries(themeLabels).map(
                       ([optionValue, optionLabel]) => ({
                         value: optionValue,
                         label: optionLabel,
                       }),
                     )}
                     onChange={(nextValue) =>
-                      setComposerSubmitMode(nextValue as ComposerSubmitMode)
+                      setThemeMode(nextValue as ThemeMode)
                     }
                   />
                 </div>
-              </div>
-              <label className="settings-row quote-template-setting">
-                <span>引用格式</span>
-                <div className="quote-template-control">
-                  <input
-                    aria-label="引用格式"
-                    placeholder={DEFAULT_MESSAGE_QUOTE_TEMPLATE}
-                    value={messageQuoteTemplate}
-                    onChange={(event) =>
-                      setMessageQuoteTemplate(event.target.value)
-                    }
-                  />
-                  <small>{"{content}"} 引用消息片段</small>
+                <div className="settings-row compact">
+                  <span>调试模式</span>
+                  <label className="switch">
+                    <input
+                      checked={debugEnabled}
+                      onChange={(event) =>
+                        setDebugEnabled(event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span />
+                  </label>
                 </div>
-              </label>
-              <div className="settings-row compact theme-select">
-                <span>布局模式</span>
-                <CustomSelect
-                  className="content-fit"
-                  label="布局模式"
-                  value={layoutMode}
-                  options={Object.entries(layoutLabels).map(
-                    ([optionValue, optionLabel]) => ({
-                      value: optionValue,
-                      label: optionLabel,
-                    }),
-                  )}
-                  onChange={(nextValue) =>
-                    setLayoutMode(nextValue as LayoutMode)
-                  }
-                />
-              </div>
-              <div className="settings-row compact mobile-status-bar-setting">
-                <span>沉浸显示（Android）</span>
-                <label className="switch">
-                  <input
-                    aria-label="沉浸显示（Android）"
-                    checked={hideMobileStatusBar}
-                    onChange={(event) =>
-                      setHideMobileStatusBar(event.target.checked)
-                    }
-                    type="checkbox"
-                  />
-                  <span />
+                <div className="settings-row compact">
+                  <span>流式输出</span>
+                  <label className="switch">
+                    <input
+                      aria-label="流式输出"
+                      checked={streamingEnabled}
+                      onChange={(event) =>
+                        setStreamingEnabled(event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span />
+                  </label>
+                </div>
+                <div className="settings-row compact theme-select">
+                  <span>换行规则</span>
+                  <div className="setting-control-stack content-fit">
+                    <CustomSelect
+                      className="content-fit"
+                      label="换行规则"
+                      value={composerSubmitMode}
+                      options={Object.entries(composerSubmitModeLabels).map(
+                        ([optionValue, optionLabel]) => ({
+                          value: optionValue,
+                          label: optionLabel,
+                        }),
+                      )}
+                      onChange={(nextValue) =>
+                        setComposerSubmitMode(nextValue as ComposerSubmitMode)
+                      }
+                    />
+                  </div>
+                </div>
+                <label className="settings-row quote-template-setting">
+                  <span>引用格式</span>
+                  <div className="quote-template-control">
+                    <input
+                      aria-label="引用格式"
+                      placeholder={DEFAULT_MESSAGE_QUOTE_TEMPLATE}
+                      value={messageQuoteTemplate}
+                      onChange={(event) =>
+                        setMessageQuoteTemplate(event.target.value)
+                      }
+                    />
+                    <small>{"{content}"} 引用消息片段</small>
+                  </div>
                 </label>
-                <small>
-                  隐藏系统栏并扩展到刘海/挖孔安全区；仅 Android 应用生效。
-                </small>
-              </div>
-              <div className="settings-row compact summary-policy-setting">
-                <span>上下文总结</span>
-                <CustomSelect
-                  label="上下文总结助手"
-                  value={utilityAssistantRefs.contextSummaryAssistantId}
-                  options={utilityAssistants.map((assistant) => ({
-                    value: assistant.id,
-                    label: assistant.name,
-                  }))}
-                  onChange={(nextValue) =>
-                    setUtilityAssistantRefs((current) => ({
-                      ...current,
-                      contextSummaryAssistantId: nextValue,
-                    }))
-                  }
-                />
-                <label className="inline-number-setting">
-                  <span>保留原文</span>
-                  <input
-                    aria-label="总结保留原文条数"
-                    max={50}
-                    min={0}
-                    type="number"
-                    value={contextSummaryRawTailMessages}
-                    onChange={(event) =>
-                      setContextSummaryRawTailMessages(
-                        normalizeContextSummaryRawTailMessages(
-                          Number(event.target.value),
-                        ),
-                      )
+                <div className="settings-row compact theme-select">
+                  <span>布局模式</span>
+                  <CustomSelect
+                    className="content-fit"
+                    label="布局模式"
+                    value={layoutMode}
+                    options={Object.entries(layoutLabels).map(
+                      ([optionValue, optionLabel]) => ({
+                        value: optionValue,
+                        label: optionLabel,
+                      }),
+                    )}
+                    onChange={(nextValue) =>
+                      setLayoutMode(nextValue as LayoutMode)
                     }
                   />
-                </label>
-                <label className="inline-number-setting">
-                  <span>自动间隔</span>
-                  <input
-                    aria-label="自动总结间隔条数"
-                    max={100}
-                    min={0}
-                    type="number"
-                    value={contextSummaryAutoMessageInterval}
-                    onChange={(event) =>
-                      setContextSummaryAutoMessageInterval(
-                        normalizeContextSummaryAutoMessageInterval(
-                          Number(event.target.value),
-                        ),
-                      )
+                </div>
+                <div className="settings-row compact mobile-status-bar-setting">
+                  <span>沉浸显示（Android）</span>
+                  <label className="switch">
+                    <input
+                      aria-label="沉浸显示（Android）"
+                      checked={hideMobileStatusBar}
+                      onChange={(event) =>
+                        setHideMobileStatusBar(event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span />
+                  </label>
+                  <small>
+                    隐藏系统栏并扩展到刘海/挖孔安全区；仅 Android 应用生效。
+                  </small>
+                </div>
+                <div className="settings-row compact summary-policy-setting">
+                  <span>上下文总结</span>
+                  <CustomSelect
+                    label="上下文总结助手"
+                    value={utilityAssistantRefs.contextSummaryAssistantId}
+                    options={utilityAssistants.map((assistant) => ({
+                      value: assistant.id,
+                      label: assistant.name,
+                    }))}
+                    onChange={(nextValue) =>
+                      setUtilityAssistantRefs((current) => ({
+                        ...current,
+                        contextSummaryAssistantId: nextValue,
+                      }))
                     }
                   />
-                </label>
-              </div>
-            </section>
+                  <label className="inline-number-setting">
+                    <span>保留原文</span>
+                    <input
+                      aria-label="总结保留原文条数"
+                      max={50}
+                      min={0}
+                      type="number"
+                      value={contextSummaryRawTailMessages}
+                      onChange={(event) =>
+                        setContextSummaryRawTailMessages(
+                          normalizeContextSummaryRawTailMessages(
+                            Number(event.target.value),
+                          ),
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="inline-number-setting">
+                    <span>自动间隔</span>
+                    <input
+                      aria-label="自动总结间隔条数"
+                      max={100}
+                      min={0}
+                      type="number"
+                      value={contextSummaryAutoMessageInterval}
+                      onChange={(event) =>
+                        setContextSummaryAutoMessageInterval(
+                          normalizeContextSummaryAutoMessageInterval(
+                            Number(event.target.value),
+                          ),
+                        )
+                      }
+                    />
+                  </label>
+                </div>
+              </section>
 
-            <section
-              className="summary-framework-panel"
-              aria-label="上下文总结框架"
-            >
-              <header>
-                <div>
-                  <p className="eyebrow">Context summary framework</p>
-                  <h3>上下文总结框架</h3>
-                </div>
-                <button type="button" onClick={resetContextSummaryFramework}>
-                  还原全部默认描述
-                </button>
-              </header>
-              <p className="summary-framework-note">
-                五个维度是固定基向量；这里只允许覆盖系统描述，用于引导总结助手正确分类。
-              </p>
-              <div className="summary-framework-grid">
-                {contextSummaryFramework.sections.map((section) => {
-                  const defaultSection =
-                    defaultContextSummaryFramework.sections.find(
-                      (candidate) => candidate.id === section.id,
-                    );
-                  const isDefaultInstruction =
-                    section.instruction === defaultSection?.instruction;
+              <section
+                className="summary-framework-panel"
+                aria-label="上下文总结框架"
+                data-settings-section="summary-framework"
+              >
+                <header>
+                  <div>
+                    <p className="eyebrow">Context summary framework</p>
+                    <h3>上下文总结框架</h3>
+                  </div>
+                  <button type="button" onClick={resetContextSummaryFramework}>
+                    还原全部默认描述
+                  </button>
+                </header>
+                <p className="summary-framework-note">
+                  五个维度是固定基向量；这里只允许覆盖系统描述，用于引导总结助手正确分类。
+                </p>
+                <div className="summary-framework-grid">
+                  {contextSummaryFramework.sections.map((section) => {
+                    const defaultSection =
+                      defaultContextSummaryFramework.sections.find(
+                        (candidate) => candidate.id === section.id,
+                      );
+                    const isDefaultInstruction =
+                      section.instruction === defaultSection?.instruction;
 
-                  return (
-                    <article
-                      className="summary-framework-card"
-                      key={section.id}
-                    >
-                      <div className="summary-framework-card-header">
-                        <div>
-                          <h4>{section.title}</h4>
-                          <span>
-                            {section.required ? "必填维度" : "按需填写"}
-                          </span>
+                    return (
+                      <article
+                        className="summary-framework-card"
+                        key={section.id}
+                      >
+                        <div className="summary-framework-card-header">
+                          <div>
+                            <h4>{section.title}</h4>
+                            <span>
+                              {section.required ? "必填维度" : "按需填写"}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            aria-label={`还原${section.title}默认描述`}
+                            disabled={isDefaultInstruction}
+                            onClick={() =>
+                              resetContextSummaryFrameworkInstruction(
+                                section.id,
+                              )
+                            }
+                          >
+                            还原默认
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          aria-label={`还原${section.title}默认描述`}
-                          disabled={isDefaultInstruction}
-                          onClick={() =>
-                            resetContextSummaryFrameworkInstruction(section.id)
-                          }
-                        >
-                          还原默认
-                        </button>
-                      </div>
-                      <label>
-                        <span>系统描述</span>
-                        <textarea
-                          aria-label={`${section.title}系统描述`}
-                          rows={3}
-                          value={section.instruction}
+                        <label>
+                          <span>系统描述</span>
+                          <textarea
+                            aria-label={`${section.title}系统描述`}
+                            rows={3}
+                            value={section.instruction}
+                            onChange={(event) =>
+                              updateContextSummaryFrameworkInstruction(
+                                section.id,
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section
+                className="summary-framework-panel"
+                aria-label="上下文配置"
+                data-settings-section="context-profiles"
+              >
+                <header>
+                  <div>
+                    <p className="eyebrow">Context config</p>
+                    <h3>上下文配置</h3>
+                  </div>
+                  <div className="header-actions">
+                    <button type="button" onClick={createContextProfile}>
+                      <Plus size={16} />
+                      新增上下文配置
+                    </button>
+                    <button
+                      className="danger-button"
+                      type="button"
+                      onClick={() =>
+                        deleteContextProfile(editingContextProfile.id)
+                      }
+                    >
+                      <Trash2 size={16} />
+                      删除配置
+                    </button>
+                  </div>
+                </header>
+                <p className="summary-framework-note">
+                  聊天助手引用这里的上下文配置；全局总结助手会按当前聊天助手绑定的配置执行总结，不需要为每个聊天助手单独配置总结助手。
+                </p>
+                <section
+                  className="context-profile-workflow-panel"
+                  aria-label="上下文配置工作流"
+                >
+                  <header>
+                    <div>
+                      <p className="eyebrow">Workflow</p>
+                      <h3>配置工作流</h3>
+                    </div>
+                    <div className="header-actions context-workflow-actions">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void copyContextProfileWorkflowPrompt("start")
+                        }
+                      >
+                        复制起始
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void copyContextProfileWorkflowPrompt("export")
+                        }
+                      >
+                        复制导出
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          !contextProfileWorkflowDraft.standardOutput.trim()
+                        }
+                        onClick={createContextProfileFromWorkflowOutput}
+                      >
+                        解析并新建
+                      </button>
+                    </div>
+                  </header>
+                  <label className="detail-field context-profile-workflow-output">
+                    <span>配置解析区</span>
+                    <textarea
+                      aria-label="上下文配置解析区"
+                      rows={1}
+                      placeholder="粘贴配置输出后解析"
+                      value={contextProfileWorkflowDraft.standardOutput}
+                      onChange={(event) =>
+                        updateContextProfileWorkflowField(
+                          "standardOutput",
+                          event.target.value,
+                        )
+                      }
+                    />
+                  </label>
+                  {contextProfileWorkflowStatus ? (
+                    <p className="backup-message">
+                      {contextProfileWorkflowStatus}
+                    </p>
+                  ) : null}
+                </section>
+                <div className="profile-layout">
+                  <aside className="profile-directory">
+                    <div className="assistant-config-select">
+                      <span>当前配置</span>
+                      <CustomSelect
+                        label="选择上下文配置"
+                        value={editingContextProfile.id}
+                        options={contextProfiles.map((profile) => ({
+                          value: profile.id,
+                          label: profile.name,
+                        }))}
+                        onChange={setEditingContextProfileId}
+                      />
+                    </div>
+                    <div className="assistant-card-list">
+                      {contextProfiles.map((profile, index) => (
+                        <div className="sortable-card-row" key={profile.id}>
+                          <button
+                            className={`assistant-card ${
+                              profile.id === editingContextProfile.id
+                                ? "selected"
+                                : ""
+                            }`}
+                            type="button"
+                            onClick={() =>
+                              setEditingContextProfileId(profile.id)
+                            }
+                          >
+                            <span>{profile.name}</span>
+                            <small>
+                              {profile.dimensionOverrides.length} 个维度重载 ·{" "}
+                              {normalizeContextProfileSummaryMaxChars(
+                                profile.summaryMaxChars,
+                              )}{" "}
+                              字
+                            </small>
+                          </button>
+                          <ReorderControls
+                            itemName={`上下文配置 ${profile.name}`}
+                            isFirst={index === 0}
+                            isLast={index === contextProfiles.length - 1}
+                            onMoveUp={() => moveContextProfile(profile.id, -1)}
+                            onMoveDown={() => moveContextProfile(profile.id, 1)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </aside>
+
+                  <section className="profile-detail">
+                    <div className="reflected-fields">
+                      <label className="detail-field">
+                        <span>配置名称</span>
+                        <input
+                          aria-label="上下文配置名称"
+                          value={editingContextProfile.name}
                           onChange={(event) =>
-                            updateContextSummaryFrameworkInstruction(
-                              section.id,
+                            updateContextProfileField(
+                              editingContextProfile.id,
+                              "name",
                               event.target.value,
                             )
                           }
                         />
                       </label>
-                    </article>
-                  );
-                })}
-              </div>
-            </section>
+                      <label className="detail-field">
+                        <span>配置描述</span>
+                        <input
+                          aria-label="上下文配置描述"
+                          value={editingContextProfile.description}
+                          onChange={(event) =>
+                            updateContextProfileField(
+                              editingContextProfile.id,
+                              "description",
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </label>
+                      <label className="detail-field">
+                        <span>总结字数上限</span>
+                        <input
+                          aria-label="上下文总结字数上限"
+                          max={50000}
+                          min={500}
+                          type="number"
+                          value={normalizeContextProfileSummaryMaxChars(
+                            editingContextProfile.summaryMaxChars,
+                          )}
+                          onChange={(event) =>
+                            updateContextProfileSummaryMaxChars(
+                              editingContextProfile.id,
+                              Number(event.target.value),
+                            )
+                          }
+                        />
+                        <small>
+                          仅限制该上下文配置生成的 rolling
+                          summary；模型配置不参与上下文预算策略。
+                        </small>
+                      </label>
+                    </div>
 
-            <section
-              className="summary-framework-panel"
-              aria-label="上下文配置"
-            >
-              <header>
-                <div>
-                  <p className="eyebrow">Context config</p>
-                  <h3>上下文配置</h3>
+                    <div className="summary-framework-grid">
+                      {contextSummaryFramework.sections.map((section) => {
+                        const override = getContextProfileOverride(
+                          editingContextProfile,
+                          section.id,
+                        );
+                        const enabled = isContextProfileDimensionEnabled(
+                          editingContextProfile,
+                          section.id,
+                        );
+                        const value = override?.instruction ?? "";
+
+                        return (
+                          <article
+                            className={`summary-framework-card ${
+                              enabled ? "" : "disabled"
+                            }`}
+                            key={section.id}
+                          >
+                            <div className="summary-framework-card-header">
+                              <div>
+                                <h4>{section.title}</h4>
+                                <span>{section.id}</span>
+                              </div>
+                              <div className="dimension-actions">
+                                <label className="dimension-toggle">
+                                  <input
+                                    aria-label={`启用${section.title}上下文维度`}
+                                    checked={enabled}
+                                    type="checkbox"
+                                    onChange={(event) =>
+                                      toggleContextProfileDimension(
+                                        editingContextProfile.id,
+                                        section.id,
+                                        event.target.checked,
+                                      )
+                                    }
+                                  />
+                                  <span>启用</span>
+                                </label>
+                                <button
+                                  type="button"
+                                  disabled={!enabled || !value.trim()}
+                                  onClick={() =>
+                                    clearContextProfileOverride(
+                                      editingContextProfile.id,
+                                      section.id,
+                                    )
+                                  }
+                                >
+                                  清空重载
+                                </button>
+                              </div>
+                            </div>
+                            <p className="summary-framework-note">
+                              {enabled
+                                ? `默认：${section.instruction}`
+                                : `未启用：该维度不会进入普通聊天或总结提示；当前重载内容仅保留为预览。默认：${section.instruction}`}
+                            </p>
+                            <label>
+                              <span>配置重载说明</span>
+                              <textarea
+                                aria-label={`${section.title}上下文重载说明`}
+                                disabled={!enabled}
+                                rows={3}
+                                placeholder="留空则完全使用系统描述；填写时只补充该业务/玩法/角色场景的额外分类规则。"
+                                value={value}
+                                onChange={(event) =>
+                                  updateContextProfileOverride(
+                                    editingContextProfile.id,
+                                    section.id,
+                                    event.target.value,
+                                  )
+                                }
+                              />
+                            </label>
+                          </article>
+                        );
+                      })}
+                    </div>
+
+                    <div className="header-actions">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          resetContextProfile(editingContextProfile.id)
+                        }
+                      >
+                        还原当前配置重载
+                      </button>
+                    </div>
+                  </section>
                 </div>
-                <div className="header-actions">
-                  <button type="button" onClick={createContextProfile}>
-                    <Plus size={16} />
-                    新增上下文配置
-                  </button>
-                  <button
-                    className="danger-button"
-                    type="button"
-                    onClick={() =>
-                      deleteContextProfile(editingContextProfile.id)
-                    }
-                  >
-                    <Trash2 size={16} />
-                    删除配置
-                  </button>
-                </div>
-              </header>
-              <p className="summary-framework-note">
-                聊天助手引用这里的上下文配置；全局总结助手会按当前聊天助手绑定的配置执行总结，不需要为每个聊天助手单独配置总结助手。
-              </p>
+              </section>
+
               <section
-                className="context-profile-workflow-panel"
-                aria-label="上下文配置工作流"
+                className="backup-panel"
+                aria-label="备份与存储"
+                data-settings-section="storage"
               >
                 <header>
                   <div>
-                    <p className="eyebrow">Workflow</p>
-                    <h3>配置工作流</h3>
+                    <p className="eyebrow">Storage</p>
+                    <h3>本地持久化与备份</h3>
                   </div>
-                  <div className="header-actions context-workflow-actions">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void copyContextProfileWorkflowPrompt("start")
-                      }
-                    >
-                      复制起始
+                </header>
+                <div className="backup-grid">
+                  <div>
+                    <span>数据库</span>
+                    <strong>MobileChatDB</strong>
+                  </div>
+                  <div>
+                    <span>持久模式</span>
+                    <strong>
+                      {storageInfo.persisted === true
+                        ? "persistent"
+                        : storageInfo.persisted === false
+                          ? "best-effort"
+                          : "unknown"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>用量 / 配额</span>
+                    <strong>{formatStorageUsage(storageInfo)}</strong>
+                  </div>
+                  <div>
+                    <span>预计导出大小</span>
+                    <strong>{archiveSizeText}</strong>
+                  </div>
+                  <div>
+                    <span>图片缓存</span>
+                    <strong>
+                      {imageCacheStats.count} 张 ·{" "}
+                      {formatBytes(imageCacheStats.bytes)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>最后导出</span>
+                    <strong>
+                      {lastSuccessfulExportAt
+                        ? new Date(lastSuccessfulExportAt).toLocaleString()
+                        : "从未"}
+                    </strong>
+                  </div>
+                </div>
+                <div className="backup-actions">
+                  <button type="button" onClick={exportBackup}>
+                    <Download size={16} />
+                    导出数据库
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => importInputRef.current?.click()}
+                  >
+                    <Upload size={16} />
+                    导入并替换
+                  </button>
+                  <button
+                    type="button"
+                    disabled={imageCacheStats.count === 0}
+                    onClick={clearImageCache}
+                  >
+                    <Trash2 size={16} />
+                    清理图片缓存
+                  </button>
+                  <input
+                    ref={importInputRef}
+                    aria-label="导入 mobilechat 文件"
+                    type="file"
+                    accept=".mobilechat,application/zip,application/vnd.mobilechat+zip"
+                    onChange={importBackup}
+                  />
+                </div>
+                {saveError || backupMessage ? (
+                  <p className="backup-message">{saveError || backupMessage}</p>
+                ) : null}
+              </section>
+
+              <section
+                className="model-probe-panel"
+                aria-label="模型探测"
+                data-settings-section="model-probe"
+              >
+                <header>
+                  <div>
+                    <p className="eyebrow">Model probe</p>
+                    <h3>模型探测</h3>
+                  </div>
+                  <div className="header-actions">
+                    <button type="button" onClick={createModelProbeGroup}>
+                      <Plus size={16} />
+                      新增探测
                     </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void copyContextProfileWorkflowPrompt("export")
-                      }
-                    >
-                      复制导出
-                    </button>
-                    <button
-                      type="button"
-                      disabled={
-                        !contextProfileWorkflowDraft.standardOutput.trim()
-                      }
-                      onClick={createContextProfileFromWorkflowOutput}
-                    >
-                      解析并新建
+                    <button type="button" onClick={resetModelProbeSettings}>
+                      <RotateCcw size={16} />
+                      还原默认
                     </button>
                   </div>
                 </header>
-                <label className="detail-field context-profile-workflow-output">
-                  <span>配置解析区</span>
-                  <textarea
-                    aria-label="上下文配置解析区"
-                    rows={1}
-                    placeholder="粘贴配置输出后解析"
-                    value={contextProfileWorkflowDraft.standardOutput}
-                    onChange={(event) =>
-                      updateContextProfileWorkflowField(
-                        "standardOutput",
-                        event.target.value,
-                      )
-                    }
-                  />
-                </label>
-                {contextProfileWorkflowStatus ? (
-                  <p className="backup-message">
-                    {contextProfileWorkflowStatus}
-                  </p>
-                ) : null}
+                <div className="profile-layout model-probe-layout">
+                  <aside className="profile-directory">
+                    <div className="assistant-config-select">
+                      <span>当前探测</span>
+                      <CustomSelect
+                        label="选择探测"
+                        value={editingModelProbeGroup?.id ?? ""}
+                        options={modelProbeSettings.groups.map((group) => ({
+                          value: group.id,
+                          label: group.name,
+                        }))}
+                        onChange={(nextValue) =>
+                          setModelProbeSettings((current) => ({
+                            ...current,
+                            editingGroupId: nextValue,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="assistant-card-list">
+                      {modelProbeSettings.groups.map((group, index) => (
+                        <div className="sortable-card-row" key={group.id}>
+                          <button
+                            className={`assistant-card ${
+                              group.id === editingModelProbeGroup?.id
+                                ? "selected"
+                                : ""
+                            }`}
+                            type="button"
+                            onClick={() =>
+                              setModelProbeSettings((current) => ({
+                                ...current,
+                                editingGroupId: group.id,
+                              }))
+                            }
+                          >
+                            <span>{group.name}</span>
+                            <small>
+                              {
+                                expandModelProbeSettings(
+                                  modelProbeSettings,
+                                  group.id,
+                                ).length
+                              }{" "}
+                              candidates
+                            </small>
+                          </button>
+                          <ReorderControls
+                            itemName={`探测 ${group.name}`}
+                            isFirst={index === 0}
+                            isLast={
+                              index === modelProbeSettings.groups.length - 1
+                            }
+                            onMoveUp={() => moveModelProbeGroup(group.id, -1)}
+                            onMoveDown={() => moveModelProbeGroup(group.id, 1)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </aside>
+
+                  {editingModelProbeGroup ? (
+                    <section className="profile-detail">
+                      <header className="config-detail-header">
+                        <div className="section-caption">
+                          <Search size={16} />
+                          <span>探测配置</span>
+                        </div>
+                        <div className="header-actions">
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() =>
+                              deleteModelProbeGroup(editingModelProbeGroup.id)
+                            }
+                          >
+                            <Trash2 size={16} />
+                            删除探测
+                          </button>
+                        </div>
+                      </header>
+                      <div className="reflected-fields">
+                        <label className="detail-field">
+                          <span>模型名</span>
+                          <input
+                            aria-label="探测模型名"
+                            placeholder="例如 grok、gemini、gpt"
+                            value={modelProbeModelNameDraft}
+                            onChange={(event) =>
+                              setModelProbeModelNameDraft(event.target.value)
+                            }
+                            onBlur={commitModelProbeModelNameDraft}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.currentTarget.blur();
+                              }
+                              if (event.key === "Escape") {
+                                setModelProbeModelNameDraft(
+                                  editingModelProbeGroup.id,
+                                );
+                                event.currentTarget.blur();
+                              }
+                            }}
+                          />
+                        </label>
+                        <label className="detail-field">
+                          <span>探测名称</span>
+                          <input
+                            aria-label="探测名称"
+                            value={editingModelProbeGroup.name}
+                            onChange={(event) =>
+                              updateModelProbeGroup(
+                                editingModelProbeGroup.id,
+                                (group) => ({
+                                  ...group,
+                                  name: event.target.value,
+                                }),
+                              )
+                            }
+                          />
+                        </label>
+                      </div>
+
+                      <section className="model-bindings">
+                        <header>
+                          <div>
+                            <p className="eyebrow">Rules</p>
+                            <h3>候选生成规则</h3>
+                          </div>
+                        </header>
+                        <div className="probe-rule-list">
+                          {editingModelProbeGroup.rules.map(
+                            (rule, ruleIndex) => (
+                              <article
+                                className="probe-rule-card"
+                                key={rule.id}
+                              >
+                                <div className="summary-framework-card-header">
+                                  <label className="dimension-toggle">
+                                    <input
+                                      aria-label={`启用模型探测规则 ${ruleIndex + 1}`}
+                                      checked={rule.enabled}
+                                      type="checkbox"
+                                      onChange={(event) =>
+                                        updateModelProbeRule(
+                                          editingModelProbeGroup.id,
+                                          rule.id,
+                                          (currentRule) => ({
+                                            ...currentRule,
+                                            enabled: event.target.checked,
+                                          }),
+                                        )
+                                      }
+                                    />
+                                    <span>规则 {ruleIndex + 1}</span>
+                                  </label>
+                                </div>
+                                <section
+                                  className="probe-dimension-editor"
+                                  aria-label={`模型探测规则 ${rule.id} 维度`}
+                                >
+                                  <header>
+                                    <div>
+                                      <p className="eyebrow">Arguments</p>
+                                      <h4>版本与后缀段</h4>
+                                    </div>
+                                    <div className="probe-dimension-actions">
+                                      {rule.dimensions.version === undefined ? (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            addModelProbeRuleDimension(
+                                              editingModelProbeGroup.id,
+                                              rule.id,
+                                              "version",
+                                            )
+                                          }
+                                        >
+                                          添加版本区间
+                                        </button>
+                                      ) : null}
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          addModelProbeRuleDimension(
+                                            editingModelProbeGroup.id,
+                                            rule.id,
+                                            getNextProbeArgKey(rule),
+                                          )
+                                        }
+                                      >
+                                        添加后缀段
+                                      </button>
+                                    </div>
+                                  </header>
+                                  <div className="probe-dimension-list">
+                                    {Object.entries(rule.dimensions).length ===
+                                    0 ? (
+                                      <p className="summary-framework-note">
+                                        当前规则没有维度，会直接使用模板本身。
+                                      </p>
+                                    ) : null}
+                                    {Object.entries(rule.dimensions).map(
+                                      ([dimensionKey, dimensionValue]) => {
+                                        if (
+                                          isMinorTenthsDimension(dimensionValue)
+                                        ) {
+                                          return (
+                                            <article
+                                              className="probe-dimension-card probe-version-card"
+                                              key={dimensionKey}
+                                            >
+                                              <div className="summary-framework-card-header probe-version-header">
+                                                <div className="probe-dimension-title">
+                                                  <h4>
+                                                    {formatProbeDimensionLabel(
+                                                      dimensionKey,
+                                                    )}
+                                                  </h4>
+                                                </div>
+                                                <div className="probe-card-actions">
+                                                  <button
+                                                    type="button"
+                                                    disabled={
+                                                      dimensionKey === "version"
+                                                    }
+                                                    onClick={() =>
+                                                      deleteModelProbeRuleDimension(
+                                                        editingModelProbeGroup.id,
+                                                        rule.id,
+                                                        dimensionKey,
+                                                      )
+                                                    }
+                                                  >
+                                                    删除维度
+                                                  </button>
+                                                </div>
+                                                <span className="probe-dimension-note">
+                                                  大版本 + 小版本区间展开
+                                                </span>
+                                              </div>
+                                              <div className="probe-version-grid">
+                                                <label className="detail-field probe-major-field">
+                                                  <span>大版本列表</span>
+                                                  <input
+                                                    aria-label={`${dimensionKey} 大版本列表`}
+                                                    value={formatModelIdListText(
+                                                      dimensionValue.majors,
+                                                    )}
+                                                    onChange={(event) =>
+                                                      updateModelProbeRuleDimension(
+                                                        editingModelProbeGroup.id,
+                                                        rule.id,
+                                                        dimensionKey,
+                                                        {
+                                                          ...dimensionValue,
+                                                          majors:
+                                                            parseModelIdListText(
+                                                              event.target
+                                                                .value,
+                                                            ),
+                                                        },
+                                                      )
+                                                    }
+                                                  />
+                                                </label>
+                                                <label className="detail-field number-setting probe-minor-field">
+                                                  <span>起始小版本</span>
+                                                  <input
+                                                    aria-label={`${dimensionKey} 起始小版本`}
+                                                    min={0}
+                                                    max={9}
+                                                    type="number"
+                                                    value={
+                                                      dimensionValue.from ?? 0
+                                                    }
+                                                    onChange={(event) =>
+                                                      updateModelProbeRuleDimension(
+                                                        editingModelProbeGroup.id,
+                                                        rule.id,
+                                                        dimensionKey,
+                                                        {
+                                                          ...dimensionValue,
+                                                          from: Number(
+                                                            event.target.value,
+                                                          ),
+                                                        },
+                                                      )
+                                                    }
+                                                  />
+                                                </label>
+                                                <label className="detail-field number-setting probe-minor-field">
+                                                  <span>结束小版本</span>
+                                                  <input
+                                                    aria-label={`${dimensionKey} 结束小版本`}
+                                                    min={0}
+                                                    max={9}
+                                                    type="number"
+                                                    value={
+                                                      dimensionValue.to ?? 9
+                                                    }
+                                                    onChange={(event) =>
+                                                      updateModelProbeRuleDimension(
+                                                        editingModelProbeGroup.id,
+                                                        rule.id,
+                                                        dimensionKey,
+                                                        {
+                                                          ...dimensionValue,
+                                                          to: Number(
+                                                            event.target.value,
+                                                          ),
+                                                        },
+                                                      )
+                                                    }
+                                                  />
+                                                </label>
+                                              </div>
+                                              <small className="probe-version-hint">
+                                                例如只写 5，会配合区间生成
+                                                5、5.1、5.2；小版本 0 不追加
+                                                .0。多个大版本可用空格或逗号分隔。
+                                              </small>
+                                            </article>
+                                          );
+                                        }
+
+                                        const values =
+                                          flattenProbeDimensionValues(
+                                            dimensionValue,
+                                          );
+
+                                        return (
+                                          <article
+                                            className="probe-dimension-card probe-suffix-card"
+                                            key={dimensionKey}
+                                          >
+                                            <div className="summary-framework-card-header probe-suffix-header">
+                                              <div className="probe-dimension-title">
+                                                <h4>
+                                                  {formatProbeDimensionLabel(
+                                                    dimensionKey,
+                                                  )}
+                                                </h4>
+                                              </div>
+                                              <div className="probe-card-actions">
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    updateModelProbeRuleDimension(
+                                                      editingModelProbeGroup.id,
+                                                      rule.id,
+                                                      dimensionKey,
+                                                      [...values, ""],
+                                                    )
+                                                  }
+                                                >
+                                                  添加值
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    deleteModelProbeRuleDimension(
+                                                      editingModelProbeGroup.id,
+                                                      rule.id,
+                                                      dimensionKey,
+                                                    )
+                                                  }
+                                                >
+                                                  删除后缀段
+                                                </button>
+                                              </div>
+                                            </div>
+                                            <div className="probe-value-list">
+                                              {values.map(
+                                                (value, valueIndex) => (
+                                                  <label
+                                                    className="probe-value-row"
+                                                    key={`${dimensionKey}-${valueIndex}`}
+                                                  >
+                                                    <span>
+                                                      词条 {valueIndex + 1}
+                                                    </span>
+                                                    <input
+                                                      aria-label={`${dimensionKey} 值 ${valueIndex + 1}`}
+                                                      placeholder="例如 fast 或 flash-lite；留空表示不追加"
+                                                      value={value}
+                                                      onChange={(event) => {
+                                                        const nextValues =
+                                                          values.map(
+                                                            (
+                                                              candidate,
+                                                              index,
+                                                            ) =>
+                                                              index ===
+                                                              valueIndex
+                                                                ? event.target
+                                                                    .value
+                                                                : candidate,
+                                                          );
+                                                        updateModelProbeRuleDimension(
+                                                          editingModelProbeGroup.id,
+                                                          rule.id,
+                                                          dimensionKey,
+                                                          nextValues,
+                                                        );
+                                                      }}
+                                                    />
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => {
+                                                        const nextValues =
+                                                          values.filter(
+                                                            (
+                                                              _candidate,
+                                                              index,
+                                                            ) =>
+                                                              index !==
+                                                              valueIndex,
+                                                          );
+                                                        updateModelProbeRuleDimension(
+                                                          editingModelProbeGroup.id,
+                                                          rule.id,
+                                                          dimensionKey,
+                                                          nextValues,
+                                                        );
+                                                      }}
+                                                    >
+                                                      删除
+                                                    </button>
+                                                  </label>
+                                                ),
+                                              )}
+                                            </div>
+                                          </article>
+                                        );
+                                      },
+                                    )}
+                                  </div>
+                                </section>
+                              </article>
+                            ),
+                          )}
+                        </div>
+                      </section>
+
+                      <section className="model-probe-preview">
+                        <header>
+                          <div>
+                            <p className="eyebrow">Candidates</p>
+                            <h3>候选预览</h3>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={runModelProbe}
+                            disabled={modelProbeRunning}
+                          >
+                            <Search size={16} />
+                            {modelProbeRunning ? "探测中" : "开始探测"}
+                          </button>
+                        </header>
+                        <div className="probe-candidate-summary">
+                          <strong>{modelProbeCandidates.length}</strong>
+                          <span>
+                            个候选模型。预览只展开规则，不会发送请求。
+                          </span>
+                        </div>
+                        <div className="probe-candidate-list">
+                          {modelProbeCandidates
+                            .slice(0, 80)
+                            .map((candidate) => (
+                              <code key={candidate.modelId}>
+                                {candidate.modelId}
+                              </code>
+                            ))}
+                          {modelProbeCandidates.length > 80 ? (
+                            <span>
+                              还有 {modelProbeCandidates.length - 80} 个未显示
+                            </span>
+                          ) : null}
+                        </div>
+                      </section>
+
+                      <section className="model-probe-results">
+                        <header>
+                          <div>
+                            <p className="eyebrow">Results</p>
+                            <h3>探测结果</h3>
+                          </div>
+                          <strong>
+                            {modelProbeSuccessResults.length}/
+                            {modelProbeResults.length ||
+                              modelProbeCandidates.length}
+                          </strong>
+                        </header>
+                        {modelProbeStatus ? (
+                          <p className="backup-message">{modelProbeStatus}</p>
+                        ) : null}
+                        <div className="probe-result-list">
+                          {modelProbeResults.length === 0 ? (
+                            <p className="summary-framework-note">
+                              尚未执行探测。成功项会提供一键创建模型配置。
+                            </p>
+                          ) : modelProbeSuccessResults.length === 0 ? (
+                            <p className="summary-framework-note">
+                              本轮没有探测到可用模型；失败项已忽略，不在列表中显示。
+                            </p>
+                          ) : (
+                            modelProbeSuccessResults.map((result) => (
+                              <div
+                                className="probe-result-row success"
+                                key={result.id}
+                              >
+                                <span>
+                                  <strong>{result.modelId}</strong>
+                                  <small>
+                                    {result.protocol} · {result.latencyMs}ms
+                                  </small>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    createModelFromProbeResult(result)
+                                  }
+                                >
+                                  创建模型
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </section>
+                    </section>
+                  ) : null}
+                </div>
               </section>
-              <div className="profile-layout">
-                <aside className="profile-directory">
-                  <div className="assistant-config-select">
-                    <span>当前配置</span>
-                    <CustomSelect
-                      label="选择上下文配置"
-                      value={editingContextProfile.id}
-                      options={contextProfiles.map((profile) => ({
-                        value: profile.id,
-                        label: profile.name,
-                      }))}
-                      onChange={setEditingContextProfileId}
-                    />
+
+              <section
+                className="api-profile-panel"
+                aria-label="连接与模型"
+                data-settings-section="api-profiles"
+              >
+                <header>
+                  <div>
+                    <p className="eyebrow">Connections</p>
+                    <h3>连接与模型</h3>
                   </div>
-                  <div className="assistant-card-list">
-                    {contextProfiles.map((profile, index) => (
-                      <div className="sortable-card-row" key={profile.id}>
+                  <button type="button" onClick={createApiProfile}>
+                    <Plus size={16} />
+                    新增连接
+                  </button>
+                </header>
+
+                <div className="profile-layout">
+                  <aside className="profile-directory">
+                    <div className="assistant-config-select">
+                      <span>当前连接</span>
+                      <CustomSelect
+                        label="选择连接"
+                        value={editingApiProfile?.id ?? ""}
+                        options={apiProfiles.map((profile) => ({
+                          value: profile.id,
+                          label: profile.name,
+                        }))}
+                        onChange={(nextValue) => {
+                          const profile = apiProfiles.find(
+                            (candidate) => candidate.id === nextValue,
+                          );
+                          setEditingApiProfileId(nextValue);
+                          setEditingModelId(profile?.models[0]?.id ?? "");
+                        }}
+                      />
+                    </div>
+                    <div className="assistant-card-list">
+                      {apiProfiles.map((profile, index) => (
+                        <div className="sortable-card-row" key={profile.id}>
+                          <button
+                            className={`assistant-card ${
+                              profile.id === editingApiProfile?.id
+                                ? "selected"
+                                : ""
+                            }`}
+                            type="button"
+                            onClick={() => {
+                              setEditingApiProfileId(profile.id);
+                              setEditingModelId(profile.models[0]?.id ?? "");
+                            }}
+                          >
+                            <span>{profile.name}</span>
+                            <small>{profile.models.length} models</small>
+                          </button>
+                          <ReorderControls
+                            itemName={`连接 ${profile.name}`}
+                            isFirst={index === 0}
+                            isLast={index === apiProfiles.length - 1}
+                            onMoveUp={() => moveApiProfile(profile.id, -1)}
+                            onMoveDown={() => moveApiProfile(profile.id, 1)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </aside>
+
+                  {editingApiProfile ? (
+                    <section className="profile-detail">
+                      <header className="config-detail-header">
+                        <div className="section-caption">
+                          <Server size={16} />
+                          <span>连接配置</span>
+                        </div>
+                        <div className="header-actions">
+                          <label className="compact-toggle">
+                            <input
+                              aria-label="启用连接"
+                              checked={editingApiProfile.enabled}
+                              type="checkbox"
+                              onChange={(event) =>
+                                updateApiProfileField(
+                                  editingApiProfile.id,
+                                  "enabled",
+                                  event.target.checked,
+                                )
+                              }
+                            />
+                            <span>启用</span>
+                          </label>
+                          <button
+                            className="danger-button"
+                            type="button"
+                            onClick={() =>
+                              deleteApiProfile(editingApiProfile.id)
+                            }
+                          >
+                            <Trash2 size={16} />
+                            删除连接
+                          </button>
+                        </div>
+                      </header>
+                      <div className="reflected-fields">
+                        <label className="detail-field">
+                          <span>连接名称</span>
+                          <input
+                            aria-label="连接名称"
+                            value={editingApiProfile.name}
+                            onChange={(event) =>
+                              updateApiProfileField(
+                                editingApiProfile.id,
+                                "name",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                        <div className="detail-field">
+                          <span>协议</span>
+                          <CustomSelect
+                            label="协议"
+                            value={editingApiProfile.protocol}
+                            options={[
+                              {
+                                value: "openai-responses",
+                                label: "OpenAI-compatible Responses",
+                              },
+                              {
+                                value: "openai-chat-completions",
+                                label: "OpenAI-compatible Chat Completions",
+                              },
+                            ]}
+                            onChange={(nextValue) =>
+                              updateApiProfileField(
+                                editingApiProfile.id,
+                                "protocol",
+                                nextValue as ApiProtocol,
+                              )
+                            }
+                          />
+                        </div>
+                        <label className="detail-field">
+                          <span>Base URL</span>
+                          <input
+                            aria-label="Base URL"
+                            value={editingApiProfile.baseUrl}
+                            onChange={(event) =>
+                              updateApiProfileField(
+                                editingApiProfile.id,
+                                "baseUrl",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                        <label className="detail-field">
+                          <span>
+                            <KeyRound size={14} />
+                            API Key
+                          </span>
+                          <div className="secret-field">
+                            <input
+                              aria-label="API Key"
+                              type={apiKeyVisible ? "text" : "password"}
+                              value={editingApiProfile.apiKey}
+                              onChange={(event) =>
+                                updateApiProfileField(
+                                  editingApiProfile.id,
+                                  "apiKey",
+                                  event.target.value,
+                                )
+                              }
+                            />
+                            <button
+                              type="button"
+                              aria-label={
+                                apiKeyVisible ? "隐藏密钥" : "显示密钥"
+                              }
+                              onClick={() =>
+                                setApiKeyVisible((visible) => !visible)
+                              }
+                            >
+                              {apiKeyVisible ? (
+                                <EyeOff size={16} />
+                              ) : (
+                                <Eye size={16} />
+                              )}
+                            </button>
+                          </div>
+                        </label>
+                        <label className="detail-field">
+                          <span>连接描述</span>
+                          <textarea
+                            aria-label="连接描述"
+                            rows={3}
+                            value={editingApiProfile.description}
+                            onChange={(event) =>
+                              updateApiProfileField(
+                                editingApiProfile.id,
+                                "description",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                      </div>
+
+                      <div className="model-editor-header">
+                        <div className="section-caption">
+                          <Database size={16} />
+                          <span>模型配置</span>
+                        </div>
                         <button
-                          className={`assistant-card ${
-                            profile.id === editingContextProfile.id
-                              ? "selected"
-                              : ""
-                          }`}
                           type="button"
-                          onClick={() => setEditingContextProfileId(profile.id)}
+                          onClick={() => createModel(editingApiProfile.id)}
                         >
-                          <span>{profile.name}</span>
-                          <small>
-                            {profile.dimensionOverrides.length} 个维度重载 ·{" "}
-                            {normalizeContextProfileSummaryMaxChars(
-                              profile.summaryMaxChars,
-                            )}{" "}
-                            字
-                          </small>
+                          <Plus size={16} />
+                          新增模型
                         </button>
-                        <ReorderControls
-                          itemName={`上下文配置 ${profile.name}`}
-                          isFirst={index === 0}
-                          isLast={index === contextProfiles.length - 1}
-                          onMoveUp={() => moveContextProfile(profile.id, -1)}
-                          onMoveDown={() => moveContextProfile(profile.id, 1)}
+                      </div>
+
+                      <div className="assistant-config-select">
+                        <span>当前模型</span>
+                        <CustomSelect
+                          label="选择模型配置"
+                          value={editingModel?.id ?? ""}
+                          options={editingApiProfile.models.map((model) => ({
+                            value: model.id,
+                            label: model.name,
+                          }))}
+                          onChange={setEditingModelId}
                         />
                       </div>
-                    ))}
-                  </div>
-                </aside>
 
-                <section className="profile-detail">
-                  <div className="reflected-fields">
-                    <label className="detail-field">
-                      <span>配置名称</span>
-                      <input
-                        aria-label="上下文配置名称"
-                        value={editingContextProfile.name}
-                        onChange={(event) =>
-                          updateContextProfileField(
-                            editingContextProfile.id,
-                            "name",
-                            event.target.value,
-                          )
-                        }
-                      />
-                    </label>
-                    <label className="detail-field">
-                      <span>配置描述</span>
-                      <input
-                        aria-label="上下文配置描述"
-                        value={editingContextProfile.description}
-                        onChange={(event) =>
-                          updateContextProfileField(
-                            editingContextProfile.id,
-                            "description",
-                            event.target.value,
-                          )
-                        }
-                      />
-                    </label>
-                    <label className="detail-field">
-                      <span>总结字数上限</span>
-                      <input
-                        aria-label="上下文总结字数上限"
-                        max={50000}
-                        min={500}
-                        type="number"
-                        value={normalizeContextProfileSummaryMaxChars(
-                          editingContextProfile.summaryMaxChars,
-                        )}
-                        onChange={(event) =>
-                          updateContextProfileSummaryMaxChars(
-                            editingContextProfile.id,
-                            Number(event.target.value),
-                          )
-                        }
-                      />
-                      <small>
-                        仅限制该上下文配置生成的 rolling
-                        summary；模型配置不参与上下文预算策略。
-                      </small>
-                    </label>
-                  </div>
+                      <div
+                        className="model-card-list"
+                        aria-label="模型配置列表"
+                      >
+                        {editingApiProfile.models.map((model, index) => (
+                          <div className="sortable-card-row" key={model.id}>
+                            <button
+                              className={`model-card ${
+                                model.id === editingModel?.id ? "selected" : ""
+                              }`}
+                              type="button"
+                              aria-label={`编辑模型 ${model.name}`}
+                              onClick={() => setEditingModelId(model.id)}
+                            >
+                              <span>{model.name}</span>
+                              <small>{model.id}</small>
+                              <small>
+                                {model.enabled ? "已启用" : "已停用"}
+                              </small>
+                            </button>
+                            <ReorderControls
+                              itemName={`模型 ${model.name}`}
+                              isFirst={index === 0}
+                              isLast={
+                                index === editingApiProfile.models.length - 1
+                              }
+                              onMoveUp={() =>
+                                moveModel(editingApiProfile.id, model.id, -1)
+                              }
+                              onMoveDown={() =>
+                                moveModel(editingApiProfile.id, model.id, 1)
+                              }
+                            />
+                          </div>
+                        ))}
+                      </div>
 
-                  <div className="summary-framework-grid">
-                    {contextSummaryFramework.sections.map((section) => {
-                      const override = getContextProfileOverride(
-                        editingContextProfile,
-                        section.id,
-                      );
-                      const enabled = isContextProfileDimensionEnabled(
-                        editingContextProfile,
-                        section.id,
-                      );
-                      const value = override?.instruction ?? "";
-
-                      return (
-                        <article
-                          className={`summary-framework-card ${
-                            enabled ? "" : "disabled"
-                          }`}
-                          key={section.id}
-                        >
-                          <div className="summary-framework-card-header">
-                            <div>
-                              <h4>{section.title}</h4>
-                              <span>{section.id}</span>
+                      {editingModel ? (
+                        <>
+                          <header className="config-detail-header compact">
+                            <div className="section-caption">
+                              <span>当前模型详情</span>
                             </div>
-                            <div className="dimension-actions">
-                              <label className="dimension-toggle">
+                            <div className="header-actions">
+                              <label className="compact-toggle">
                                 <input
-                                  aria-label={`启用${section.title}上下文维度`}
-                                  checked={enabled}
+                                  aria-label="启用模型"
+                                  checked={editingModel.enabled}
                                   type="checkbox"
                                   onChange={(event) =>
-                                    toggleContextProfileDimension(
-                                      editingContextProfile.id,
-                                      section.id,
+                                    updateModelField(
+                                      editingApiProfile.id,
+                                      editingModel.id,
+                                      "enabled",
                                       event.target.checked,
                                     )
                                   }
@@ -7732,1398 +8937,472 @@ function App() {
                                 <span>启用</span>
                               </label>
                               <button
+                                className="danger-button"
                                 type="button"
-                                disabled={!enabled || !value.trim()}
                                 onClick={() =>
-                                  clearContextProfileOverride(
-                                    editingContextProfile.id,
-                                    section.id,
+                                  deleteModel(
+                                    editingApiProfile.id,
+                                    editingModel.id,
                                   )
                                 }
                               >
-                                清空重载
+                                <Trash2 size={16} />
+                                删除模型
                               </button>
                             </div>
-                          </div>
-                          <p className="summary-framework-note">
-                            {enabled
-                              ? `默认：${section.instruction}`
-                              : `未启用：该维度不会进入普通聊天或总结提示；当前重载内容仅保留为预览。默认：${section.instruction}`}
-                          </p>
-                          <label>
-                            <span>配置重载说明</span>
-                            <textarea
-                              aria-label={`${section.title}上下文重载说明`}
-                              disabled={!enabled}
-                              rows={3}
-                              placeholder="留空则完全使用系统描述；填写时只补充该业务/玩法/角色场景的额外分类规则。"
-                              value={value}
-                              onChange={(event) =>
-                                updateContextProfileOverride(
-                                  editingContextProfile.id,
-                                  section.id,
-                                  event.target.value,
-                                )
-                              }
-                            />
-                          </label>
-                        </article>
-                      );
-                    })}
-                  </div>
-
-                  <div className="header-actions">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        resetContextProfile(editingContextProfile.id)
-                      }
-                    >
-                      还原当前配置重载
-                    </button>
-                  </div>
-                </section>
-              </div>
-            </section>
-
-            <section className="backup-panel" aria-label="备份与存储">
-              <header>
-                <div>
-                  <p className="eyebrow">Storage</p>
-                  <h3>本地持久化与备份</h3>
-                </div>
-              </header>
-              <div className="backup-grid">
-                <div>
-                  <span>数据库</span>
-                  <strong>MobileChatDB</strong>
-                </div>
-                <div>
-                  <span>持久模式</span>
-                  <strong>
-                    {storageInfo.persisted === true
-                      ? "persistent"
-                      : storageInfo.persisted === false
-                        ? "best-effort"
-                        : "unknown"}
-                  </strong>
-                </div>
-                <div>
-                  <span>用量 / 配额</span>
-                  <strong>{formatStorageUsage(storageInfo)}</strong>
-                </div>
-                <div>
-                  <span>预计导出大小</span>
-                  <strong>{archiveSizeText}</strong>
-                </div>
-                <div>
-                  <span>图片缓存</span>
-                  <strong>
-                    {imageCacheStats.count} 张 ·{" "}
-                    {formatBytes(imageCacheStats.bytes)}
-                  </strong>
-                </div>
-                <div>
-                  <span>最后导出</span>
-                  <strong>
-                    {lastSuccessfulExportAt
-                      ? new Date(lastSuccessfulExportAt).toLocaleString()
-                      : "从未"}
-                  </strong>
-                </div>
-              </div>
-              <div className="backup-actions">
-                <button type="button" onClick={exportBackup}>
-                  <Download size={16} />
-                  导出数据库
-                </button>
-                <button
-                  type="button"
-                  onClick={() => importInputRef.current?.click()}
-                >
-                  <Upload size={16} />
-                  导入并替换
-                </button>
-                <button
-                  type="button"
-                  disabled={imageCacheStats.count === 0}
-                  onClick={clearImageCache}
-                >
-                  <Trash2 size={16} />
-                  清理图片缓存
-                </button>
-                <input
-                  ref={importInputRef}
-                  aria-label="导入 mobilechat 文件"
-                  type="file"
-                  accept=".mobilechat,application/zip,application/vnd.mobilechat+zip"
-                  onChange={importBackup}
-                />
-              </div>
-              {saveError || backupMessage ? (
-                <p className="backup-message">{saveError || backupMessage}</p>
-              ) : null}
-            </section>
-
-            <section className="model-probe-panel" aria-label="模型探测">
-              <header>
-                <div>
-                  <p className="eyebrow">Model probe</p>
-                  <h3>模型探测</h3>
-                </div>
-                <div className="header-actions">
-                  <button type="button" onClick={createModelProbeGroup}>
-                    <Plus size={16} />
-                    新增探测
-                  </button>
-                  <button type="button" onClick={resetModelProbeSettings}>
-                    <RotateCcw size={16} />
-                    还原默认
-                  </button>
-                </div>
-              </header>
-              <div className="profile-layout model-probe-layout">
-                <aside className="profile-directory">
-                  <div className="assistant-config-select">
-                    <span>当前探测</span>
-                    <CustomSelect
-                      label="选择探测"
-                      value={editingModelProbeGroup?.id ?? ""}
-                      options={modelProbeSettings.groups.map((group) => ({
-                        value: group.id,
-                        label: group.name,
-                      }))}
-                      onChange={(nextValue) =>
-                        setModelProbeSettings((current) => ({
-                          ...current,
-                          editingGroupId: nextValue,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="assistant-card-list">
-                    {modelProbeSettings.groups.map((group, index) => (
-                      <div className="sortable-card-row" key={group.id}>
-                        <button
-                          className={`assistant-card ${
-                            group.id === editingModelProbeGroup?.id
-                              ? "selected"
-                              : ""
-                          }`}
-                          type="button"
-                          onClick={() =>
-                            setModelProbeSettings((current) => ({
-                              ...current,
-                              editingGroupId: group.id,
-                            }))
-                          }
-                        >
-                          <span>{group.name}</span>
-                          <small>
-                            {
-                              expandModelProbeSettings(
-                                modelProbeSettings,
-                                group.id,
-                              ).length
-                            }{" "}
-                            candidates
-                          </small>
-                        </button>
-                        <ReorderControls
-                          itemName={`探测 ${group.name}`}
-                          isFirst={index === 0}
-                          isLast={
-                            index === modelProbeSettings.groups.length - 1
-                          }
-                          onMoveUp={() => moveModelProbeGroup(group.id, -1)}
-                          onMoveDown={() => moveModelProbeGroup(group.id, 1)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </aside>
-
-                {editingModelProbeGroup ? (
-                  <section className="profile-detail">
-                    <header className="config-detail-header">
-                      <div className="section-caption">
-                        <Search size={16} />
-                        <span>探测配置</span>
-                      </div>
-                      <div className="header-actions">
-                        <button
-                          className="danger-button"
-                          type="button"
-                          onClick={() =>
-                            deleteModelProbeGroup(editingModelProbeGroup.id)
-                          }
-                        >
-                          <Trash2 size={16} />
-                          删除探测
-                        </button>
-                      </div>
-                    </header>
-                    <div className="reflected-fields">
-                      <label className="detail-field">
-                        <span>模型名</span>
-                        <input
-                          aria-label="探测模型名"
-                          placeholder="例如 grok、gemini、gpt"
-                          value={modelProbeModelNameDraft}
-                          onChange={(event) =>
-                            setModelProbeModelNameDraft(event.target.value)
-                          }
-                          onBlur={commitModelProbeModelNameDraft}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.currentTarget.blur();
-                            }
-                            if (event.key === "Escape") {
-                              setModelProbeModelNameDraft(
-                                editingModelProbeGroup.id,
-                              );
-                              event.currentTarget.blur();
-                            }
-                          }}
-                        />
-                      </label>
-                      <label className="detail-field">
-                        <span>探测名称</span>
-                        <input
-                          aria-label="探测名称"
-                          value={editingModelProbeGroup.name}
-                          onChange={(event) =>
-                            updateModelProbeGroup(
-                              editingModelProbeGroup.id,
-                              (group) => ({
-                                ...group,
-                                name: event.target.value,
-                              }),
-                            )
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <section className="model-bindings">
-                      <header>
-                        <div>
-                          <p className="eyebrow">Rules</p>
-                          <h3>候选生成规则</h3>
-                        </div>
-                      </header>
-                      <div className="probe-rule-list">
-                        {editingModelProbeGroup.rules.map((rule, ruleIndex) => (
-                          <article className="probe-rule-card" key={rule.id}>
-                            <div className="summary-framework-card-header">
-                              <label className="dimension-toggle">
-                                <input
-                                  aria-label={`启用模型探测规则 ${ruleIndex + 1}`}
-                                  checked={rule.enabled}
-                                  type="checkbox"
-                                  onChange={(event) =>
-                                    updateModelProbeRule(
-                                      editingModelProbeGroup.id,
-                                      rule.id,
-                                      (currentRule) => ({
-                                        ...currentRule,
-                                        enabled: event.target.checked,
-                                      }),
-                                    )
-                                  }
-                                />
-                                <span>规则 {ruleIndex + 1}</span>
-                              </label>
-                            </div>
-                            <section
-                              className="probe-dimension-editor"
-                              aria-label={`模型探测规则 ${rule.id} 维度`}
-                            >
-                              <header>
-                                <div>
-                                  <p className="eyebrow">Arguments</p>
-                                  <h4>版本与后缀段</h4>
-                                </div>
-                                <div className="probe-dimension-actions">
-                                  {rule.dimensions.version === undefined ? (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        addModelProbeRuleDimension(
-                                          editingModelProbeGroup.id,
-                                          rule.id,
-                                          "version",
-                                        )
-                                      }
-                                    >
-                                      添加版本区间
-                                    </button>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      addModelProbeRuleDimension(
-                                        editingModelProbeGroup.id,
-                                        rule.id,
-                                        getNextProbeArgKey(rule),
-                                      )
-                                    }
-                                  >
-                                    添加后缀段
-                                  </button>
-                                </div>
-                              </header>
-                              <div className="probe-dimension-list">
-                                {Object.entries(rule.dimensions).length ===
-                                0 ? (
-                                  <p className="summary-framework-note">
-                                    当前规则没有维度，会直接使用模板本身。
-                                  </p>
-                                ) : null}
-                                {Object.entries(rule.dimensions).map(
-                                  ([dimensionKey, dimensionValue]) => {
-                                    if (
-                                      isMinorTenthsDimension(dimensionValue)
-                                    ) {
-                                      return (
-                                        <article
-                                          className="probe-dimension-card probe-version-card"
-                                          key={dimensionKey}
-                                        >
-                                          <div className="summary-framework-card-header probe-version-header">
-                                            <div className="probe-dimension-title">
-                                              <h4>
-                                                {formatProbeDimensionLabel(
-                                                  dimensionKey,
-                                                )}
-                                              </h4>
-                                            </div>
-                                            <div className="probe-card-actions">
-                                              <button
-                                                type="button"
-                                                disabled={
-                                                  dimensionKey === "version"
-                                                }
-                                                onClick={() =>
-                                                  deleteModelProbeRuleDimension(
-                                                    editingModelProbeGroup.id,
-                                                    rule.id,
-                                                    dimensionKey,
-                                                  )
-                                                }
-                                              >
-                                                删除维度
-                                              </button>
-                                            </div>
-                                            <span className="probe-dimension-note">
-                                              大版本 + 小版本区间展开
-                                            </span>
-                                          </div>
-                                          <div className="probe-version-grid">
-                                            <label className="detail-field probe-major-field">
-                                              <span>大版本列表</span>
-                                              <input
-                                                aria-label={`${dimensionKey} 大版本列表`}
-                                                value={formatModelIdListText(
-                                                  dimensionValue.majors,
-                                                )}
-                                                onChange={(event) =>
-                                                  updateModelProbeRuleDimension(
-                                                    editingModelProbeGroup.id,
-                                                    rule.id,
-                                                    dimensionKey,
-                                                    {
-                                                      ...dimensionValue,
-                                                      majors:
-                                                        parseModelIdListText(
-                                                          event.target.value,
-                                                        ),
-                                                    },
-                                                  )
-                                                }
-                                              />
-                                            </label>
-                                            <label className="detail-field number-setting probe-minor-field">
-                                              <span>起始小版本</span>
-                                              <input
-                                                aria-label={`${dimensionKey} 起始小版本`}
-                                                min={0}
-                                                max={9}
-                                                type="number"
-                                                value={dimensionValue.from ?? 0}
-                                                onChange={(event) =>
-                                                  updateModelProbeRuleDimension(
-                                                    editingModelProbeGroup.id,
-                                                    rule.id,
-                                                    dimensionKey,
-                                                    {
-                                                      ...dimensionValue,
-                                                      from: Number(
-                                                        event.target.value,
-                                                      ),
-                                                    },
-                                                  )
-                                                }
-                                              />
-                                            </label>
-                                            <label className="detail-field number-setting probe-minor-field">
-                                              <span>结束小版本</span>
-                                              <input
-                                                aria-label={`${dimensionKey} 结束小版本`}
-                                                min={0}
-                                                max={9}
-                                                type="number"
-                                                value={dimensionValue.to ?? 9}
-                                                onChange={(event) =>
-                                                  updateModelProbeRuleDimension(
-                                                    editingModelProbeGroup.id,
-                                                    rule.id,
-                                                    dimensionKey,
-                                                    {
-                                                      ...dimensionValue,
-                                                      to: Number(
-                                                        event.target.value,
-                                                      ),
-                                                    },
-                                                  )
-                                                }
-                                              />
-                                            </label>
-                                          </div>
-                                          <small className="probe-version-hint">
-                                            例如只写 5，会配合区间生成
-                                            5、5.1、5.2；小版本 0 不追加
-                                            .0。多个大版本可用空格或逗号分隔。
-                                          </small>
-                                        </article>
-                                      );
-                                    }
-
-                                    const values =
-                                      flattenProbeDimensionValues(
-                                        dimensionValue,
-                                      );
-
-                                    return (
-                                      <article
-                                        className="probe-dimension-card probe-suffix-card"
-                                        key={dimensionKey}
-                                      >
-                                        <div className="summary-framework-card-header probe-suffix-header">
-                                          <div className="probe-dimension-title">
-                                            <h4>
-                                              {formatProbeDimensionLabel(
-                                                dimensionKey,
-                                              )}
-                                            </h4>
-                                          </div>
-                                          <div className="probe-card-actions">
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                updateModelProbeRuleDimension(
-                                                  editingModelProbeGroup.id,
-                                                  rule.id,
-                                                  dimensionKey,
-                                                  [...values, ""],
-                                                )
-                                              }
-                                            >
-                                              添加值
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                deleteModelProbeRuleDimension(
-                                                  editingModelProbeGroup.id,
-                                                  rule.id,
-                                                  dimensionKey,
-                                                )
-                                              }
-                                            >
-                                              删除后缀段
-                                            </button>
-                                          </div>
-                                        </div>
-                                        <div className="probe-value-list">
-                                          {values.map((value, valueIndex) => (
-                                            <label
-                                              className="probe-value-row"
-                                              key={`${dimensionKey}-${valueIndex}`}
-                                            >
-                                              <span>词条 {valueIndex + 1}</span>
-                                              <input
-                                                aria-label={`${dimensionKey} 值 ${valueIndex + 1}`}
-                                                placeholder="例如 fast 或 flash-lite；留空表示不追加"
-                                                value={value}
-                                                onChange={(event) => {
-                                                  const nextValues = values.map(
-                                                    (candidate, index) =>
-                                                      index === valueIndex
-                                                        ? event.target.value
-                                                        : candidate,
-                                                  );
-                                                  updateModelProbeRuleDimension(
-                                                    editingModelProbeGroup.id,
-                                                    rule.id,
-                                                    dimensionKey,
-                                                    nextValues,
-                                                  );
-                                                }}
-                                              />
-                                              <button
-                                                type="button"
-                                                onClick={() => {
-                                                  const nextValues =
-                                                    values.filter(
-                                                      (_candidate, index) =>
-                                                        index !== valueIndex,
-                                                    );
-                                                  updateModelProbeRuleDimension(
-                                                    editingModelProbeGroup.id,
-                                                    rule.id,
-                                                    dimensionKey,
-                                                    nextValues,
-                                                  );
-                                                }}
-                                              >
-                                                删除
-                                              </button>
-                                            </label>
-                                          ))}
-                                        </div>
-                                      </article>
-                                    );
-                                  },
-                                )}
-                              </div>
-                            </section>
-                          </article>
-                        ))}
-                      </div>
-                    </section>
-
-                    <section className="model-probe-preview">
-                      <header>
-                        <div>
-                          <p className="eyebrow">Candidates</p>
-                          <h3>候选预览</h3>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={runModelProbe}
-                          disabled={modelProbeRunning}
-                        >
-                          <Search size={16} />
-                          {modelProbeRunning ? "探测中" : "开始探测"}
-                        </button>
-                      </header>
-                      <div className="probe-candidate-summary">
-                        <strong>{modelProbeCandidates.length}</strong>
-                        <span>个候选模型。预览只展开规则，不会发送请求。</span>
-                      </div>
-                      <div className="probe-candidate-list">
-                        {modelProbeCandidates.slice(0, 80).map((candidate) => (
-                          <code key={candidate.modelId}>
-                            {candidate.modelId}
-                          </code>
-                        ))}
-                        {modelProbeCandidates.length > 80 ? (
-                          <span>
-                            还有 {modelProbeCandidates.length - 80} 个未显示
-                          </span>
-                        ) : null}
-                      </div>
-                    </section>
-
-                    <section className="model-probe-results">
-                      <header>
-                        <div>
-                          <p className="eyebrow">Results</p>
-                          <h3>探测结果</h3>
-                        </div>
-                        <strong>
-                          {modelProbeSuccessResults.length}/
-                          {modelProbeResults.length ||
-                            modelProbeCandidates.length}
-                        </strong>
-                      </header>
-                      {modelProbeStatus ? (
-                        <p className="backup-message">{modelProbeStatus}</p>
-                      ) : null}
-                      <div className="probe-result-list">
-                        {modelProbeResults.length === 0 ? (
-                          <p className="summary-framework-note">
-                            尚未执行探测。成功项会提供一键创建模型配置。
-                          </p>
-                        ) : modelProbeSuccessResults.length === 0 ? (
-                          <p className="summary-framework-note">
-                            本轮没有探测到可用模型；失败项已忽略，不在列表中显示。
-                          </p>
-                        ) : (
-                          modelProbeSuccessResults.map((result) => (
-                            <div
-                              className="probe-result-row success"
-                              key={result.id}
-                            >
-                              <span>
-                                <strong>{result.modelId}</strong>
-                                <small>
-                                  {result.protocol} · {result.latencyMs}ms
-                                </small>
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  createModelFromProbeResult(result)
-                                }
-                              >
-                                创建模型
-                              </button>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </section>
-                  </section>
-                ) : null}
-              </div>
-            </section>
-
-            <section className="api-profile-panel" aria-label="连接与模型">
-              <header>
-                <div>
-                  <p className="eyebrow">Connections</p>
-                  <h3>连接与模型</h3>
-                </div>
-                <button type="button" onClick={createApiProfile}>
-                  <Plus size={16} />
-                  新增连接
-                </button>
-              </header>
-
-              <div className="profile-layout">
-                <aside className="profile-directory">
-                  <div className="assistant-config-select">
-                    <span>当前连接</span>
-                    <CustomSelect
-                      label="选择连接"
-                      value={editingApiProfile?.id ?? ""}
-                      options={apiProfiles.map((profile) => ({
-                        value: profile.id,
-                        label: profile.name,
-                      }))}
-                      onChange={(nextValue) => {
-                        const profile = apiProfiles.find(
-                          (candidate) => candidate.id === nextValue,
-                        );
-                        setEditingApiProfileId(nextValue);
-                        setEditingModelId(profile?.models[0]?.id ?? "");
-                      }}
-                    />
-                  </div>
-                  <div className="assistant-card-list">
-                    {apiProfiles.map((profile, index) => (
-                      <div className="sortable-card-row" key={profile.id}>
-                        <button
-                          className={`assistant-card ${
-                            profile.id === editingApiProfile?.id
-                              ? "selected"
-                              : ""
-                          }`}
-                          type="button"
-                          onClick={() => {
-                            setEditingApiProfileId(profile.id);
-                            setEditingModelId(profile.models[0]?.id ?? "");
-                          }}
-                        >
-                          <span>{profile.name}</span>
-                          <small>{profile.models.length} models</small>
-                        </button>
-                        <ReorderControls
-                          itemName={`连接 ${profile.name}`}
-                          isFirst={index === 0}
-                          isLast={index === apiProfiles.length - 1}
-                          onMoveUp={() => moveApiProfile(profile.id, -1)}
-                          onMoveDown={() => moveApiProfile(profile.id, 1)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </aside>
-
-                {editingApiProfile ? (
-                  <section className="profile-detail">
-                    <header className="config-detail-header">
-                      <div className="section-caption">
-                        <Server size={16} />
-                        <span>连接配置</span>
-                      </div>
-                      <div className="header-actions">
-                        <label className="compact-toggle">
-                          <input
-                            aria-label="启用连接"
-                            checked={editingApiProfile.enabled}
-                            type="checkbox"
-                            onChange={(event) =>
-                              updateApiProfileField(
-                                editingApiProfile.id,
-                                "enabled",
-                                event.target.checked,
-                              )
-                            }
-                          />
-                          <span>启用</span>
-                        </label>
-                        <button
-                          className="danger-button"
-                          type="button"
-                          onClick={() => deleteApiProfile(editingApiProfile.id)}
-                        >
-                          <Trash2 size={16} />
-                          删除连接
-                        </button>
-                      </div>
-                    </header>
-                    <div className="reflected-fields">
-                      <label className="detail-field">
-                        <span>连接名称</span>
-                        <input
-                          aria-label="连接名称"
-                          value={editingApiProfile.name}
-                          onChange={(event) =>
-                            updateApiProfileField(
-                              editingApiProfile.id,
-                              "name",
-                              event.target.value,
-                            )
-                          }
-                        />
-                      </label>
-                      <div className="detail-field">
-                        <span>协议</span>
-                        <CustomSelect
-                          label="协议"
-                          value={editingApiProfile.protocol}
-                          options={[
-                            {
-                              value: "openai-responses",
-                              label: "OpenAI-compatible Responses",
-                            },
-                            {
-                              value: "openai-chat-completions",
-                              label: "OpenAI-compatible Chat Completions",
-                            },
-                          ]}
-                          onChange={(nextValue) =>
-                            updateApiProfileField(
-                              editingApiProfile.id,
-                              "protocol",
-                              nextValue as ApiProtocol,
-                            )
-                          }
-                        />
-                      </div>
-                      <label className="detail-field">
-                        <span>Base URL</span>
-                        <input
-                          aria-label="Base URL"
-                          value={editingApiProfile.baseUrl}
-                          onChange={(event) =>
-                            updateApiProfileField(
-                              editingApiProfile.id,
-                              "baseUrl",
-                              event.target.value,
-                            )
-                          }
-                        />
-                      </label>
-                      <label className="detail-field">
-                        <span>
-                          <KeyRound size={14} />
-                          API Key
-                        </span>
-                        <div className="secret-field">
-                          <input
-                            aria-label="API Key"
-                            type={apiKeyVisible ? "text" : "password"}
-                            value={editingApiProfile.apiKey}
-                            onChange={(event) =>
-                              updateApiProfileField(
-                                editingApiProfile.id,
-                                "apiKey",
-                                event.target.value,
-                              )
-                            }
-                          />
-                          <button
-                            type="button"
-                            aria-label={apiKeyVisible ? "隐藏密钥" : "显示密钥"}
-                            onClick={() =>
-                              setApiKeyVisible((visible) => !visible)
-                            }
-                          >
-                            {apiKeyVisible ? (
-                              <EyeOff size={16} />
-                            ) : (
-                              <Eye size={16} />
-                            )}
-                          </button>
-                        </div>
-                      </label>
-                      <label className="detail-field">
-                        <span>连接描述</span>
-                        <textarea
-                          aria-label="连接描述"
-                          rows={3}
-                          value={editingApiProfile.description}
-                          onChange={(event) =>
-                            updateApiProfileField(
-                              editingApiProfile.id,
-                              "description",
-                              event.target.value,
-                            )
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <div className="model-editor-header">
-                      <div className="section-caption">
-                        <Database size={16} />
-                        <span>模型配置</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => createModel(editingApiProfile.id)}
-                      >
-                        <Plus size={16} />
-                        新增模型
-                      </button>
-                    </div>
-
-                    <div className="assistant-config-select">
-                      <span>当前模型</span>
-                      <CustomSelect
-                        label="选择模型配置"
-                        value={editingModel?.id ?? ""}
-                        options={editingApiProfile.models.map((model) => ({
-                          value: model.id,
-                          label: model.name,
-                        }))}
-                        onChange={setEditingModelId}
-                      />
-                    </div>
-
-                    <div className="model-card-list" aria-label="模型配置列表">
-                      {editingApiProfile.models.map((model, index) => (
-                        <div className="sortable-card-row" key={model.id}>
-                          <button
-                            className={`model-card ${
-                              model.id === editingModel?.id ? "selected" : ""
-                            }`}
-                            type="button"
-                            aria-label={`编辑模型 ${model.name}`}
-                            onClick={() => setEditingModelId(model.id)}
-                          >
-                            <span>{model.name}</span>
-                            <small>{model.id}</small>
-                            <small>{model.enabled ? "已启用" : "已停用"}</small>
-                          </button>
-                          <ReorderControls
-                            itemName={`模型 ${model.name}`}
-                            isFirst={index === 0}
-                            isLast={
-                              index === editingApiProfile.models.length - 1
-                            }
-                            onMoveUp={() =>
-                              moveModel(editingApiProfile.id, model.id, -1)
-                            }
-                            onMoveDown={() =>
-                              moveModel(editingApiProfile.id, model.id, 1)
-                            }
-                          />
-                        </div>
-                      ))}
-                    </div>
-
-                    {editingModel ? (
-                      <>
-                        <header className="config-detail-header compact">
-                          <div className="section-caption">
-                            <span>当前模型详情</span>
-                          </div>
-                          <div className="header-actions">
-                            <label className="compact-toggle">
+                          </header>
+                          <div className="reflected-fields">
+                            <label className="detail-field">
+                              <span>模型 ID / slug</span>
                               <input
-                                aria-label="启用模型"
-                                checked={editingModel.enabled}
-                                type="checkbox"
+                                aria-label="模型 ID"
+                                value={editingModel.id}
                                 onChange={(event) =>
                                   updateModelField(
                                     editingApiProfile.id,
                                     editingModel.id,
-                                    "enabled",
+                                    "id",
+                                    event.target.value,
+                                  )
+                                }
+                              />
+                            </label>
+                            <label className="detail-field">
+                              <span>显示名称</span>
+                              <input
+                                aria-label="模型名称"
+                                value={editingModel.name}
+                                onChange={(event) =>
+                                  updateModelField(
+                                    editingApiProfile.id,
+                                    editingModel.id,
+                                    "name",
+                                    event.target.value,
+                                  )
+                                }
+                              />
+                            </label>
+                          </div>
+                        </>
+                      ) : null}
+                    </section>
+                  ) : null}
+                </div>
+              </section>
+
+              <section
+                className="settings-layout"
+                data-settings-section="assistants"
+              >
+                <aside className="assistant-directory" aria-label="助手列表">
+                  <div className="directory-header">
+                    <div>
+                      <p className="eyebrow">Assistants</p>
+                      <h3>助手</h3>
+                    </div>
+                    <button type="button" onClick={createAssistant}>
+                      <Plus size={16} />
+                      新增
+                    </button>
+                  </div>
+
+                  <div className="assistant-config-select">
+                    <span>当前编辑</span>
+                    <CustomSelect
+                      label="设置中选择助手"
+                      value={editingAssistant.id}
+                      options={assistants.map((assistant) => ({
+                        value: assistant.id,
+                        label: assistant.name,
+                      }))}
+                      onChange={setEditingAssistantId}
+                    />
+                  </div>
+
+                  <div className="assistant-kind-groups">
+                    {[
+                      {
+                        title: "聊天助手",
+                        description: "用于前台对话，可绑定上下文配置。",
+                        items: chatAssistants,
+                      },
+                      {
+                        title: "功能助手",
+                        description: "用于上下文总结等内置语义任务。",
+                        items: utilityAssistants,
+                      },
+                    ].map((section) => (
+                      <section
+                        className="assistant-kind-group"
+                        aria-label={`${section.title}列表`}
+                        key={section.title}
+                      >
+                        <header className="assistant-kind-header">
+                          <div>
+                            <span>{section.title}</span>
+                            <small>{section.description}</small>
+                          </div>
+                          <strong>{section.items.length}</strong>
+                        </header>
+                        <div className="assistant-card-list">
+                          {section.items.map((assistant, index) => {
+                            const assistantModelStrategy =
+                              getUtilityAssistantModelStrategy(assistant);
+                            const assistantResolvedDefaultModel =
+                              assistantModelStrategy === "fixed"
+                                ? resolveAssistantDefaultModel(
+                                    assistant,
+                                    apiProfiles,
+                                  )
+                                : undefined;
+                            const assistantModelLabel =
+                              assistant.kind === "utility" &&
+                              assistantModelStrategy === "follow-conversation"
+                                ? "跟随对话模型"
+                                : assistantResolvedDefaultModel
+                                  ? assistantResolvedDefaultModel.model.name
+                                  : "未绑定模型";
+
+                            return (
+                              <div
+                                className="sortable-card-row"
+                                key={assistant.id}
+                              >
+                                <button
+                                  className={`assistant-card ${
+                                    assistant.id === editingAssistant.id
+                                      ? "selected"
+                                      : ""
+                                  }`}
+                                  type="button"
+                                  onClick={() =>
+                                    setEditingAssistantId(assistant.id)
+                                  }
+                                >
+                                  <span>{assistant.name}</span>
+                                  <small>{assistantModelLabel}</small>
+                                </button>
+                                <ReorderControls
+                                  itemName={`${section.title} ${assistant.name}`}
+                                  isFirst={index === 0}
+                                  isLast={index === section.items.length - 1}
+                                  onMoveUp={() =>
+                                    moveAssistant(assistant.id, -1)
+                                  }
+                                  onMoveDown={() =>
+                                    moveAssistant(assistant.id, 1)
+                                  }
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                </aside>
+
+                <section className="assistant-detail" aria-label="助手详情">
+                  <header>
+                    <div>
+                      <p className="eyebrow">Assistant details</p>
+                      <h3>{editingAssistant.name}</h3>
+                    </div>
+                    <div className="header-actions">
+                      <label className="compact-toggle">
+                        <input
+                          aria-label="启用助手"
+                          checked={editingAssistant.enabled}
+                          type="checkbox"
+                          onChange={(event) =>
+                            updateAssistantField(
+                              editingAssistant.id,
+                              "enabled",
+                              event.target.checked,
+                            )
+                          }
+                        />
+                        <span>启用</span>
+                      </label>
+                      <button
+                        className="danger-button"
+                        type="button"
+                        onClick={() => deleteAssistant(editingAssistant.id)}
+                      >
+                        <Trash2 size={16} />
+                        删除助手
+                      </button>
+                    </div>
+                  </header>
+
+                  <div className="reflected-fields">
+                    {assistantFields
+                      .filter((field) => field.key !== "enabled")
+                      .map((field) => {
+                        const value = editingAssistant[field.key];
+
+                        if (field.control === "checkbox") {
+                          return (
+                            <label
+                              className="detail-field checkbox-field"
+                              key={field.key}
+                            >
+                              <span>{field.label}</span>
+                              <input
+                                aria-label={field.label}
+                                checked={Boolean(value)}
+                                type="checkbox"
+                                onChange={(event) =>
+                                  updateAssistantField(
+                                    editingAssistant.id,
+                                    field.key,
                                     event.target.checked,
                                   )
                                 }
                               />
-                              <span>启用</span>
                             </label>
-                            <button
-                              className="danger-button"
-                              type="button"
-                              onClick={() =>
-                                deleteModel(
-                                  editingApiProfile.id,
-                                  editingModel.id,
-                                )
-                              }
-                            >
-                              <Trash2 size={16} />
-                              删除模型
-                            </button>
-                          </div>
-                        </header>
-                        <div className="reflected-fields">
-                          <label className="detail-field">
-                            <span>模型 ID / slug</span>
-                            <input
-                              aria-label="模型 ID"
-                              value={editingModel.id}
-                              onChange={(event) =>
-                                updateModelField(
-                                  editingApiProfile.id,
-                                  editingModel.id,
-                                  "id",
-                                  event.target.value,
-                                )
-                              }
-                            />
-                          </label>
-                          <label className="detail-field">
-                            <span>显示名称</span>
-                            <input
-                              aria-label="模型名称"
-                              value={editingModel.name}
-                              onChange={(event) =>
-                                updateModelField(
-                                  editingApiProfile.id,
-                                  editingModel.id,
-                                  "name",
-                                  event.target.value,
-                                )
-                              }
-                            />
-                          </label>
-                        </div>
-                      </>
-                    ) : null}
-                  </section>
-                ) : null}
-              </div>
-            </section>
+                          );
+                        }
 
-            <section className="settings-layout">
-              <aside className="assistant-directory" aria-label="助手列表">
-                <div className="directory-header">
-                  <div>
-                    <p className="eyebrow">Assistants</p>
-                    <h3>助手</h3>
-                  </div>
-                  <button type="button" onClick={createAssistant}>
-                    <Plus size={16} />
-                    新增
-                  </button>
-                </div>
-
-                <div className="assistant-config-select">
-                  <span>当前编辑</span>
-                  <CustomSelect
-                    label="设置中选择助手"
-                    value={editingAssistant.id}
-                    options={assistants.map((assistant) => ({
-                      value: assistant.id,
-                      label: assistant.name,
-                    }))}
-                    onChange={setEditingAssistantId}
-                  />
-                </div>
-
-                <div className="assistant-kind-groups">
-                  {[
-                    {
-                      title: "聊天助手",
-                      description: "用于前台对话，可绑定上下文配置。",
-                      items: chatAssistants,
-                    },
-                    {
-                      title: "功能助手",
-                      description: "用于上下文总结等内置语义任务。",
-                      items: utilityAssistants,
-                    },
-                  ].map((section) => (
-                    <section
-                      className="assistant-kind-group"
-                      aria-label={`${section.title}列表`}
-                      key={section.title}
-                    >
-                      <header className="assistant-kind-header">
-                        <div>
-                          <span>{section.title}</span>
-                          <small>{section.description}</small>
-                        </div>
-                        <strong>{section.items.length}</strong>
-                      </header>
-                      <div className="assistant-card-list">
-                        {section.items.map((assistant, index) => {
-                          const assistantModelStrategy =
-                            getUtilityAssistantModelStrategy(assistant);
-                          const assistantResolvedDefaultModel =
-                            assistantModelStrategy === "fixed"
-                              ? resolveAssistantDefaultModel(
-                                  assistant,
-                                  apiProfiles,
-                                )
-                              : undefined;
-                          const assistantModelLabel =
-                            assistant.kind === "utility" &&
-                            assistantModelStrategy === "follow-conversation"
-                              ? "跟随对话模型"
-                              : assistantResolvedDefaultModel
-                                ? assistantResolvedDefaultModel.model.name
-                                : "未绑定模型";
-
+                        if (field.control === "select") {
                           return (
-                            <div
-                              className="sortable-card-row"
-                              key={assistant.id}
-                            >
-                              <button
-                                className={`assistant-card ${
-                                  assistant.id === editingAssistant.id
-                                    ? "selected"
-                                    : ""
-                                }`}
-                                type="button"
-                                onClick={() =>
-                                  setEditingAssistantId(assistant.id)
+                            <div className="detail-field" key={field.key}>
+                              <span>{field.label}</span>
+                              <CustomSelect
+                                label={field.label}
+                                value={String(value)}
+                                options={
+                                  field.options?.map((option) => ({
+                                    value: option.value,
+                                    label: option.label,
+                                  })) ?? []
                                 }
-                              >
-                                <span>{assistant.name}</span>
-                                <small>{assistantModelLabel}</small>
-                              </button>
-                              <ReorderControls
-                                itemName={`${section.title} ${assistant.name}`}
-                                isFirst={index === 0}
-                                isLast={index === section.items.length - 1}
-                                onMoveUp={() => moveAssistant(assistant.id, -1)}
-                                onMoveDown={() =>
-                                  moveAssistant(assistant.id, 1)
+                                onChange={(nextValue) =>
+                                  updateAssistantField(
+                                    editingAssistant.id,
+                                    field.key,
+                                    nextValue,
+                                  )
                                 }
                               />
+                              {field.helper ? (
+                                <small>{field.helper}</small>
+                              ) : null}
                             </div>
+                          );
+                        }
+
+                        if (field.control === "textarea") {
+                          return (
+                            <label className="detail-field" key={field.key}>
+                              <span>{field.label}</span>
+                              <textarea
+                                aria-label={field.label}
+                                placeholder={field.placeholder}
+                                rows={field.key === "prompt" ? 4 : 3}
+                                value={String(value)}
+                                onChange={(event) =>
+                                  updateAssistantField(
+                                    editingAssistant.id,
+                                    field.key,
+                                    event.target.value,
+                                  )
+                                }
+                              />
+                              {field.helper ? (
+                                <small>{field.helper}</small>
+                              ) : null}
+                            </label>
+                          );
+                        }
+
+                        return (
+                          <label className="detail-field" key={field.key}>
+                            <span>{field.label}</span>
+                            <input
+                              aria-label={field.label}
+                              placeholder={field.placeholder}
+                              value={String(value)}
+                              onChange={(event) =>
+                                updateAssistantField(
+                                  editingAssistant.id,
+                                  field.key,
+                                  event.target.value,
+                                )
+                              }
+                            />
+                            {field.helper ? (
+                              <small>{field.helper}</small>
+                            ) : null}
+                          </label>
+                        );
+                      })}
+                  </div>
+
+                  {editingAssistant.kind === "chat" ? (
+                    <section
+                      className="model-bindings"
+                      aria-label="助手上下文配置设置"
+                    >
+                      <header>
+                        <div>
+                          <p className="eyebrow">Context config</p>
+                          <h3>助手上下文配置</h3>
+                        </div>
+                      </header>
+                      <div className="assistant-config-select">
+                        <span>当前助手使用的上下文配置</span>
+                        <CustomSelect
+                          label="助手上下文配置"
+                          value={
+                            resolveContextProfile(
+                              contextProfiles,
+                              editingAssistant.contextProfileId,
+                            ).id
+                          }
+                          options={contextProfiles.map((profile) => ({
+                            value: profile.id,
+                            label: profile.name,
+                          }))}
+                          onChange={(nextValue) =>
+                            updateAssistantContextProfile(
+                              editingAssistant.id,
+                              nextValue,
+                            )
+                          }
+                        />
+                        <small>
+                          普通聊天会注入该上下文配置；主动总结时，全局总结助手也会按它执行分类。
+                        </small>
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {editingAssistant.kind === "utility" ? (
+                    <section
+                      className="model-bindings"
+                      aria-label="功能助手模型策略"
+                    >
+                      <header>
+                        <div>
+                          <p className="eyebrow">Model strategy</p>
+                          <h3>功能助手模型策略</h3>
+                        </div>
+                      </header>
+                      <div className="assistant-config-select">
+                        <span>模型策略</span>
+                        <CustomSelect
+                          label="功能助手模型策略"
+                          value={editingAssistantModelStrategy}
+                          options={[
+                            {
+                              value: "follow-conversation",
+                              label: "跟随当前对话模型",
+                            },
+                            {
+                              value: "fixed",
+                              label: "指定模型",
+                            },
+                          ]}
+                          onChange={(nextValue) =>
+                            updateUtilityAssistantModelStrategy(
+                              editingAssistant.id,
+                              nextValue as UtilityAssistantModelStrategy,
+                            )
+                          }
+                        />
+                        <small>
+                          跟随当前对话模型时，该功能助手不需要单独维护允许模型；指定模型后才启用下方模型配置。
+                        </small>
+                      </div>
+                      <div className="assistant-config-select">
+                        <span>当前执行模型</span>
+                        <strong>
+                          {editingAssistantModelStrategy === "fixed"
+                            ? editingAssistantDefaultResolvedModel
+                              ? `${editingAssistantDefaultResolvedModel.apiProfile.name} / ${editingAssistantDefaultResolvedModel.model.name}`
+                              : "未指定可用模型"
+                            : activeResolvedModel
+                              ? `${activeResolvedModel.apiProfile.name} / ${activeResolvedModel.model.name}`
+                              : "当前对话没有可用模型"}
+                        </strong>
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {editingAssistant.kind === "chat" ||
+                  editingAssistantModelStrategy === "fixed" ? (
+                    <section
+                      className="model-bindings"
+                      aria-label="助手允许模型"
+                    >
+                      <header>
+                        <div>
+                          <p className="eyebrow">Model access</p>
+                          <h3>助手允许模型</h3>
+                        </div>
+                      </header>
+                      <div className="assistant-config-select">
+                        <span>该助手默认模型</span>
+                        <CustomSelect
+                          label="该助手默认模型"
+                          value={
+                            editingAssistantDefaultResolvedModel?.key ?? ""
+                          }
+                          options={editingAssistantResolvedModelOptions.map(
+                            (option) => ({
+                              value: option.key,
+                              label: `${option.apiProfile.name} / ${option.model.name}`,
+                            }),
+                          )}
+                          disabled={
+                            editingAssistantResolvedModelOptions.length === 0
+                          }
+                          onChange={(nextValue) =>
+                            setAssistantDefaultModel(
+                              editingAssistant.id,
+                              nextValue,
+                            )
+                          }
+                        />
+                        <small>
+                          默认模型只能从下方已勾选且仍可用的允许模型中选择。
+                        </small>
+                      </div>
+
+                      <div className="binding-list">
+                        {allModelOptions.map((option) => {
+                          const checked = editingAssistant.modelBindings.some(
+                            (binding) => modelRefKey(binding) === option.key,
+                          );
+                          return (
+                            <label className="binding-row" key={option.key}>
+                              <input
+                                aria-label={`允许模型 ${option.apiProfile.name} ${option.model.name}`}
+                                checked={checked}
+                                type="checkbox"
+                                onChange={(event) =>
+                                  toggleAssistantModelBinding(
+                                    editingAssistant.id,
+                                    option,
+                                    event.target.checked,
+                                  )
+                                }
+                              />
+                              <span>
+                                <strong>
+                                  {option.apiProfile.name} / {option.model.name}
+                                </strong>
+                              </span>
+                            </label>
                           );
                         })}
                       </div>
                     </section>
-                  ))}
-                </div>
-              </aside>
-
-              <section className="assistant-detail" aria-label="助手详情">
-                <header>
-                  <div>
-                    <p className="eyebrow">Assistant details</p>
-                    <h3>{editingAssistant.name}</h3>
-                  </div>
-                  <div className="header-actions">
-                    <label className="compact-toggle">
-                      <input
-                        aria-label="启用助手"
-                        checked={editingAssistant.enabled}
-                        type="checkbox"
-                        onChange={(event) =>
-                          updateAssistantField(
-                            editingAssistant.id,
-                            "enabled",
-                            event.target.checked,
-                          )
-                        }
-                      />
-                      <span>启用</span>
-                    </label>
-                    <button
-                      className="danger-button"
-                      type="button"
-                      onClick={() => deleteAssistant(editingAssistant.id)}
-                    >
-                      <Trash2 size={16} />
-                      删除助手
-                    </button>
-                  </div>
-                </header>
-
-                <div className="reflected-fields">
-                  {assistantFields
-                    .filter((field) => field.key !== "enabled")
-                    .map((field) => {
-                      const value = editingAssistant[field.key];
-
-                      if (field.control === "checkbox") {
-                        return (
-                          <label
-                            className="detail-field checkbox-field"
-                            key={field.key}
-                          >
-                            <span>{field.label}</span>
-                            <input
-                              aria-label={field.label}
-                              checked={Boolean(value)}
-                              type="checkbox"
-                              onChange={(event) =>
-                                updateAssistantField(
-                                  editingAssistant.id,
-                                  field.key,
-                                  event.target.checked,
-                                )
-                              }
-                            />
-                          </label>
-                        );
-                      }
-
-                      if (field.control === "select") {
-                        return (
-                          <div className="detail-field" key={field.key}>
-                            <span>{field.label}</span>
-                            <CustomSelect
-                              label={field.label}
-                              value={String(value)}
-                              options={
-                                field.options?.map((option) => ({
-                                  value: option.value,
-                                  label: option.label,
-                                })) ?? []
-                              }
-                              onChange={(nextValue) =>
-                                updateAssistantField(
-                                  editingAssistant.id,
-                                  field.key,
-                                  nextValue,
-                                )
-                              }
-                            />
-                            {field.helper ? (
-                              <small>{field.helper}</small>
-                            ) : null}
-                          </div>
-                        );
-                      }
-
-                      if (field.control === "textarea") {
-                        return (
-                          <label className="detail-field" key={field.key}>
-                            <span>{field.label}</span>
-                            <textarea
-                              aria-label={field.label}
-                              placeholder={field.placeholder}
-                              rows={field.key === "prompt" ? 4 : 3}
-                              value={String(value)}
-                              onChange={(event) =>
-                                updateAssistantField(
-                                  editingAssistant.id,
-                                  field.key,
-                                  event.target.value,
-                                )
-                              }
-                            />
-                            {field.helper ? (
-                              <small>{field.helper}</small>
-                            ) : null}
-                          </label>
-                        );
-                      }
-
-                      return (
-                        <label className="detail-field" key={field.key}>
-                          <span>{field.label}</span>
-                          <input
-                            aria-label={field.label}
-                            placeholder={field.placeholder}
-                            value={String(value)}
-                            onChange={(event) =>
-                              updateAssistantField(
-                                editingAssistant.id,
-                                field.key,
-                                event.target.value,
-                              )
-                            }
-                          />
-                          {field.helper ? <small>{field.helper}</small> : null}
-                        </label>
-                      );
-                    })}
-                </div>
-
-                {editingAssistant.kind === "chat" ? (
-                  <section
-                    className="model-bindings"
-                    aria-label="助手上下文配置设置"
-                  >
-                    <header>
-                      <div>
-                        <p className="eyebrow">Context config</p>
-                        <h3>助手上下文配置</h3>
-                      </div>
-                    </header>
-                    <div className="assistant-config-select">
-                      <span>当前助手使用的上下文配置</span>
-                      <CustomSelect
-                        label="助手上下文配置"
-                        value={
-                          resolveContextProfile(
-                            contextProfiles,
-                            editingAssistant.contextProfileId,
-                          ).id
-                        }
-                        options={contextProfiles.map((profile) => ({
-                          value: profile.id,
-                          label: profile.name,
-                        }))}
-                        onChange={(nextValue) =>
-                          updateAssistantContextProfile(
-                            editingAssistant.id,
-                            nextValue,
-                          )
-                        }
-                      />
-                      <small>
-                        普通聊天会注入该上下文配置；主动总结时，全局总结助手也会按它执行分类。
-                      </small>
-                    </div>
-                  </section>
-                ) : null}
-
-                {editingAssistant.kind === "utility" ? (
-                  <section
-                    className="model-bindings"
-                    aria-label="功能助手模型策略"
-                  >
-                    <header>
-                      <div>
-                        <p className="eyebrow">Model strategy</p>
-                        <h3>功能助手模型策略</h3>
-                      </div>
-                    </header>
-                    <div className="assistant-config-select">
-                      <span>模型策略</span>
-                      <CustomSelect
-                        label="功能助手模型策略"
-                        value={editingAssistantModelStrategy}
-                        options={[
-                          {
-                            value: "follow-conversation",
-                            label: "跟随当前对话模型",
-                          },
-                          {
-                            value: "fixed",
-                            label: "指定模型",
-                          },
-                        ]}
-                        onChange={(nextValue) =>
-                          updateUtilityAssistantModelStrategy(
-                            editingAssistant.id,
-                            nextValue as UtilityAssistantModelStrategy,
-                          )
-                        }
-                      />
-                      <small>
-                        跟随当前对话模型时，该功能助手不需要单独维护允许模型；指定模型后才启用下方模型配置。
-                      </small>
-                    </div>
-                    <div className="assistant-config-select">
-                      <span>当前执行模型</span>
-                      <strong>
-                        {editingAssistantModelStrategy === "fixed"
-                          ? editingAssistantDefaultResolvedModel
-                            ? `${editingAssistantDefaultResolvedModel.apiProfile.name} / ${editingAssistantDefaultResolvedModel.model.name}`
-                            : "未指定可用模型"
-                          : activeResolvedModel
-                            ? `${activeResolvedModel.apiProfile.name} / ${activeResolvedModel.model.name}`
-                            : "当前对话没有可用模型"}
-                      </strong>
-                    </div>
-                  </section>
-                ) : null}
-
-                {editingAssistant.kind === "chat" ||
-                editingAssistantModelStrategy === "fixed" ? (
-                  <section className="model-bindings" aria-label="助手允许模型">
-                    <header>
-                      <div>
-                        <p className="eyebrow">Model access</p>
-                        <h3>助手允许模型</h3>
-                      </div>
-                    </header>
-                    <div className="assistant-config-select">
-                      <span>该助手默认模型</span>
-                      <CustomSelect
-                        label="该助手默认模型"
-                        value={editingAssistantDefaultResolvedModel?.key ?? ""}
-                        options={editingAssistantResolvedModelOptions.map(
-                          (option) => ({
-                            value: option.key,
-                            label: `${option.apiProfile.name} / ${option.model.name}`,
-                          }),
-                        )}
-                        disabled={
-                          editingAssistantResolvedModelOptions.length === 0
-                        }
-                        onChange={(nextValue) =>
-                          setAssistantDefaultModel(
-                            editingAssistant.id,
-                            nextValue,
-                          )
-                        }
-                      />
-                      <small>
-                        默认模型只能从下方已勾选且仍可用的允许模型中选择。
-                      </small>
-                    </div>
-
-                    <div className="binding-list">
-                      {allModelOptions.map((option) => {
-                        const checked = editingAssistant.modelBindings.some(
-                          (binding) => modelRefKey(binding) === option.key,
-                        );
-                        return (
-                          <label className="binding-row" key={option.key}>
-                            <input
-                              aria-label={`允许模型 ${option.apiProfile.name} ${option.model.name}`}
-                              checked={checked}
-                              type="checkbox"
-                              onChange={(event) =>
-                                toggleAssistantModelBinding(
-                                  editingAssistant.id,
-                                  option,
-                                  event.target.checked,
-                                )
-                              }
-                            />
-                            <span>
-                              <strong>
-                                {option.apiProfile.name} / {option.model.name}
-                              </strong>
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </section>
-                ) : null}
+                  ) : null}
+                </section>
               </section>
-            </section>
+            </div>
           </section>
         </div>
       ) : null}

@@ -1126,14 +1126,59 @@ button:disabled {
   box-shadow: var(--shadow);
   display: grid;
   gap: 18px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  height: 100svh;
+  height: 100dvh;
   margin-left: auto;
-  min-height: 100svh;
-  min-height: 100dvh;
-  overflow: auto;
+  min-height: 0;
+  overflow: hidden;
   padding: 18px 18px max(18px, env(safe-area-inset-bottom));
   position: relative;
   width: min(960px, 100%);
   z-index: 1;
+}
+
+.settings-scroll-body {
+  align-content: start;
+  display: grid;
+  gap: 18px;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+  scrollbar-gutter: stable;
+}
+
+.settings-section-nav {
+  align-items: center;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-start;
+  justify-self: stretch;
+  max-width: 100%;
+  padding: 6px;
+  z-index: 4;
+}
+
+.settings-section-nav button {
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--text-muted);
+  padding: 7px 10px;
+}
+
+.settings-section-nav button.active {
+  background: var(--accent-soft);
+  color: var(--text-strong);
+}
+
+.settings-section-nav button:hover {
+  color: var(--text-strong);
 }
 
 .data-inspector-backdrop {
@@ -2653,6 +2698,23 @@ button:disabled {
 .mobile-layout .settings-panel {
   border-left: 0;
   width: 100%;
+}
+
+.mobile-layout .settings-section-nav {
+  border-radius: 14px;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  justify-self: stretch;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.mobile-layout .settings-section-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-layout .settings-section-nav button {
+  flex: 0 0 auto;
 }
 
 .mobile-layout .settings-summary,
