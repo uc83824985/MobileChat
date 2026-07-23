@@ -84,6 +84,8 @@ export type MessageImagePart = {
   referenceLabel?: string;
 };
 
+export type MessageTurnTag = "联网" | "选项" | "图片";
+
 export type LocalBlobRecord = {
   id: string;
   kind: "image";
@@ -119,6 +121,7 @@ export type Message = {
   providerResponseId?: string;
   usage?: ResponseUsage;
   imageParts?: MessageImagePart[];
+  turnTags?: MessageTurnTag[];
 };
 
 export type AssistantKind = "chat" | "utility";
@@ -236,6 +239,7 @@ export type AppSettings = {
   streamingEnabled: boolean;
   composerSubmitMode: ComposerSubmitMode;
   messageQuoteTemplate: string;
+  choiceBlockMaxChoices: number;
   contextSummaryRawTailMessages: number;
   contextSummaryAutoMessageInterval: number;
   debugEnabled: boolean;
@@ -280,6 +284,7 @@ export const DEFAULT_CONTEXT_PROFILE_ID = "general-context";
 export const DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES = 8;
 export const DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL = 8;
 export const DEFAULT_CONTEXT_PROFILE_SUMMARY_MAX_CHARS = 6000;
+export const DEFAULT_CHOICE_BLOCK_MAX_CHOICES = 8;
 export const LEGACY_MESSAGE_QUOTE_TEMPLATE = "引用内容：\n{content}";
 export const DEFAULT_MESSAGE_QUOTE_TEMPLATE = "“{content}”：";
 
@@ -294,6 +299,21 @@ export const normalizeMessageQuoteTemplate = (template: unknown) => {
 
   return template;
 };
+
+export const normalizeChoiceBlockMaxChoices = (value: unknown) => {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : DEFAULT_CHOICE_BLOCK_MAX_CHOICES;
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_CHOICE_BLOCK_MAX_CHOICES;
+  }
+
+  return Math.min(20, Math.max(1, Math.round(parsed)));
+};
+
 export const DEFAULT_MODEL_PROBE_GROUP_ID = "grok";
 export const DEFAULT_MODEL_REF: ModelRef = {
   apiProfileId: DEFAULT_PROFILE_ID,
@@ -601,6 +621,7 @@ export const createInitialSettings = (
   streamingEnabled: true,
   composerSubmitMode: "enter-send",
   messageQuoteTemplate: DEFAULT_MESSAGE_QUOTE_TEMPLATE,
+  choiceBlockMaxChoices: DEFAULT_CHOICE_BLOCK_MAX_CHOICES,
   contextSummaryRawTailMessages: DEFAULT_CONTEXT_SUMMARY_RAW_TAIL_MESSAGES,
   contextSummaryAutoMessageInterval:
     DEFAULT_CONTEXT_SUMMARY_AUTO_MESSAGE_INTERVAL,

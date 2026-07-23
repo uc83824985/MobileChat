@@ -728,6 +728,16 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("发送"));
 
     expect(await screen.findByText("searched once")).toBeInTheDocument();
+    const searchedUserArticle = screen
+      .getByText("需要搜索")
+      .closest("article") as HTMLElement;
+    const searchedAssistantArticle = screen
+      .getByText("searched once")
+      .closest("article") as HTMLElement;
+    expect(within(searchedUserArticle).getByText("联网")).toBeInTheDocument();
+    expect(
+      within(searchedAssistantArticle).getByText("联网"),
+    ).toBeInTheDocument();
     expect(
       JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).tools,
     ).toEqual([{ type: "web_search" }]);
@@ -742,9 +752,162 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("发送"));
 
     expect(await screen.findByText("plain once")).toBeInTheDocument();
+    const plainAssistantArticle = screen
+      .getByText("plain once")
+      .closest("article") as HTMLElement;
+    expect(within(plainAssistantArticle).queryByText("联网")).toBeNull();
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)).tools).toBe(
       undefined,
     );
+  });
+
+  it("renders assistant choice blocks as searchable composer insert options", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output_text: `这里是可选方向。\n\n\`\`\`mobilechat-choice\n{"type":"mobilechat.choice.v1","title":"探索方向","description":"用于后续回溯备选项","choices":[{"id":"A","label":"世界观","description":"整理背景与势力","insertText":"选择 A：世界观"},{"id":"B","label":"人物线","description":"围绕个性与关系继续","insertText":"选择 B：人物线"}]}\n\`\`\``,
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    configureApiProfile({ apiKey: "test-key" });
+
+    fireEvent.click(screen.getByText("设置"));
+    fireEvent.change(screen.getByLabelText("选项最大数量"), {
+      target: { value: "3" },
+    });
+    fireEvent.click(screen.getByLabelText("关闭设置"));
+
+    fireEvent.click(screen.getByLabelText("本轮选项"));
+    expect(screen.getByLabelText("本轮选项")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "列出几个方向" },
+    });
+    expect(screen.getByText(/不联网 · 仅文本 · 选项/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    expect(await screen.findByText("这里是可选方向。")).toBeInTheDocument();
+    const choiceUserArticle = screen
+      .getByText("列出几个方向")
+      .closest("article") as HTMLElement;
+    const choiceAssistantArticle = screen
+      .getByText("这里是可选方向。")
+      .closest("article") as HTMLElement;
+    expect(within(choiceUserArticle).getByText("选项")).toBeInTheDocument();
+    expect(
+      within(choiceAssistantArticle).getByText("选项"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("探索方向")).toBeInTheDocument();
+    expect(screen.getByText("人物线")).toBeInTheDocument();
+    expect(screen.queryByText(/mobilechat.choice.v1/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("本轮选项")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(
+      JSON.stringify(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))),
+    ).toContain("mobilechat-choice");
+    expect(
+      JSON.stringify(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))),
+    ).toContain("最多 3 个");
+    expect(screen.getByText("列出几个方向")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "收起选项 探索方向" }));
+    expect(screen.getByText("已收起 2 个选项")).toBeInTheDocument();
+    expect(screen.queryByText("整理背景与势力")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开选项 探索方向" }));
+    expect(screen.getByText("整理背景与势力")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /人物线/ }));
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue(
+      "选择 B：人物线",
+    );
+
+    const choiceArticle = screen
+      .getByText("人物线")
+      .closest("article") as HTMLElement;
+    fireEvent.change(screen.getByLabelText("搜索当前对话消息"), {
+      target: { value: "人物 个性" },
+    });
+    await waitFor(() => expect(choiceArticle).toHaveClass("search-hit"));
+  });
+
+  it("hides invalid choice block JSON and shows a parse error card", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            output_text:
+              '前置正文\n\n```mobilechat-choice\n{"type":"wrong"}\n```',
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      ),
+    );
+
+    render(<App />);
+    configureApiProfile({ apiKey: "test-key" });
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "给选项" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    expect(await screen.findByText("前置正文")).toBeInTheDocument();
+    expect(screen.getByText("选项块解析失败")).toBeInTheDocument();
+    expect(
+      screen.getByText("type 必须是 mobilechat.choice.v1。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/"type":"wrong"/)).not.toBeInTheDocument();
+  });
+
+  it("records image turns with a message tag", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ output_text: "image ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    const { container } = render(<App />);
+    configureApiProfile({ apiKey: "test-key" });
+
+    const fileInput = container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const imageFile = new File(["fake"], "demo.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [imageFile] } });
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("[图片1]")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    expect(await screen.findByText("image ok")).toBeInTheDocument();
+    const imageUserArticle = screen
+      .getByText("[图片1]")
+      .closest("article") as HTMLElement;
+    const imageAssistantArticle = screen
+      .getByText("image ok")
+      .closest("article") as HTMLElement;
+    expect(within(imageUserArticle).getByText("图片")).toBeInTheDocument();
+    expect(within(imageAssistantArticle).getByText("图片")).toBeInTheDocument();
   });
 
   it("can stop a pending model request after API key is configured", async () => {
@@ -1170,11 +1333,13 @@ describe("App", () => {
   });
 
   it("searches messages with loose space matching and regex mode", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ output_text: "ok" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ output_text: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
     render(<App />);
@@ -1194,6 +1359,7 @@ describe("App", () => {
     const secondText = await screen.findByText("second regex topic");
     const secondArticle = secondText.closest("article") as HTMLElement;
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getAllByText("ok")).toHaveLength(2));
 
     const searchInput = screen.getByLabelText("搜索当前对话消息");
     fireEvent.change(searchInput, { target: { value: "alpha beta" } });
@@ -1208,6 +1374,22 @@ describe("App", () => {
     expect(within(secondArticle).getByText("second regex topic")).toHaveClass(
       "message-search-mark",
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "正则搜索" }));
+    fireEvent.change(searchInput, { target: { value: "ok" } });
+    const okArticles = Array.from(
+      new Set(
+        screen
+          .getAllByText("ok")
+          .map((item) => item.closest("article") as HTMLElement),
+      ),
+    );
+    expect(okArticles).toHaveLength(2);
+    await waitFor(() => expect(okArticles[0]).toHaveClass("search-active"));
+    fireEvent.keyDown(searchInput, { key: "Enter" });
+    await waitFor(() => expect(okArticles[1]).toHaveClass("search-active"));
+    fireEvent.keyDown(searchInput, { key: "Enter", shiftKey: true });
+    await waitFor(() => expect(okArticles[0]).toHaveClass("search-active"));
 
     fireEvent.change(searchInput, { target: { value: "p" } });
     expect(screen.getAllByText("ok")[0]?.closest("article")).not.toHaveClass(

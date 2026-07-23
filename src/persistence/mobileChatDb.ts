@@ -19,6 +19,7 @@ import {
   type LocalDataSnapshot,
   type Message,
   type ModelRef,
+  normalizeChoiceBlockMaxChoices,
   normalizeMessageQuoteTemplate,
   type StorageInfo,
 } from "../domain";
@@ -487,6 +488,9 @@ export const normalizeSnapshot = (
         initialSnapshot.settings.composerSubmitMode,
       messageQuoteTemplate: normalizeMessageQuoteTemplate(
         settings.messageQuoteTemplate,
+      ),
+      choiceBlockMaxChoices: normalizeChoiceBlockMaxChoices(
+        settings.choiceBlockMaxChoices,
       ),
       contextSummaryRawTailMessages: normalizeContextSummaryRawTailMessages(
         settings.contextSummaryRawTailMessages,

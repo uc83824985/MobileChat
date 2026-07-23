@@ -32,6 +32,21 @@ The system SHALL use browser-supported file selection to create local draft cont
 - **AND** previews render a missing-cache state such as **图片缓存已清理**
 - **AND** later provider requests serialize a text-only placeholder for the missing image rather than an empty image object
 
+#### Scenario: Render assistant choice blocks
+- **WHEN** an assistant message contains a fenced `mobilechat-choice` block with `type: "mobilechat.choice.v1"`
+- **THEN** the application hides the raw protocol block from the normal message text
+- **AND** renders the parsed title, description, and choices as a stable clickable choice card inside the message
+- **AND** validates the number of choices against the user-configured maximum choice count, defaulting to 8
+- **AND** each choice card defaults to expanded and may be collapsed or expanded in the current runtime session without persisting that view state to IndexedDB or exports
+- **AND** clicking a choice inserts its `insertText` into the composer without automatically sending it
+- **AND** the current-conversation search index includes parsed choice titles, descriptions, labels, and insertion text so old alternatives can be found again
+
+#### Scenario: Invalid assistant choice block
+- **WHEN** an assistant message contains a fenced `mobilechat-choice` block that is not valid JSON or does not match `mobilechat.choice.v1`
+- **THEN** the raw block remains hidden
+- **AND** the message shows a local parse-error card explaining why the choice block could not be rendered
+- **AND** the ordinary visible message text remains readable
+
 #### Scenario: File access is denied
 - **WHEN** the browser or user denies access to selected local content
 - **THEN** the application remains usable and reports that the content could not be read without altering the source file

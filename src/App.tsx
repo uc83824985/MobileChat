@@ -9,6 +9,7 @@ import {
   EyeOff,
   ImageIcon,
   KeyRound,
+  ListChecks,
   MessageSquarePlus,
   Palette,
   PanelLeft,
@@ -73,6 +74,7 @@ import {
   type LayoutMode,
   type Message,
   type MessageImagePart,
+  type MessageTurnTag,
   type ModelDefinition,
   type ModelProbeDimensionValue,
   type ModelProbeGroup,
@@ -80,6 +82,7 @@ import {
   type ModelProbeSettings,
   type ModelRef,
   modelRefKey,
+  normalizeChoiceBlockMaxChoices,
   normalizeMessageQuoteTemplate,
   parseModelRefKey,
   type ResponseUsage,
@@ -144,6 +147,28 @@ type TtsPlaybackState = {
   lastQueuedTextLength: number;
   serviceState?: string;
 };
+type MobileChatChoiceOption = {
+  id: string;
+  label: string;
+  description?: string;
+  insertText?: string;
+};
+type ParsedMobileChatChoiceBlock =
+  | {
+      kind: "choice";
+      title: string;
+      description: string;
+      choices: MobileChatChoiceOption[];
+    }
+  | {
+      kind: "invalid";
+      error: string;
+    };
+type ParsedInteractiveMessage = {
+  visibleText: string;
+  blocks: ParsedMobileChatChoiceBlock[];
+  searchableText: string;
+};
 
 declare global {
   interface Window {
@@ -178,6 +203,33 @@ const TTS_SPEAK_MODE = "replace";
 const TTS_APPEND_MODE = "append";
 const TTS_STATUS_POLL_INTERVAL_MS = 1000;
 const TTS_STREAM_APPEND_DEBOUNCE_MS = 900;
+const buildMobileChatChoiceModeInstruction = (
+  maxChoices: number,
+) => `MobileChat 本轮启用了「选项」模式。请在正常回答之后，如果本轮内容适合沉淀为可回溯、可继续选择的方向/候选项/探索分支，追加一个且仅一个 \`mobilechat-choice\` fenced code block；如果不适合，可以不输出该块。
+
+\`\`\`mobilechat-choice
+{
+  "type": "mobilechat.choice.v1",
+  "title": "选项标题",
+  "description": "一句话说明这些选项用于什么。",
+  "choices": [
+    {
+      "id": "A",
+      "label": "短选项名",
+      "description": "该选项的展开说明。",
+      "insertText": "选择 A：短选项名"
+    }
+  ]
+}
+\`\`\`
+
+要求：
+- JSON 必须严格合法，顶层 type 必须是 mobilechat.choice.v1。
+- choices 建议 3-6 个，最多 ${maxChoices} 个。
+- id 用 A/B/C 或稳定短 ID；label 用短标题；description 写清可回溯信息；insertText 写成用户点击后插入输入框的自然语言。
+- 不要把该 JSON 当作正文解释；正文先正常回答，选项块只用于 MobileChat UI 渲染。`;
+const MOBILECHAT_CHOICE_BLOCK_REGEX =
+  /```mobilechat-choice[^\r\n]*\r?\n?([\s\S]*?)```/giu;
 const TTS_STREAM_APPEND_MIN_CHARS = 80;
 const STREAMING_PLACEHOLDER_TEXTS = new Set([
   "正在请求模型…",
@@ -264,6 +316,22 @@ const sortMessagesByCreatedAt = (messages: Message[]) =>
   [...messages].sort(compareMessagesByCreatedAt);
 
 const getMessageImageParts = (message: Message) => message.imageParts ?? [];
+const getMessageTurnTags = (message: Message) => message.turnTags ?? [];
+const createMessageTurnTags = ({
+  webSearchEnabled,
+  choiceModeEnabled,
+  imageCount,
+}: {
+  webSearchEnabled?: boolean;
+  choiceModeEnabled?: boolean;
+  imageCount?: number;
+}): MessageTurnTag[] => [
+  ...(webSearchEnabled ? (["联网"] as const) : []),
+  ...(choiceModeEnabled ? (["选项"] as const) : []),
+  ...(imageCount && imageCount > 0 ? (["图片"] as const) : []),
+];
+const normalizeMessageTurnTags = (tags: MessageTurnTag[]) =>
+  tags.length > 0 ? tags : undefined;
 
 const hasMessageContent = (message: Message) =>
   Boolean(message.text.trim()) || getMessageImageParts(message).length > 0;
@@ -330,7 +398,9 @@ const escapeRegExp = (value: string) =>
 
 const createLooseSearchRegex = (query: string) => {
   const terms = query.trim().split(/\s+/).filter(Boolean).map(escapeRegExp);
-  return terms.length > 0 ? new RegExp(terms.join(".*"), "i") : undefined;
+  return terms.length > 0
+    ? new RegExp(terms.join("[\\s\\S]*"), "i")
+    : undefined;
 };
 
 const createMessageSearchRegex = (query: string, regexEnabled: boolean) => {
@@ -988,17 +1058,22 @@ const formatTranscriptMessage = (message: Message, index: number) => {
   const imageText = getMessageImageParts(message)
     .map(formatMessageImageMarker)
     .join("\n");
+  const tagText = getMessageTurnTags(message).join(" ");
   const messageText = [message.text.trim(), imageText]
     .filter(Boolean)
     .join("\n");
 
-  return `#${index + 1} ${roleLabel}${source}${time ? ` · ${time}` : ""}\n${
-    messageText || "[空消息]"
-  }`;
+  return `#${index + 1} ${roleLabel}${source}${time ? ` · ${time}` : ""}${
+    tagText ? ` · ${tagText}` : ""
+  }\n${messageText || "[空消息]"}`;
 };
 
-const formatMessageSearchText = (message: Message) =>
-  [message.text, ...getMessageImageParts(message).map(formatMessageImageMarker)]
+const formatMessageSearchText = (message: Message, maxChoices: number) =>
+  [
+    parseMobileChatInteractiveMessage(message.text, maxChoices).searchableText,
+    getMessageTurnTags(message).join(" "),
+    ...getMessageImageParts(message).map(formatMessageImageMarker),
+  ]
     .filter(Boolean)
     .join("\n");
 
@@ -1204,6 +1279,156 @@ const isUnknownRecord = (value: unknown): value is Record<string, unknown> =>
 
 const readWorkflowString = (value: unknown) =>
   typeof value === "string" ? value : "";
+
+const readChoiceString = (value: unknown) =>
+  typeof value === "string" ? value.trim() : "";
+
+const parseMobileChatChoiceBlock = (
+  jsonText: string,
+  maxChoices: number,
+): ParsedMobileChatChoiceBlock => {
+  if (!jsonText.trim()) {
+    return { kind: "invalid", error: "选项块为空。" };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch (error) {
+    return {
+      kind: "invalid",
+      error: `JSON 解析失败：${error instanceof Error ? error.message : "未知错误"}`,
+    };
+  }
+
+  if (!isUnknownRecord(parsed)) {
+    return { kind: "invalid", error: "JSON 顶层必须是对象。" };
+  }
+
+  if (parsed.type !== "mobilechat.choice.v1") {
+    return {
+      kind: "invalid",
+      error: "type 必须是 mobilechat.choice.v1。",
+    };
+  }
+
+  if (!Array.isArray(parsed.choices)) {
+    return { kind: "invalid", error: "choices 必须是数组。" };
+  }
+
+  if (parsed.choices.length > maxChoices) {
+    return { kind: "invalid", error: `choices 最多允许 ${maxChoices} 项。` };
+  }
+
+  const choices = parsed.choices.map((choice, index) => {
+    if (!isUnknownRecord(choice)) {
+      throw new Error(`choices[${index}] 必须是对象。`);
+    }
+
+    const id = readChoiceString(choice.id);
+    const label = readChoiceString(choice.label);
+    if (!id || !label) {
+      throw new Error(`choices[${index}] 必须包含非空 id 和 label。`);
+    }
+
+    return {
+      id,
+      label,
+      description: readChoiceString(choice.description),
+      insertText: readChoiceString(choice.insertText),
+    };
+  });
+
+  if (choices.length === 0) {
+    return { kind: "invalid", error: "choices 不能为空。" };
+  }
+
+  return {
+    kind: "choice",
+    title: readChoiceString(parsed.title) || "可选项",
+    description: readChoiceString(parsed.description),
+    choices,
+  };
+};
+
+const parseSafeMobileChatChoiceBlock = (
+  jsonText: string,
+  maxChoices: number,
+): ParsedMobileChatChoiceBlock => {
+  try {
+    return parseMobileChatChoiceBlock(jsonText, maxChoices);
+  } catch (error) {
+    return {
+      kind: "invalid",
+      error: error instanceof Error ? error.message : "选项块结构无效。",
+    };
+  }
+};
+
+const formatChoiceBlockSearchText = (block: ParsedMobileChatChoiceBlock) => {
+  if (block.kind === "invalid") {
+    return `选项块解析失败 ${block.error}`;
+  }
+
+  return [
+    block.title,
+    block.description,
+    ...block.choices.flatMap((choice) => [
+      choice.id,
+      choice.label,
+      choice.description,
+      choice.insertText,
+    ]),
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+const parseMobileChatInteractiveMessage = (
+  text: string,
+  maxChoices: number,
+): ParsedInteractiveMessage => {
+  const blocks: ParsedMobileChatChoiceBlock[] = [];
+  const visibleText = text
+    .replace(MOBILECHAT_CHOICE_BLOCK_REGEX, (_rawBlock, jsonText: string) => {
+      blocks.push(parseSafeMobileChatChoiceBlock(jsonText ?? "", maxChoices));
+      return "\n";
+    })
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  const searchableText = [
+    visibleText,
+    ...blocks.map(formatChoiceBlockSearchText),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return { visibleText, blocks, searchableText };
+};
+
+const appendChoiceModeInstructionToLastUserMessage = (
+  messages: Message[],
+  maxChoices: number,
+): Message[] => {
+  const instruction = buildMobileChatChoiceModeInstruction(maxChoices);
+  const lastUserIndex = [...messages]
+    .reverse()
+    .findIndex((message) => message.role === "user");
+
+  if (lastUserIndex < 0) {
+    return messages;
+  }
+
+  const targetIndex = messages.length - 1 - lastUserIndex;
+  return messages.map((message, index) =>
+    index === targetIndex
+      ? {
+          ...message,
+          text: `${message.text}\n\n${instruction}`,
+        }
+      : message,
+  );
+};
 
 const extractBalancedJsonObject = (text: string): string | undefined => {
   const start = text.indexOf("{");
@@ -1735,6 +1960,9 @@ function App() {
   const [messageQuoteTemplate, setMessageQuoteTemplate] = useState(
     normalizeMessageQuoteTemplate(bootSnapshot.settings.messageQuoteTemplate),
   );
+  const [choiceBlockMaxChoices, setChoiceBlockMaxChoices] = useState(
+    normalizeChoiceBlockMaxChoices(bootSnapshot.settings.choiceBlockMaxChoices),
+  );
   const [contextSummaryRawTailMessages, setContextSummaryRawTailMessages] =
     useState(bootSnapshot.settings.contextSummaryRawTailMessages);
   const [
@@ -1761,6 +1989,11 @@ function App() {
   );
   const [nextTurnWebSearchEnabled, setNextTurnWebSearchEnabled] =
     useState(false);
+  const [nextTurnChoiceModeEnabled, setNextTurnChoiceModeEnabled] =
+    useState(false);
+  const [collapsedChoiceBlockKeys, setCollapsedChoiceBlockKeys] = useState<
+    Set<string>
+  >(() => new Set());
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeSettingsSectionId, setActiveSettingsSectionId] =
@@ -2222,7 +2455,7 @@ function App() {
     );
     const matches = regex
       ? activeMessages.filter((message) =>
-          regex.test(formatMessageSearchText(message)),
+          regex.test(formatMessageSearchText(message, choiceBlockMaxChoices)),
         )
       : [];
 
@@ -2232,7 +2465,12 @@ function App() {
       matches,
       ids: matches.map((message) => message.id),
     };
-  }, [activeMessages, messageSearchQuery, messageSearchRegexEnabled]);
+  }, [
+    activeMessages,
+    choiceBlockMaxChoices,
+    messageSearchQuery,
+    messageSearchRegexEnabled,
+  ]);
   const activeMessageSearchId =
     messageSearch.ids.length > 0
       ? messageSearch.ids[
@@ -2539,9 +2777,15 @@ function App() {
         "输入估算",
         `${estimateTokenCount(
           activeProjectedMessages,
-          activeContextInstruction
-            ? `${activeContextInstruction}\n${draft}`
-            : draft,
+          [
+            activeContextInstruction,
+            draft,
+            nextTurnChoiceModeEnabled
+              ? buildMobileChatChoiceModeInstruction(choiceBlockMaxChoices)
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
           draftImages.length,
         )} tokens`,
       ],
@@ -2557,7 +2801,9 @@ function App() {
         "发送前预算",
         `${activeResolvedModel?.model.name ?? "未选择模型"} · ${
           nextTurnWebSearchEnabled ? "联网" : "不联网"
-        } · ${draftImages.length > 0 ? `${draftImages.length} 图` : "仅文本"}`,
+        } · ${draftImages.length > 0 ? `${draftImages.length} 图` : "仅文本"}${
+          nextTurnChoiceModeEnabled ? " · 选项" : ""
+        }`,
       ],
       ["发送后 usage", formatObservedUsage(lastObservedUsage)],
     ],
@@ -2565,9 +2811,11 @@ function App() {
       activeProjectedMessages,
       activeContextInstruction,
       activeResolvedModel?.model.name,
+      choiceBlockMaxChoices,
       draft,
       draftImages.length,
       lastObservedUsage,
+      nextTurnChoiceModeEnabled,
       nextTurnWebSearchEnabled,
     ],
   );
@@ -2766,6 +3014,7 @@ function App() {
       streamingEnabled,
       composerSubmitMode,
       messageQuoteTemplate,
+      choiceBlockMaxChoices,
       contextSummaryRawTailMessages,
       contextSummaryAutoMessageInterval,
       debugEnabled,
@@ -2789,6 +3038,7 @@ function App() {
       apiProfiles,
       assistants,
       composerSubmitMode,
+      choiceBlockMaxChoices,
       contextSummaryAutoMessageInterval,
       contextSummaryRawTailMessages,
       contextSummaryFramework,
@@ -2845,6 +3095,9 @@ function App() {
     setComposerSubmitMode(snapshot.settings.composerSubmitMode);
     setMessageQuoteTemplate(
       normalizeMessageQuoteTemplate(snapshot.settings.messageQuoteTemplate),
+    );
+    setChoiceBlockMaxChoices(
+      normalizeChoiceBlockMaxChoices(snapshot.settings.choiceBlockMaxChoices),
     );
     setContextSummaryRawTailMessages(
       snapshot.settings.contextSummaryRawTailMessages,
@@ -5669,6 +5922,11 @@ function App() {
     const source = createSourceSnapshot(activeAssistant, resolvedModel);
     const requestStartedAt = Date.now();
     const requestWebSearchEnabled = nextTurnWebSearchEnabled;
+    const requestChoiceModeEnabled = nextTurnChoiceModeEnabled;
+    const requestTurnTags = createMessageTurnTags({
+      webSearchEnabled: requestWebSearchEnabled,
+      choiceModeEnabled: requestChoiceModeEnabled,
+    });
     const assistantMessage: Message = {
       id: createId("assistant"),
       conversationId: activeConversation.id,
@@ -5678,12 +5936,14 @@ function App() {
       createdAt: new Date(requestStartedAt).toISOString(),
       status: "streaming",
       source,
+      turnTags: normalizeMessageTurnTags(requestTurnTags),
     };
     const controller = new AbortController();
     let streamedText = "";
 
     abortControllerRef.current = controller;
     setNextTurnWebSearchEnabled(false);
+    setNextTurnChoiceModeEnabled(false);
     setLastObservedUsage(undefined);
     setMessages((current) => [
       ...current.filter((message) => !idsToRemove.has(message.id)),
@@ -5709,10 +5969,12 @@ function App() {
         conversation: activeConversation,
         model: resolvedModel.model,
         contextInstruction: activeContextInstruction,
-        messages: projectMessagesForRequest(
-          activeConversation,
-          requestMessages,
-        ),
+        messages: requestChoiceModeEnabled
+          ? appendChoiceModeInstructionToLastUserMessage(
+              projectMessagesForRequest(activeConversation, requestMessages),
+              choiceBlockMaxChoices,
+            )
+          : projectMessagesForRequest(activeConversation, requestMessages),
         blobs,
         signal: controller.signal,
         stream: streamingEnabled,
@@ -5842,6 +6104,11 @@ function App() {
     const source = createSourceSnapshot(activeAssistant, resolvedModel);
     const requestStartedAt = Date.now();
     const requestWebSearchEnabled = nextTurnWebSearchEnabled;
+    const requestChoiceModeEnabled = nextTurnChoiceModeEnabled;
+    const requestTurnTags = createMessageTurnTags({
+      webSearchEnabled: requestWebSearchEnabled,
+      choiceModeEnabled: requestChoiceModeEnabled,
+    });
     const assistantMessage: Message = {
       id: createId("assistant"),
       conversationId: activeConversation.id,
@@ -5851,12 +6118,14 @@ function App() {
       createdAt: new Date(requestStartedAt).toISOString(),
       status: "streaming",
       source,
+      turnTags: normalizeMessageTurnTags(requestTurnTags),
     };
     const controller = new AbortController();
     let streamedText = "";
 
     abortControllerRef.current = controller;
     setNextTurnWebSearchEnabled(false);
+    setNextTurnChoiceModeEnabled(false);
     setLastObservedUsage(undefined);
     setMessages((current) => [
       ...current.filter((message) => !idsToRemove.has(message.id)),
@@ -5882,10 +6151,12 @@ function App() {
         conversation: activeConversation,
         model: resolvedModel.model,
         contextInstruction: activeContextInstruction,
-        messages: projectMessagesForRequest(
-          activeConversation,
-          requestMessages,
-        ),
+        messages: requestChoiceModeEnabled
+          ? appendChoiceModeInstructionToLastUserMessage(
+              projectMessagesForRequest(activeConversation, requestMessages),
+              choiceBlockMaxChoices,
+            )
+          : projectMessagesForRequest(activeConversation, requestMessages),
         blobs,
         signal: controller.signal,
         stream: streamingEnabled,
@@ -6010,6 +6281,12 @@ function App() {
     const { userCreatedAt, assistantCreatedAt } = createTurnTimestamps();
     const requestStartedAt = Date.parse(assistantCreatedAt);
     const requestWebSearchEnabled = nextTurnWebSearchEnabled;
+    const requestChoiceModeEnabled = nextTurnChoiceModeEnabled;
+    const requestTurnTags = createMessageTurnTags({
+      webSearchEnabled: requestWebSearchEnabled,
+      choiceModeEnabled: requestChoiceModeEnabled,
+      imageCount: outgoingImages.length,
+    });
     const userMessage: Message = {
       id: createId("message"),
       conversationId: activeConversation.id,
@@ -6022,6 +6299,7 @@ function App() {
       imageParts: outgoingImages.map(
         ({ previewUrl: _previewUrl, ...part }) => part,
       ),
+      turnTags: normalizeMessageTurnTags(requestTurnTags),
     };
     const assistantMessage: Message = {
       id: createId("assistant"),
@@ -6032,6 +6310,7 @@ function App() {
       createdAt: assistantCreatedAt,
       status: "streaming",
       source,
+      turnTags: normalizeMessageTurnTags(requestTurnTags),
     };
     const controller = new AbortController();
     let streamedText = "";
@@ -6041,6 +6320,7 @@ function App() {
     setDraftImages([]);
     setComposerNotice("");
     setNextTurnWebSearchEnabled(false);
+    setNextTurnChoiceModeEnabled(false);
     setLastObservedUsage(undefined);
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setPendingMessageId(assistantMessage.id);
@@ -6063,10 +6343,18 @@ function App() {
         conversation: activeConversation,
         model: resolvedModel.model,
         contextInstruction: activeContextInstruction,
-        messages: projectMessagesForRequest(activeConversation, [
-          ...activeMessages,
-          userMessage,
-        ]),
+        messages: requestChoiceModeEnabled
+          ? appendChoiceModeInstructionToLastUserMessage(
+              projectMessagesForRequest(activeConversation, [
+                ...activeMessages,
+                userMessage,
+              ]),
+              choiceBlockMaxChoices,
+            )
+          : projectMessagesForRequest(activeConversation, [
+              ...activeMessages,
+              userMessage,
+            ]),
         blobs,
         signal: controller.signal,
         stream: streamingEnabled,
@@ -6222,6 +6510,26 @@ function App() {
     setComposerNotice("已引用选中文本");
   };
 
+  const insertChoiceOption = (choice: MobileChatChoiceOption) => {
+    const text =
+      choice.insertText ||
+      `选择 ${choice.id ? `${choice.id}：` : ""}${choice.label}`;
+    insertComposerTextBlock(text);
+    setComposerNotice(`已插入选项 ${choice.id || choice.label}`);
+  };
+
+  const toggleChoiceBlockCollapsed = (blockKey: string) => {
+    setCollapsedChoiceBlockKeys((current) => {
+      const next = new Set(current);
+      if (next.has(blockKey)) {
+        next.delete(blockKey);
+      } else {
+        next.add(blockKey);
+      }
+      return next;
+    });
+  };
+
   const selectMessageText = (messageId: string, fallbackText: string) => {
     const messageElement = Array.from(
       messageThreadRef.current?.querySelectorAll<HTMLElement>(
@@ -6272,11 +6580,124 @@ function App() {
     );
   };
 
+  const renderChoiceBlocks = (
+    messageId: string,
+    blocks: ParsedMobileChatChoiceBlock[],
+    searchRegex: RegExp | undefined,
+    active: boolean,
+  ) =>
+    blocks.length > 0 ? (
+      <div className="message-choice-list" aria-label="消息选项">
+        {blocks.map((block, blockIndex) =>
+          block.kind === "invalid" ? (
+            <div
+              className="message-choice-card invalid"
+              key={`choice-block-${blockIndex}`}
+              role="note"
+            >
+              <strong>选项块解析失败</strong>
+              <span>
+                {renderMessageTextContent(block.error, searchRegex, active)}
+              </span>
+            </div>
+          ) : (
+            <div
+              className="message-choice-card"
+              key={`choice-block-${blockIndex}`}
+            >
+              <div className="message-choice-header">
+                <ListChecks size={16} />
+                <div>
+                  <strong>
+                    {renderMessageTextContent(block.title, searchRegex, active)}
+                  </strong>
+                  {block.description ? (
+                    <span>
+                      {renderMessageTextContent(
+                        block.description,
+                        searchRegex,
+                        active,
+                      )}
+                    </span>
+                  ) : null}
+                </div>
+                {(() => {
+                  const blockKey = `${messageId}:${blockIndex}`;
+                  const collapsed = collapsedChoiceBlockKeys.has(blockKey);
+                  return (
+                    <button
+                      className="message-choice-toggle"
+                      type="button"
+                      aria-expanded={!collapsed}
+                      aria-label={`${collapsed ? "展开" : "收起"}选项 ${block.title}`}
+                      onClick={() => toggleChoiceBlockCollapsed(blockKey)}
+                    >
+                      {collapsed ? "展开" : "收起"}
+                    </button>
+                  );
+                })()}
+              </div>
+              {collapsedChoiceBlockKeys.has(`${messageId}:${blockIndex}`) ? (
+                <small className="message-choice-collapsed">
+                  已收起 {block.choices.length} 个选项
+                </small>
+              ) : (
+                <div className="message-choice-options">
+                  {block.choices.map((choice) => (
+                    <button
+                      className="message-choice-option"
+                      key={`${blockIndex}-${choice.id}-${choice.label}`}
+                      type="button"
+                      disabled={
+                        activeConversationReadOnly || Boolean(pendingMessageId)
+                      }
+                      onClick={() => insertChoiceOption(choice)}
+                    >
+                      <span className="message-choice-id">
+                        {renderMessageTextContent(
+                          choice.id,
+                          searchRegex,
+                          active,
+                        )}
+                      </span>
+                      <span className="message-choice-body">
+                        <strong>
+                          {renderMessageTextContent(
+                            choice.label,
+                            searchRegex,
+                            active,
+                          )}
+                        </strong>
+                        {choice.description ? (
+                          <small>
+                            {renderMessageTextContent(
+                              choice.description,
+                              searchRegex,
+                              active,
+                            )}
+                          </small>
+                        ) : null}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ),
+        )}
+      </div>
+    ) : null;
+
   const getMessageTextForTts = (message: Message) => {
     const streamingText =
       streamingFullTextRef.current[message.id] ||
       (streamingTextChunks[message.id] ?? []).join("");
-    const text = normalizeQuotedText(streamingText || message.text);
+    const text = normalizeQuotedText(
+      parseMobileChatInteractiveMessage(
+        streamingText || message.text,
+        choiceBlockMaxChoices,
+      ).visibleText,
+    );
     return STREAMING_PLACEHOLDER_TEXTS.has(text) ? "" : text;
   };
 
@@ -6418,6 +6839,17 @@ function App() {
     setActiveMessageSearchIndex(
       (current) => (current + direction + total) % total,
     );
+  };
+
+  const handleMessageSearchKeyDown = (
+    event: KeyboardEvent<HTMLInputElement>,
+  ) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+    jumpMessageSearchResult(event.shiftKey ? -1 : 1);
   };
 
   const renderInspectorMessageList = (
@@ -6753,6 +7185,7 @@ function App() {
               placeholder="搜索当前对话消息；空格表示任意间隔"
               value={messageSearchQuery}
               onChange={(event) => setMessageSearchQuery(event.target.value)}
+              onKeyDown={handleMessageSearchKeyDown}
             />
           </label>
           <button
@@ -6817,11 +7250,19 @@ function App() {
                 const messageDisplayText = messageTextChunks?.length
                   ? messageTextChunks.join("")
                   : message.text;
+                const interactiveMessage = parseMobileChatInteractiveMessage(
+                  messageDisplayText,
+                  choiceBlockMaxChoices,
+                );
+                const visibleMessageText = interactiveMessage.visibleText;
+                const hasInteractiveBlocks =
+                  interactiveMessage.blocks.length > 0;
                 const ttsText = getMessageTextForTts(message);
                 const ttsStateForMessage =
                   ttsPlayback?.messageId === message.id ? ttsPlayback : null;
                 const ttsStatusLabel =
                   ttsStateForMessage?.status === "speaking" ? " · 朗读中" : "";
+                const messageTurnTags = getMessageTurnTags(message);
 
                 return (
                   <article
@@ -6831,31 +7272,48 @@ function App() {
                     data-message-id={message.id}
                     key={message.id}
                   >
-                    <div className="message-label">
-                      {message.label}
-                      {createdTime ? ` · ${createdTime}` : ""}
-                      {message.status === "streaming" ? " · 生成中" : ""}
-                      {message.status === "stopped" ? " · 已停止" : ""}
-                      {message.status === "error" ? " · 错误" : ""}
-                      {ttsStatusLabel}
+                    <div className="message-header">
+                      <div className="message-label">
+                        {message.label}
+                        {createdTime ? ` · ${createdTime}` : ""}
+                        {message.status === "streaming" ? " · 生成中" : ""}
+                        {message.status === "stopped" ? " · 已停止" : ""}
+                        {message.status === "error" ? " · 错误" : ""}
+                        {ttsStatusLabel}
+                      </div>
+                      {messageTurnTags.length > 0 ? (
+                        <div className="message-tags" aria-label="消息标签">
+                          {messageTurnTags.map((tag) => (
+                            <span key={tag}>{tag}</span>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
-                    <p data-message-text>
-                      {messageTextChunks?.length
-                        ? messageTextChunks.map((chunk, index) => (
-                            <span key={`${message.id}-chunk-${index}`}>
-                              {renderMessageTextContent(
-                                chunk,
-                                isSearchHit ? messageSearch.regex : undefined,
-                                message.id === activeMessageSearchId,
-                              )}
-                            </span>
-                          ))
-                        : renderMessageTextContent(
-                            message.text,
-                            isSearchHit ? messageSearch.regex : undefined,
-                            message.id === activeMessageSearchId,
-                          )}
-                    </p>
+                    {visibleMessageText ? (
+                      <p data-message-text>
+                        {messageTextChunks?.length && !hasInteractiveBlocks
+                          ? messageTextChunks.map((chunk, index) => (
+                              <span key={`${message.id}-chunk-${index}`}>
+                                {renderMessageTextContent(
+                                  chunk,
+                                  isSearchHit ? messageSearch.regex : undefined,
+                                  message.id === activeMessageSearchId,
+                                )}
+                              </span>
+                            ))
+                          : renderMessageTextContent(
+                              visibleMessageText,
+                              isSearchHit ? messageSearch.regex : undefined,
+                              message.id === activeMessageSearchId,
+                            )}
+                      </p>
+                    ) : null}
+                    {renderChoiceBlocks(
+                      message.id,
+                      interactiveMessage.blocks,
+                      isSearchHit ? messageSearch.regex : undefined,
+                      message.id === activeMessageSearchId,
+                    )}
                     {getMessageImageParts(message).length > 0 ? (
                       <div className="message-images" aria-label="消息图片">
                         {getMessageImageParts(message).map((part, index) => {
@@ -6908,9 +7366,9 @@ function App() {
                       <button
                         type="button"
                         aria-label="全选消息正文"
-                        disabled={!normalizeQuotedText(messageDisplayText)}
+                        disabled={!normalizeQuotedText(visibleMessageText)}
                         onClick={() =>
-                          selectMessageText(message.id, messageDisplayText)
+                          selectMessageText(message.id, visibleMessageText)
                         }
                         title="选中这条消息的全部正文，便于复制或引用"
                       >
@@ -7174,73 +7632,83 @@ function App() {
               onKeyDown={sendOnEnter}
               onPaste={handleComposerPaste}
             />
-            <div className="turn-options" aria-label="本轮选项">
-              <input
-                ref={imageInputRef}
-                className="file-input-hidden"
-                type="file"
-                accept={IMAGE_INPUT_ACCEPT}
-                multiple
-                onChange={handleDraftImageInput}
-              />
-              <button
-                className={`option-chip ${
-                  nextTurnWebSearchEnabled ? "active" : ""
-                }`}
-                type="button"
-                aria-label="本轮联网"
-                aria-pressed={nextTurnWebSearchEnabled}
-                disabled={
-                  activeConversationReadOnly || Boolean(pendingMessageId)
+          </div>
+          <div className="turn-options" aria-label="本轮工具">
+            <input
+              ref={imageInputRef}
+              className="file-input-hidden"
+              type="file"
+              accept={IMAGE_INPUT_ACCEPT}
+              multiple
+              onChange={handleDraftImageInput}
+            />
+            <button
+              className={`option-chip ${
+                nextTurnWebSearchEnabled ? "active" : ""
+              }`}
+              type="button"
+              aria-label="本轮联网"
+              aria-pressed={nextTurnWebSearchEnabled}
+              disabled={activeConversationReadOnly || Boolean(pendingMessageId)}
+              onClick={() => setNextTurnWebSearchEnabled((enabled) => !enabled)}
+            >
+              <Search size={14} />
+              联网
+            </button>
+            <button
+              className={`option-chip ${
+                nextTurnChoiceModeEnabled ? "active" : ""
+              }`}
+              type="button"
+              aria-label="本轮选项"
+              aria-pressed={nextTurnChoiceModeEnabled}
+              disabled={activeConversationReadOnly || Boolean(pendingMessageId)}
+              onClick={() =>
+                setNextTurnChoiceModeEnabled((enabled) => !enabled)
+              }
+              title="请求助手在回复中附加可回溯、可点击的选项卡。"
+            >
+              <ListChecks size={14} />
+              选项
+            </button>
+            <button
+              className="option-chip"
+              type="button"
+              aria-label="上传图片"
+              aria-pressed={false}
+              disabled={activeConversationReadOnly || Boolean(pendingMessageId)}
+              onClick={() => {
+                imageInputRef.current?.click();
+              }}
+              title="上传本轮图片；桌面端也支持 Ctrl+V 粘贴剪贴板图片。"
+            >
+              <ImageIcon size={14} />
+              图片
+            </button>
+            <button
+              className="option-chip"
+              type="button"
+              aria-label="引用选中文本到输入框"
+              disabled={
+                activeConversationReadOnly ||
+                !selectedMessageText ||
+                Boolean(pendingMessageId)
+              }
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                if (selectedMessageText) {
+                  insertSelectedMessageQuote(selectedMessageText.messageId);
                 }
-                onClick={() =>
-                  setNextTurnWebSearchEnabled((enabled) => !enabled)
-                }
-              >
-                <Search size={14} />
-                联网
-              </button>
-              <button
-                className="option-chip"
-                type="button"
-                aria-label="上传图片"
-                aria-pressed={false}
-                disabled={
-                  activeConversationReadOnly || Boolean(pendingMessageId)
-                }
-                onClick={() => {
-                  imageInputRef.current?.click();
-                }}
-                title="上传本轮图片；桌面端也支持 Ctrl+V 粘贴剪贴板图片。"
-              >
-                <ImageIcon size={14} />
-                图片
-              </button>
-              <button
-                className="option-chip"
-                type="button"
-                aria-label="引用选中文本到输入框"
-                disabled={
-                  activeConversationReadOnly ||
-                  !selectedMessageText ||
-                  Boolean(pendingMessageId)
-                }
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  if (selectedMessageText) {
-                    insertSelectedMessageQuote(selectedMessageText.messageId);
-                  }
-                }}
-                title={
-                  selectedMessageText
-                    ? "将当前选中的消息片段插入输入框"
-                    : "先选中消息中的文本片段"
-                }
-              >
-                <TextQuote size={14} />
-                引用
-              </button>
-            </div>
+              }}
+              title={
+                selectedMessageText
+                  ? "将当前选中的消息片段插入输入框"
+                  : "先选中消息中的文本片段"
+              }
+            >
+              <TextQuote size={14} />
+              引用
+            </button>
           </div>
           <button
             className="send-button"
@@ -7558,6 +8026,21 @@ function App() {
                     />
                     <small>{"{content}"} 引用消息片段</small>
                   </div>
+                </label>
+                <label className="settings-row compact">
+                  <span>选项上限</span>
+                  <input
+                    aria-label="选项最大数量"
+                    max={20}
+                    min={1}
+                    type="number"
+                    value={choiceBlockMaxChoices}
+                    onChange={(event) =>
+                      setChoiceBlockMaxChoices(
+                        normalizeChoiceBlockMaxChoices(event.target.value),
+                      )
+                    }
+                  />
                 </label>
                 <div className="settings-row compact theme-select">
                   <span>布局模式</span>

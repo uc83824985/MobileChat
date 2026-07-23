@@ -52,6 +52,13 @@ The system SHALL display an ordered message stream that distinguishes user messa
 - **WHEN** a user or assistant message contains line breaks, indentation, or long URLs
 - **THEN** the message renderer preserves returned whitespace and wraps long tokens for readability without rewriting the message semantics
 
+#### Scenario: Display turn feature tags
+- **WHEN** a newly sent turn uses an explicit special path such as web access, choice-card generation, or image input
+- **THEN** the created message records readable turn tags such as **联网**, **选项**, and **图片**
+- **AND** the message renderer shows those tags in the message header's upper-right area
+- **AND** messages without recorded turn tags keep the normal header layout
+- **AND** older messages are not backfilled or inferred during rapid iteration
+
 ### Requirement: Message timing metadata
 The system SHALL persist and display message creation time and SHALL persist assistant response completion time plus browser-observed elapsed duration when an assistant response reaches a terminal state.
 
