@@ -74,6 +74,7 @@ import {
   type LayoutMode,
   type Message,
   type MessageImagePart,
+  type MessageReadingMode,
   type MessageTurnTag,
   type ModelDefinition,
   type ModelProbeDimensionValue,
@@ -83,6 +84,7 @@ import {
   type ModelRef,
   modelRefKey,
   normalizeChoiceBlockMaxChoices,
+  normalizeMessageReadingMode,
   normalizeMessageQuoteTemplate,
   parseModelRefKey,
   type ResponseUsage,
@@ -847,6 +849,11 @@ const layoutLabels: Record<LayoutMode, string> = {
 const composerSubmitModeLabels: Record<ComposerSubmitMode, string> = {
   "enter-send": "Enter 发送",
   "ctrl-enter-send": "Enter 换行",
+};
+
+const messageReadingModeLabels: Record<MessageReadingMode, string> = {
+  "fixed-start": "固定开头",
+  "follow-output": "跟随输出",
 };
 
 const normalizeContextSummaryRawTailMessages = (value: number) =>
@@ -1955,6 +1962,10 @@ function App() {
   const [streamingEnabled, setStreamingEnabled] = useState(
     bootSnapshot.settings.streamingEnabled,
   );
+  const [messageReadingMode, setMessageReadingMode] =
+    useState<MessageReadingMode>(
+      normalizeMessageReadingMode(bootSnapshot.settings.messageReadingMode),
+    );
   const [composerSubmitMode, setComposerSubmitMode] =
     useState<ComposerSubmitMode>(bootSnapshot.settings.composerSubmitMode);
   const [messageQuoteTemplate, setMessageQuoteTemplate] = useState(
@@ -2324,6 +2335,51 @@ function App() {
     [scrollMessageThreadToBottom],
   );
 
+  const scrollMessageThreadToMessageStart = useCallback(
+    (messageId: string, behavior: ScrollBehavior = "smooth") => {
+      const thread = messageThreadRef.current;
+      const target = thread?.querySelector<HTMLElement>(
+        `[data-message-id="${messageId}"]`,
+      );
+
+      if (thread && target) {
+        const nextTop = Math.max(0, target.offsetTop - thread.offsetTop - 8);
+        thread.scrollTo?.({ top: nextTop, behavior });
+        if (document.body.scrollHeight > window.innerHeight) {
+          target.scrollIntoView?.({ block: "start", behavior });
+        }
+        setIsMessageThreadAwayFromBottom(
+          thread.scrollHeight - thread.clientHeight > SCROLL_EDGE_THRESHOLD_PX,
+        );
+        return true;
+      }
+
+      return false;
+    },
+    [],
+  );
+
+  const scheduleScrollMessageThreadToMessageStart = useCallback(
+    (messageId: string, behavior: ScrollBehavior = "smooth", retries = 2) => {
+      if (scrollFollowFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFollowFrameRef.current);
+      }
+
+      scrollFollowFrameRef.current = window.requestAnimationFrame(() => {
+        scrollFollowFrameRef.current = null;
+        const found = scrollMessageThreadToMessageStart(messageId, behavior);
+        if (!found && retries > 0) {
+          scheduleScrollMessageThreadToMessageStart(
+            messageId,
+            behavior,
+            retries - 1,
+          );
+        }
+      });
+    },
+    [scrollMessageThreadToMessageStart],
+  );
+
   const startFollowingMessageBottom = useCallback(
     (behavior: ScrollBehavior = "smooth") => {
       shouldFollowMessageBottomRef.current = true;
@@ -2332,6 +2388,82 @@ function App() {
     },
     [scheduleScrollMessageThreadToBottom],
   );
+
+  const applyAssistantReadingPosition = useCallback(
+    (messageId: string, behavior: ScrollBehavior = "smooth") => {
+      userThreadScrollIntentRef.current = false;
+      if (messageReadingMode === "follow-output") {
+        startFollowingMessageBottom(behavior);
+        return;
+      }
+
+      shouldFollowMessageBottomRef.current = false;
+      scheduleScrollMessageThreadToMessageStart(messageId, behavior);
+    },
+    [
+      messageReadingMode,
+      scheduleScrollMessageThreadToMessageStart,
+      startFollowingMessageBottom,
+    ],
+  );
+
+  const settleAssistantReadingPosition = useCallback(
+    (messageId: string, behavior: ScrollBehavior = "auto") => {
+      if (messageReadingMode === "follow-output") {
+        startFollowingMessageBottom(behavior);
+        return;
+      }
+
+      if (userThreadScrollIntentRef.current) {
+        return;
+      }
+
+      shouldFollowMessageBottomRef.current = false;
+      scheduleScrollMessageThreadToMessageStart(messageId, behavior);
+    },
+    [
+      messageReadingMode,
+      scheduleScrollMessageThreadToMessageStart,
+      startFollowingMessageBottom,
+    ],
+  );
+
+  const maybeAnchorPendingMessageStartForReading = useCallback(() => {
+    if (
+      messageReadingMode !== "fixed-start" ||
+      !pendingMessageId ||
+      userThreadScrollIntentRef.current
+    ) {
+      return false;
+    }
+
+    const thread = messageThreadRef.current;
+    const target = thread?.querySelector<HTMLElement>(
+      `[data-message-id="${pendingMessageId}"]`,
+    );
+    if (!thread || !target) {
+      return false;
+    }
+
+    const targetTop = target.offsetTop - thread.offsetTop;
+    const targetBottom = targetTop + target.offsetHeight;
+    const viewportBottom = thread.scrollTop + thread.clientHeight;
+    const targetOverflowsViewport =
+      target.offsetHeight > thread.clientHeight - SCROLL_EDGE_THRESHOLD_PX ||
+      targetBottom > viewportBottom - SCROLL_EDGE_THRESHOLD_PX;
+
+    if (!targetOverflowsViewport) {
+      return false;
+    }
+
+    shouldFollowMessageBottomRef.current = false;
+    scheduleScrollMessageThreadToMessageStart(pendingMessageId, "auto");
+    return true;
+  }, [
+    messageReadingMode,
+    pendingMessageId,
+    scheduleScrollMessageThreadToMessageStart,
+  ]);
 
   const updateMessageThreadScrollState = useCallback(() => {
     const thread = messageThreadRef.current;
@@ -3012,6 +3144,7 @@ function App() {
       layoutMode,
       hideMobileStatusBar,
       streamingEnabled,
+      messageReadingMode,
       composerSubmitMode,
       messageQuoteTemplate,
       choiceBlockMaxChoices,
@@ -3050,6 +3183,7 @@ function App() {
       hideMobileStatusBar,
       layoutMode,
       lastSuccessfulExportAt,
+      messageReadingMode,
       messageQuoteTemplate,
       modelProbeSettings,
       streamingEnabled,
@@ -3092,6 +3226,9 @@ function App() {
     setLayoutMode(snapshot.settings.layoutMode);
     setHideMobileStatusBar(snapshot.settings.hideMobileStatusBar);
     setStreamingEnabled(snapshot.settings.streamingEnabled);
+    setMessageReadingMode(
+      normalizeMessageReadingMode(snapshot.settings.messageReadingMode),
+    );
     setComposerSubmitMode(snapshot.settings.composerSubmitMode);
     setMessageQuoteTemplate(
       normalizeMessageQuoteTemplate(snapshot.settings.messageQuoteTemplate),
@@ -3188,14 +3325,24 @@ function App() {
   }, [activeMessages.length, updateMessageThreadScrollState]);
 
   useEffect(() => {
-    if (pendingMessageId && shouldFollowMessageBottomRef.current) {
+    if (
+      messageReadingMode === "follow-output" &&
+      pendingMessageId &&
+      shouldFollowMessageBottomRef.current
+    ) {
       scheduleScrollMessageThreadToBottom("auto");
+      return;
+    }
+
+    if (maybeAnchorPendingMessageStartForReading()) {
       return;
     }
 
     updateMessageThreadScrollState();
   }, [
     activeMessages,
+    messageReadingMode,
+    maybeAnchorPendingMessageStartForReading,
     pendingMessageId,
     scheduleScrollMessageThreadToBottom,
     updateMessageThreadScrollState,
@@ -5915,7 +6062,7 @@ function App() {
         ...current.filter((message) => !idsToRemove.has(message.id)),
         errorMessage,
       ]);
-      startFollowingMessageBottom();
+      applyAssistantReadingPosition(errorMessage.id);
       return;
     }
 
@@ -5950,7 +6097,7 @@ function App() {
       assistantMessage,
     ]);
     setPendingMessageId(assistantMessage.id);
-    startFollowingMessageBottom();
+    applyAssistantReadingPosition(assistantMessage.id);
     setConversations((current) =>
       current.map((conversation) =>
         conversation.id === activeConversation.id
@@ -6022,6 +6169,7 @@ function App() {
             : message,
         ),
       );
+      settleAssistantReadingPosition(assistantMessage.id);
       if (!result.interrupted) {
         maybeStartAutoContextSummary({
           conversation: activeConversation,
@@ -6053,6 +6201,7 @@ function App() {
             : message,
         ),
       );
+      settleAssistantReadingPosition(assistantMessage.id);
     } finally {
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
@@ -6097,7 +6246,7 @@ function App() {
         ...current.filter((message) => !idsToRemove.has(message.id)),
         errorMessage,
       ]);
-      startFollowingMessageBottom();
+      applyAssistantReadingPosition(errorMessage.id);
       return;
     }
 
@@ -6132,7 +6281,7 @@ function App() {
       assistantMessage,
     ]);
     setPendingMessageId(assistantMessage.id);
-    startFollowingMessageBottom();
+    applyAssistantReadingPosition(assistantMessage.id);
     setConversations((current) =>
       current.map((conversation) =>
         conversation.id === activeConversation.id
@@ -6204,6 +6353,7 @@ function App() {
             : message,
         ),
       );
+      settleAssistantReadingPosition(assistantMessage.id);
       if (!result.interrupted) {
         maybeStartAutoContextSummary({
           conversation: activeConversation,
@@ -6235,6 +6385,7 @@ function App() {
             : message,
         ),
       );
+      settleAssistantReadingPosition(assistantMessage.id);
     } finally {
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
@@ -6273,7 +6424,7 @@ function App() {
       setDraftImages([]);
       setComposerNotice("");
       setMessages((current) => [...current, assistantMessage]);
-      startFollowingMessageBottom();
+      applyAssistantReadingPosition(assistantMessage.id);
       return;
     }
 
@@ -6324,7 +6475,7 @@ function App() {
     setLastObservedUsage(undefined);
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setPendingMessageId(assistantMessage.id);
-    startFollowingMessageBottom();
+    applyAssistantReadingPosition(assistantMessage.id);
     setConversations((current) =>
       current.map((conversation) =>
         conversation.id === activeConversation.id
@@ -6402,6 +6553,7 @@ function App() {
             : message,
         ),
       );
+      settleAssistantReadingPosition(assistantMessage.id);
       if (!result.interrupted) {
         maybeStartAutoContextSummary({
           conversation: activeConversation,
@@ -6437,6 +6589,7 @@ function App() {
             : message,
         ),
       );
+      settleAssistantReadingPosition(assistantMessage.id);
     } finally {
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
@@ -7993,6 +8146,25 @@ function App() {
                     />
                     <span />
                   </label>
+                </div>
+                <div className="settings-row compact theme-select">
+                  <span>阅读行为</span>
+                  <CustomSelect
+                    className="content-fit"
+                    label="阅读行为"
+                    value={messageReadingMode}
+                    options={Object.entries(messageReadingModeLabels).map(
+                      ([optionValue, optionLabel]) => ({
+                        value: optionValue,
+                        label: optionLabel,
+                      }),
+                    )}
+                    onChange={(nextValue) =>
+                      setMessageReadingMode(
+                        normalizeMessageReadingMode(nextValue),
+                      )
+                    }
+                  />
                 </div>
                 <div className="settings-row compact theme-select">
                   <span>换行规则</span>

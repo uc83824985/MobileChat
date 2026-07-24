@@ -20,6 +20,7 @@ import {
   type Message,
   type ModelRef,
   normalizeChoiceBlockMaxChoices,
+  normalizeMessageReadingMode,
   normalizeMessageQuoteTemplate,
   type StorageInfo,
 } from "../domain";
@@ -483,6 +484,9 @@ export const normalizeSnapshot = (
         initialSnapshot.settings.hideMobileStatusBar,
       streamingEnabled:
         settings.streamingEnabled ?? initialSnapshot.settings.streamingEnabled,
+      messageReadingMode: normalizeMessageReadingMode(
+        settings.messageReadingMode,
+      ),
       composerSubmitMode:
         settings.composerSubmitMode ??
         initialSnapshot.settings.composerSubmitMode,

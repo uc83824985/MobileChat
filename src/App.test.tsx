@@ -455,6 +455,109 @@ describe("App", () => {
     ).toHaveLength(2);
   });
 
+  it("anchors a fixed-start streaming response once it overflows the viewport", async () => {
+    const requestAnimationFrameSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
+      () => undefined,
+    );
+    const encoder = new TextEncoder();
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(stream, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      ),
+    );
+    render(<App />);
+    configureApiProfile({ apiKey: "test-key" });
+
+    const messageThread = screen.getByLabelText("消息列表");
+    let scrollTop = 800;
+    const threadScrollTo = vi.fn((options: ScrollToOptions) => {
+      scrollTop = Number(options.top ?? scrollTop);
+    });
+    Object.defineProperty(messageThread, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = Number(value);
+      },
+    });
+    Object.defineProperty(messageThread, "scrollHeight", {
+      configurable: true,
+      value: 1400,
+    });
+    Object.defineProperty(messageThread, "clientHeight", {
+      configurable: true,
+      value: 300,
+    });
+    Object.defineProperty(messageThread, "offsetTop", {
+      configurable: true,
+      value: 0,
+    });
+    Object.defineProperty(messageThread, "scrollTo", {
+      configurable: true,
+      value: threadScrollTo,
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "overflow stream" },
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+
+    await screen.findByText("正在等待流式输出…");
+    const assistantMessages = messageThread.querySelectorAll(
+      "article.message.assistant",
+    );
+    const assistantMessage = assistantMessages[
+      assistantMessages.length - 1
+    ] as HTMLElement;
+    Object.defineProperty(assistantMessage, "offsetTop", {
+      configurable: true,
+      value: 640,
+    });
+    Object.defineProperty(assistantMessage, "offsetHeight", {
+      configurable: true,
+      value: 360,
+    });
+    threadScrollTo.mockClear();
+
+    streamController.enqueue(
+      encoder.encode(
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"overflow text"}\n\n',
+      ),
+    );
+
+    await screen.findByText("overflow text");
+    await waitFor(() =>
+      expect(threadScrollTo).toHaveBeenCalledWith({
+        top: 632,
+        behavior: "auto",
+      }),
+    );
+    expect(requestAnimationFrameSpy).toHaveBeenCalled();
+
+    streamController.enqueue(
+      encoder.encode(
+        'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_stream_overflow","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}\n\n',
+      ),
+    );
+    streamController.close();
+  });
+
   it("marks cache usage as not returned when the relay omits cached tokens", async () => {
     vi.stubGlobal(
       "fetch",
@@ -963,6 +1066,10 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("流式输出"));
     expect(screen.getByLabelText("流式输出")).not.toBeChecked();
 
+    expectCustomSelectValue("阅读行为", "固定开头");
+    chooseCustomSelectOption("阅读行为", "跟随输出");
+    expectCustomSelectValue("阅读行为", "跟随输出");
+
     expect(androidBridge.setStatusBarHidden).toHaveBeenLastCalledWith(false);
     fireEvent.click(screen.getByLabelText("沉浸显示（Android）"));
     expect(androidBridge.setStatusBarHidden).toHaveBeenLastCalledWith(true);
@@ -1192,7 +1299,7 @@ describe("App", () => {
     expect(screen.getByLabelText("回到消息顶部")).toBeInTheDocument();
   });
 
-  it("scrolls to the bottom immediately after sending a message", async () => {
+  it("scrolls to the bottom after sending when reading mode follows output", async () => {
     const requestAnimationFrameSpy = vi
       .spyOn(window, "requestAnimationFrame")
       .mockImplementation((callback) => {
@@ -1205,6 +1312,10 @@ describe("App", () => {
     vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
 
     render(<App />);
+
+    fireEvent.click(screen.getByText("设置"));
+    chooseCustomSelectOption("阅读行为", "跟随输出");
+    fireEvent.click(screen.getByLabelText("关闭设置"));
 
     const messageThread = screen.getByLabelText("消息列表");
     const threadScrollTo = vi.fn();

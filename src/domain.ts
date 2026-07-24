@@ -129,6 +129,7 @@ export type UtilityAssistantModelStrategy = "follow-conversation" | "fixed";
 export type ThemeMode = "system" | "light" | "dark";
 export type LayoutMode = "auto" | "mobile" | "desktop";
 export type ComposerSubmitMode = "enter-send" | "ctrl-enter-send";
+export type MessageReadingMode = "fixed-start" | "follow-output";
 export type ApiProtocol = "openai-responses" | "openai-chat-completions";
 
 export type UtilityAssistantFeatureRefs = {
@@ -237,6 +238,7 @@ export type AppSettings = {
   layoutMode: LayoutMode;
   hideMobileStatusBar: boolean;
   streamingEnabled: boolean;
+  messageReadingMode: MessageReadingMode;
   composerSubmitMode: ComposerSubmitMode;
   messageQuoteTemplate: string;
   choiceBlockMaxChoices: number;
@@ -299,6 +301,11 @@ export const normalizeMessageQuoteTemplate = (template: unknown) => {
 
   return template;
 };
+
+export const normalizeMessageReadingMode = (
+  value: unknown,
+): MessageReadingMode =>
+  value === "follow-output" ? "follow-output" : "fixed-start";
 
 export const normalizeChoiceBlockMaxChoices = (value: unknown) => {
   const parsed =
@@ -619,6 +626,7 @@ export const createInitialSettings = (
   layoutMode: "auto",
   hideMobileStatusBar: false,
   streamingEnabled: true,
+  messageReadingMode: "fixed-start",
   composerSubmitMode: "enter-send",
   messageQuoteTemplate: DEFAULT_MESSAGE_QUOTE_TEMPLATE,
   choiceBlockMaxChoices: DEFAULT_CHOICE_BLOCK_MAX_CHOICES,
